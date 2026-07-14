@@ -1,0 +1,17 @@
+{
+  "name": "hawari-infection",
+  "version": "1.0.0",
+  "description": "Premium UWorld Quiz System for Hawari Infection",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^4.5.0"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5"
+  }
+}

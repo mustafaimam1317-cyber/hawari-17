@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hawari Infection - Premium UWorld Quiz System</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js for progress visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="light-theme">
+    
+    <!-- Toast System for email / action simulation notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- ================= COURSE SELECTOR PAGE ================= -->
+    <div id="course-selector-page" class="course-selector-page">
+        <div class="selector-header">
+            <h1>Hawari Course Portal</h1>
+            <p>Select your specialized clinical preparation track to begin</p>
+        </div>
+
+        <div class="selector-about-card">
+            <h3>About Hawari Course System</h3>
+            <p>Hawari Course is a premium clinical preparation platform designed to help medical students and professionals master clinical topics, build active recall, and pass their board and college exams with ease. Select a group below to start your specialized learning track.</p>
+        </div>
+
+        <div class="selector-cards-container">
+            <!-- Infection Group Card -->
+            <div class="course-card infection-card" id="card-select-infection">
+                <div class="course-icon-wrapper">
+                    <i class="fa-solid fa-virus-covid"></i>
+                </div>
+                <h2>Infection Group</h2>
+                <p>Master medical microbiology, virology, infectious diseases, pharmacology, and infection control with our premium pre-seeded question bank of 550+ questions.</p>
+                <button class="btn btn-primary">Enter Course <i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+
+            <!-- Dermatology Group Card -->
+            <div class="course-card dermatology-card" id="card-select-dermatology">
+                <div class="course-icon-wrapper">
+                    <i class="fa-solid fa-hand-dots"></i>
+                </div>
+                <h2>Dermatology Group</h2>
+                <p>Master skin pathology, clinical dermatology, diagnostic signs, and therapeutic procedures. Starts with a blank customizable bank to build your own study decks.</p>
+                <button class="btn btn-primary">Enter Course <i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= LANDING PAGE ================= -->
+    <div id="landing-page" class="landing-page-container">
+        <div class="landing-hero">
+            <div class="landing-logo">
+                <i class="fa-solid fa-virus-covid"></i>
+            </div>
+            <h1>Welcome to Hawari Course</h1>
+            <p class="landing-tagline">Our integrated system for a happy journey</p>
+            <p class="landing-description">Master clinical infection control, disease manifestations, and premium board exams with our comprehensive preparation engine.</p>
+            
+            <div class="landing-cta-buttons">
+                <button id="btn-landing-login" class="btn btn-primary btn-lg"><i class="fa-solid fa-right-to-bracket"></i> Get Started / Log In</button>
+                <button id="btn-landing-register" class="btn btn-secondary btn-lg"><i class="fa-solid fa-user-plus"></i> Create Account / Register</button>
+                <button id="btn-landing-back-selector" class="btn btn-secondary btn-outline btn-lg" style="margin-top: 10px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;"><i class="fa-solid fa-house"></i> Back to Main Portal</button>
+            </div>
+        </div>
+
+        <div class="landing-features-grid">
+            <div class="feature-card">
+                <i class="fa-solid fa-database"></i>
+                <h3>560+ MCQ Bank</h3>
+                <p>Practice past exam papers and college MCQs categorized by clinical topics.</p>
+            </div>
+            <div class="feature-card">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+                <h3>Tutor & Timed Modes</h3>
+                <p>Get instant rationales in Tutor mode, or build speed and confidence in Timed mode.</p>
+            </div>
+            <div class="feature-card">
+                <i class="fa-solid fa-bolt"></i>
+                <h3>Active Recall</h3>
+                <p>Flip interactive flashcards to review high-yield concepts using spaced repetition.</p>
+            </div>
+            <div class="feature-card">
+                <i class="fa-solid fa-note-sticky"></i>
+                <h3>Clinical Notes</h3>
+                <p>Keep track of highlights, mark complex concepts, and build your own clinical notebook.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= AUTH OVERLAY ================= -->
+    <div id="auth-overlay" class="auth-overlay hidden">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <i class="fa-solid fa-virus-covid brand-logo-icon" id="auth-brand-logo"></i>
+                <h2 id="auth-brand-title">Hawari Infection</h2>
+                <p>Medical Quiz Preparation Portal</p>
+            </div>
+            
+            <!-- Email Input Step -->
+            <div id="auth-email-step" class="auth-step active">
+                <div class="input-group">
+                    <label for="auth-email"><i class="fa-regular fa-envelope"></i> Enter Gmail Address</label>
+                    <input type="email" id="auth-email" placeholder="e.g. name@gmail.com" required>
+                    <span class="input-help">Only Gmail accounts are accepted.</span>
+                </div>
+                <button id="btn-send-code" class="btn btn-primary btn-block" style="margin-bottom: 12px;">
+                    Continue <i class="fa-solid fa-arrow-right"></i>
+                </button>
+                <button id="btn-auth-back-landing" class="btn btn-secondary btn-outline btn-block">
+                    <i class="fa-solid fa-house"></i> Back to Home
+                </button>
+            </div>
+
+            <!-- Password Login Step -->
+            <div id="auth-password-step" class="auth-step">
+                <div class="code-header" style="margin-bottom: 15px;">
+                    <h3>Sign In</h3>
+                    <p>Enter the password for <strong id="login-email-display"></strong></p>
+                </div>
+                <div class="input-group">
+                    <label for="auth-login-password"><i class="fa-solid fa-lock"></i> Password</label>
+                    <input type="password" id="auth-login-password" placeholder="••••••••" required>
+                </div>
+                <button id="btn-login-submit" class="btn btn-primary btn-block">
+                    Log In <i class="fa-solid fa-right-to-bracket"></i>
+                </button>
+                <button id="btn-back-to-email-2" class="btn btn-link btn-block">Back</button>
+            </div>
+
+            <!-- Account Registration Step -->
+            <div id="auth-register-step" class="auth-step">
+                <div class="code-header" style="margin-bottom: 15px;">
+                    <h3>Create Account</h3>
+                    <p>Gmail: <strong id="register-email-display"></strong></p>
+                </div>
+                <div class="input-group">
+                    <label for="auth-reg-password"><i class="fa-solid fa-lock"></i> Choose Password</label>
+                    <input type="password" id="auth-reg-password" placeholder="••••••••" required>
+                </div>
+                <div class="input-group" style="margin-top: 10px;">
+                    <label for="auth-reg-confirm"><i class="fa-solid fa-lock"></i> Confirm Password</label>
+                    <input type="password" id="auth-reg-confirm" placeholder="••••••••" required>
+                </div>
+                <button id="btn-register-submit" class="btn btn-primary btn-block" style="margin-top: 15px;">
+                    Send Registration Request <i class="fa-solid fa-paper-plane"></i>
+                </button>
+                <button id="btn-back-to-email-3" class="btn btn-link btn-block">Back</button>
+            </div>
+
+            <!-- Pending Approval Step -->
+            <div id="auth-pending-step" class="auth-step">
+                <div class="pending-icon-wrapper">
+                    <i class="fa-solid fa-circle-notch fa-spin pending-icon"></i>
+                </div>
+                <h3>Registration Pending</h3>
+                <p class="pending-text">Your Gmail request is awaiting Admin approval. You can login once approved.</p>
+                <div class="approval-card">
+                    <span>Email: <strong><span id="pending-email-display"></span></strong></span>
+                    <span class="badge badge-warning">Awaiting Approval</span>
+                </div>
+                <p class="pending-subtext">Ask the Admin to approve your request in the Admin Panel, then click check status below.</p>
+                <button id="btn-check-status" class="btn btn-secondary btn-block">
+                    <i class="fa-solid fa-rotate"></i> Check Approval Status
+                </button>
+                <button id="btn-back-to-email-1" class="btn btn-link btn-block">Back to Login</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= MAIN APP WORKSPACE ================= -->
+    <div id="app-layout" class="app-layout hidden">
+        <!-- Floating Sidebar Expand Button (visible only when collapsed) -->
+        <button id="btn-sidebar-expand" class="btn-sidebar-expand-floating hidden" title="Show Sidebar">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1;">
+                    <div class="logo-wrapper">
+                        <i class="fa-solid fa-virus-covid logo-icon" id="sidebar-logo"></i>
+                    </div>
+                    <div class="brand-text">
+                        <h1 id="sidebar-brand-name">Hawari Infection</h1>
+                        <span class="user-role-badge" id="current-user-role">User</span>
+                    </div>
+                </div>
+                <button id="btn-sidebar-collapse" class="btn-sidebar-toggle" title="Collapse Sidebar">
+                    <i class="fa-solid fa-angles-left"></i>
+                </button>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#dashboard" class="nav-item active" id="nav-dashboard">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#generate-test" class="nav-item" id="nav-generate-test">
+                    <i class="fa-solid fa-cubes"></i>
+                    <span>Generate Test</span>
+                </a>
+                <a href="#my-tests" class="nav-item" id="nav-my-tests">
+                    <i class="fa-solid fa-receipt"></i>
+                    <span>My Tests</span>
+                </a>
+                <a href="#notebook" class="nav-item" id="nav-notebook">
+                    <i class="fa-solid fa-book-open"></i>
+                    <span>Notebook</span>
+                </a>
+                <a href="#flashcards" class="nav-item" id="nav-flashcards">
+                    <i class="fa-solid fa-bolt"></i>
+                    <span>Flashcards</span>
+                </a>
+                <a href="#report-task" class="nav-item" id="nav-report-task">
+                    <i class="fa-solid fa-file-invoice"></i>
+                    <span>Report Task</span>
+                </a>
+                <a href="#admin-panel" class="nav-item admin-only hidden" id="nav-admin-panel">
+                    <i class="fa-solid fa-user-gear"></i>
+                    <span>Admin Panel</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="user-profile-summary">
+                    <div class="avatar">
+                        <i class="fa-regular fa-user"></i>
+                    </div>
+                    <div class="user-info">
+                        <h4 id="user-display-name">user@gmail.com</h4>
+                        <div style="display:flex;gap:12px;margin: 4px 0;">
+                            <button id="btn-export-backup" class="btn btn-link" style="padding:0;font-size:0.75rem;color:var(--primary-color);text-decoration:none;" title="Download your progress as JSON"><i class="fa-solid fa-download"></i> Export Progress</button>
+                            <button id="btn-import-backup" class="btn btn-link" style="padding:0;font-size:0.75rem;color:var(--color-success);text-decoration:none;" title="Upload progress from JSON file"><i class="fa-solid fa-upload"></i> Import</button>
+                        </div>
+                        <input type="file" id="input-import-backup-file" accept=".json" class="hidden">
+                        <button id="btn-logout" class="btn-logout-link"><i class="fa-solid fa-power-off"></i> Logout</button>
+                    </div>
+                </div>
+
+                <div class="theme-toggle-container">
+                    <span class="theme-label"><i class="fa-regular fa-sun"></i> Day Mode</span>
+                    <label class="switch">
+                        <input type="checkbox" id="theme-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                    <span class="theme-label"><i class="fa-regular fa-moon"></i> Night Mode</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- ================= DASHBOARD VIEW ================= -->
+            <section id="dashboard-view" class="view-section active">
+                <div class="page-header">
+                    <div>
+                        <h2>Welcome back, <span id="welcome-user-name">User</span>!</h2>
+                        <p>Track your learning progress and challenge yourself.</p>
+                    </div>
+                </div>
+
+                <div class="dashboard-stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon correct-bg">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>Total Questions</h3>
+                            <p class="stat-value" id="stat-total-questions">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon incorrect-bg">
+                            <i class="fa-solid fa-circle-xmark"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>Incorrect Answers</h3>
+                            <p class="stat-value text-danger" id="stat-incorrect-questions">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon marked-bg">
+                            <i class="fa-solid fa-flag"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>Marked Questions</h3>
+                            <p class="stat-value text-warning" id="stat-marked-questions">0</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon unused-bg">
+                            <i class="fa-solid fa-circle-question"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>Unused Questions</h3>
+                            <p class="stat-value" id="stat-unused-questions">0</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-main-grid">
+                    <!-- Progress Chart Card -->
+                    <div class="grid-card chart-card">
+                        <div class="card-header">
+                            <h3>Overall Performance</h3>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="progress-doughnut-chart"></canvas>
+                        </div>
+                        <div class="chart-legend-summary" id="chart-legend-details">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Quick Start/Recent Tests Card -->
+                    <div class="grid-card info-card">
+                        <div class="card-header">
+                            <h3>Quick Statistics</h3>
+                        </div>
+                        <div class="quick-stats-list">
+                            <div class="quick-stat-item">
+                                <span class="label">Total Tests Completed:</span>
+                                <span class="value font-bold" id="stat-total-tests">0</span>
+                            </div>
+                            <div class="quick-stat-item">
+                                <span class="label">Average Test Score:</span>
+                                <span class="value font-bold text-primary" id="stat-avg-score">0%</span>
+                            </div>
+                            <div class="quick-stat-item">
+                                <span class="label">Notebook Entries:</span>
+                                <span class="value font-bold" id="stat-total-notes">0</span>
+                            </div>
+                        </div>
+                        
+                        <div class="quick-actions-panel">
+                            <h4>Quick Actions</h4>
+                            <button id="btn-quick-generate" class="btn btn-primary btn-block" style="margin-bottom: 10px;">
+                                <i class="fa-solid fa-plus"></i> Generate New Test
+                            </button>
+                            <button id="btn-reset-site" class="btn btn-danger btn-block btn-outline">
+                                <i class="fa-solid fa-arrow-rotate-left"></i> Reset Progress & Site Data
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= GENERATE TEST VIEW ================= -->
+            <section id="generate-test-view" class="view-section hidden">
+                <div class="page-header">
+                    <div>
+                        <h2>Create Practice Test</h2>
+                        <p>Customize your exam settings to target specific study areas.</p>
+                    </div>
+                </div>
+
+                <div class="generate-form-layout">
+                    <!-- Test Details -->
+                    <div class="form-card">
+                        <h3>1. Test Settings</h3>
+                        <div class="input-group">
+                            <label for="test-name">Test Name</label>
+                            <input type="text" id="test-name" placeholder="e.g. Immunology Practice #1">
+                        </div>
+
+                        <div class="form-row-grid">
+                            <div class="input-group">
+                                <label for="question-count">Number of Questions</label>
+                                <select id="question-count">
+                                    <option value="5">5 Questions</option>
+                                    <option value="10" selected>10 Questions</option>
+                                    <option value="20">20 Questions</option>
+                                    <option value="30">30 Questions</option>
+                                    <option value="50">50 Questions</option>
+                                    <option value="all">All Available</option>
+                                </select>
+                            </div>
+
+                            <div class="input-group">
+                                <label for="question-pool">Question Pool</label>
+                                <select id="question-pool">
+                                    <option value="all" selected>All Questions</option>
+                                    <option value="unused">Unused (Unsolved)</option>
+                                    <option value="incorrect">Incorrect (Previous Mistakes)</option>
+                                    <option value="marked">Marked / Flagged</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label>Test Mode</label>
+                            <div class="mode-toggle-selector">
+                                <div class="mode-option active" id="mode-tutor" data-mode="tutor">
+                                    <i class="fa-solid fa-chalkboard-user"></i>
+                                    <div>
+                                        <strong>Tutor Mode</strong>
+                                        <span>Immediate feedback & explanations</span>
+                                    </div>
+                                </div>
+                                <div class="mode-option" id="mode-timed" data-mode="timed">
+                                    <i class="fa-regular fa-clock"></i>
+                                    <div>
+                                        <strong>Timed Mode</strong>
+                                        <span>Overall test timer, score at end</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Custom Timer settings for Timed Mode -->
+                        <div class="input-group hidden" id="custom-timer-wrapper">
+                            <label for="test-time-limit"><i class="fa-solid fa-hourglass-half"></i> Test Time Limit (minutes)</label>
+                            <input type="number" id="test-time-limit" min="1" max="180" value="10">
+                            <span class="input-help">Configure the overall duration of this practice exam.</span>
+                        </div>
+                    </div>
+
+                    <!-- Question Sources -->
+                    <div class="form-card">
+                        <h3>2. Select Question Source & Topics</h3>
+                        <p class="section-desc">Select which exam banks and categories you want to include questions from.</p>
+                        
+                        <div class="source-cards-grid">
+                            <div class="source-card active" id="src-past-exam" data-source="Past Exam">
+                                <div class="source-icon">
+                                    <i class="fa-solid fa-graduation-cap"></i>
+                                </div>
+                                <h4>Past Exams</h4>
+                                <span class="badge" id="badge-count-past-exam">0 Qs</span>
+                            </div>
+                            <div class="source-card" id="src-college-mcq" data-source="College MCQ">
+                                <div class="source-icon">
+                                    <i class="fa-solid fa-building-columns"></i>
+                                </div>
+                                <h4>College MCQ</h4>
+                                <span class="badge" id="badge-count-college-mcq">0 Qs</span>
+                            </div>
+                        </div>
+
+                        <div class="topics-selection-wrapper">
+                            <h4>Topics Available</h4>
+                            <div class="topics-list" id="topics-checkbox-container">
+                                <!-- Dynamic checkboxed topics based on chosen source -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="generate-actions-bar">
+                    <div class="selected-qs-indicator">
+                        <i class="fa-solid fa-filter"></i> Selected Questions Matching Criteria: <strong id="matching-qs-count">0</strong>
+                    </div>
+                    <button id="btn-start-test" class="btn btn-primary btn-lg">
+                        <i class="fa-solid fa-play"></i> Start Quiz
+                    </button>
+                </div>
+            </section>
+
+            <!-- ================= MY TESTS VIEW ================= -->
+            <section id="my-tests-view" class="view-section hidden">
+                <div class="page-header">
+                    <div>
+                        <h2>My Test History</h2>
+                        <p>Review your scores, examine past mistakes, or delete tests to recycle questions.</p>
+                    </div>
+                </div>
+
+                <div class="grid-card">
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Test Name</th>
+                                    <th>Mode</th>
+                                    <th>Score</th>
+                                    <th>Accuracy</th>
+                                    <th class="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="my-tests-table-body">
+                                <!-- Dynamically populated -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="no-tests-alert" class="empty-state hidden">
+                        <i class="fa-solid fa-folder-open empty-icon"></i>
+                        <h3>No Practice Tests Found</h3>
+                        <p>Generate a test first to begin tracking your exam logs here.</p>
+                        <button class="btn btn-primary" onclick="window.location.hash='#generate-test'">Generate Test Now</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= NOTEBOOK VIEW ================= -->
+            <section id="notebook-view" class="view-section hidden">
+                <div class="page-header">
+                    <div>
+                        <h2>Notebook</h2>
+                        <p>Write notes, highlight critical points, and review notes captured during examinations.</p>
+                    </div>
+                </div>
+
+                <div class="notebook-layout">
+                    <!-- Left List Pane -->
+                    <div class="notebook-sidebar">
+                        <div class="notebook-search-box">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="notebook-search" placeholder="Search notes...">
+                        </div>
+                        <button id="btn-create-note" class="btn btn-secondary btn-block">
+                            <i class="fa-solid fa-plus"></i> New Note
+                        </button>
+                        <div class="notes-list" id="notes-list-container">
+                            <!-- Populated via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Right Editor Pane -->
+                    <div class="notebook-editor">
+                        <div id="editor-active-state" class="editor-inner active">
+                            <div class="editor-header">
+                                <input type="text" id="note-title-input" placeholder="Untitled Note...">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <span class="note-save-badge"><i class="fa-solid fa-cloud-arrow-up"></i> Auto-saved</span>
+                                    <button id="btn-delete-note" class="btn btn-danger" style="padding: 6px 12px; font-size: 0.8rem; height: auto; display: inline-flex; align-items: center; gap: 6px;">
+                                        <i class="fa-regular fa-trash-can"></i> Delete Note
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="editor-toolbar">
+                                <button class="tool-btn" data-cmd="bold" title="Bold (Ctrl+B)"><i class="fa-solid fa-bold"></i></button>
+                                <button class="tool-btn" data-cmd="italic" title="Italic (Ctrl+I)"><i class="fa-solid fa-italic"></i></button>
+                                <button class="tool-btn" data-cmd="underline" title="Underline (Ctrl+U)"><i class="fa-solid fa-underline"></i></button>
+                                <span class="toolbar-divider"></span>
+                                <!-- Highlighter Tool dropdown -->
+                                <div class="highlight-tool-wrapper">
+                                    <button class="tool-btn highlight-trigger" title="Highlight Selection"><i class="fa-solid fa-highlighter"></i></button>
+                                    <div class="highlight-palette">
+                                        <div class="palette-color color-yellow" data-color="#ffeb3b" title="Yellow Highlight"></div>
+                                        <div class="palette-color color-blue" data-color="#a0c4ff" title="Blue Highlight"></div>
+                                        <div class="palette-color color-green" data-color="#caffbf" title="Green Highlight"></div>
+                                        <div class="palette-color color-clear" data-color="transparent" title="Clear Highlight"><i class="fa-solid fa-eraser"></i></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="editor-body" id="note-editor-textarea" contenteditable="true">
+                                Select a note on the left or create a new one to start writing.
+                            </div>
+                        </div>
+                        <div id="editor-empty-state" class="editor-empty">
+                            <i class="fa-regular fa-clipboard"></i>
+                            <h3>No Note Selected</h3>
+                            <p>Select a note from the left sidebar or click "New Note" to begin writing.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= FLASHCARDS VIEW ================= -->
+            <section id="flashcards-view" class="view-section hidden">
+                <div class="page-header" style="flex-wrap: wrap; gap: 16px;">
+                    <div>
+                        <h2>Flashcards Deck</h2>
+                        <p>Flip interactive cards to reinforce high-yield infection topics.</p>
+                    </div>
+                    <div class="flashcards-stats-header" style="display: flex; gap: 16px; font-size: 0.9rem; background: var(--bg-secondary); padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <span>Mastered: <strong id="flashcard-stat-mastered" class="text-success">0</strong></span>
+                        <span>Review: <strong id="flashcard-stat-review" class="text-warning">0</strong></span>
+                        <span>Total: <strong id="flashcard-stat-total">0</strong></span>
+                    </div>
+                </div>
+
+                <div id="flashcards-empty-state" class="grid-card empty-state hidden" style="text-align: center; padding: 48px 24px; min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                    <i class="fa-solid fa-layer-group empty-icon" style="font-size: 4rem; color: var(--primary-color); margin-bottom: 24px; opacity: 0.8;"></i>
+                    <h3>No Flashcards Available</h3>
+                    <p style="color: var(--text-muted); max-width: 480px;">Go to the Admin Panel to create some high-yield cards first.</p>
+                </div>
+
+                <div id="flashcards-play-layout" class="flashcards-play-layout" style="display: flex; flex-direction: column; align-items: center; gap: 24px; max-width: 600px; margin: 0 auto; width: 100%;">
+                    <div class="flashcard-container" id="active-flashcard-box">
+                        <div class="flashcard-card">
+                            <div class="flashcard-face flashcard-front">
+                                <span class="card-category" id="card-front-category">Category</span>
+                                <div class="card-text" id="card-front-text">Question front text?</div>
+                                <span class="card-hint"><i class="fa-solid fa-rotate"></i> Click card to flip</span>
+                            </div>
+                            <div class="flashcard-face flashcard-back">
+                                <span class="card-category" id="card-back-category">Category</span>
+                                <div class="card-text" id="card-back-text">Answer back text!</div>
+                                <span class="card-hint"><i class="fa-solid fa-rotate"></i> Click card to flip back</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flashcard-actions" style="display: flex; gap: 16px; width: 100%;">
+                        <button id="btn-fc-review" class="btn btn-warning btn-block" style="flex: 1; padding: 12px 20px;">
+                            <i class="fa-solid fa-triangle-exclamation"></i> Needs Review
+                        </button>
+                        <button id="btn-fc-mastered" class="btn btn-success btn-block" style="flex: 1; padding: 12px 20px;">
+                            <i class="fa-solid fa-circle-check"></i> Mastered
+                        </button>
+                    </div>
+
+                    <div class="flashcards-navigation" style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 12px;">
+                        <button id="btn-fc-prev" class="btn btn-secondary btn-outline" style="padding: 8px 16px;">
+                            <i class="fa-solid fa-chevron-left"></i> Previous
+                        </button>
+                        <span id="flashcard-progress-indicator" style="font-weight: 500; font-size: 0.95rem; color: var(--text-secondary);">Card 1 of 10</span>
+                        <button id="btn-fc-next" class="btn btn-secondary btn-outline" style="padding: 8px 16px;">
+                            Next <i class="fa-solid fa-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= REPORT TASK STUDENT VIEW ================= -->
+            <section id="report-task-view" class="view-section hidden">
+                <div class="page-header">
+                    <div>
+                        <h2>Report Tasks</h2>
+                        <p>Access active timed mock exams published by the Admin track coordinator.</p>
+                    </div>
+                </div>
+
+                <div id="student-report-tasks-container" class="report-tasks-student-grid">
+                    <!-- Populated dynamically: list of available mock exams -->
+                </div>
+            </section>
+
+            <!-- ================= ADMIN PANEL VIEW ================= -->
+            <section id="admin-panel-view" class="view-section hidden">
+                <div class="page-header">
+                    <div>
+                        <h2>Admin Panel</h2>
+                        <p>Configure quiz banks, add new exam questions, and manage user registration requests.</p>
+                    </div>
+                </div>
+
+                <div class="admin-tabs-bar">
+                    <button class="admin-tab-btn active" data-target="admin-questions-tab">Manage Questions</button>
+                    <button class="admin-tab-btn" data-target="admin-flashcards-tab">Manage Flashcards</button>
+                    <button class="admin-tab-btn" data-target="admin-report-tasks-tab">Manage Report Tasks</button>
+                    <button class="admin-tab-btn" data-target="admin-approvals-tab">
+                        Registration Requests <span class="badge badge-warning" id="admin-pending-badge">0</span>
+                    </button>
+                </div>
+
+                <!-- Admin Questions Tab -->
+                <div id="admin-questions-tab" class="admin-tab-content active">
+                    <div class="admin-questions-layout">
+                        <!-- Questions Form -->
+                        <div class="grid-card">
+                            <h3 id="admin-form-title">Create New Question</h3>
+                            <form id="admin-question-form">
+                                <input type="hidden" id="edit-question-id" value="">
+                                
+                                <div class="form-row-grid">
+                                    <div class="input-group">
+                                        <label for="admin-q-source">Question Bank Source</label>
+                                        <select id="admin-q-source" required>
+                                            <option value="Past Exam">Past Exam</option>
+                                            <option value="College MCQ">College MCQ</option>
+                                            <option value="CUSTOM">+ Add Custom Source</option>
+                                        </select>
+                                        <div id="admin-custom-source-wrapper" class="input-group hidden" style="margin-top: 8px;">
+                                            <input type="text" id="admin-q-custom-source" placeholder="Type custom source...">
+                                        </div>
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-q-topic">Topic / Category</label>
+                                        <select id="admin-q-topic" required>
+                                            <!-- Dynamically filled + CUSTOM -->
+                                        </select>
+                                        <div id="admin-custom-topic-wrapper" class="input-group hidden" style="margin-top: 8px;">
+                                            <input type="text" id="admin-q-custom-topic" placeholder="Type custom topic...">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="input-group">
+                                    <label for="admin-q-text">Question Text</label>
+                                    <textarea id="admin-q-text" rows="4" placeholder="Type the question content..." required></textarea>
+                                </div>
+
+                                <div class="admin-options-grid">
+                                    <div class="input-group">
+                                        <label for="admin-q-optA">Option A</label>
+                                        <input type="text" id="admin-q-optA" placeholder="Answer choice A" required>
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-q-optB">Option B</label>
+                                        <input type="text" id="admin-q-optB" placeholder="Answer choice B" required>
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-q-optC">Option C</label>
+                                        <input type="text" id="admin-q-optC" placeholder="Answer choice C" required>
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-q-optD">Option D</label>
+                                        <input type="text" id="admin-q-optD" placeholder="Answer choice D" required>
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-q-optE">Option E (Optional)</label>
+                                        <input type="text" id="admin-q-optE" placeholder="Optional 5th choice">
+                                    </div>
+                                </div>
+
+                                <div class="input-group">
+                                    <label for="admin-q-correct">Correct Option</label>
+                                    <select id="admin-q-correct" required>
+                                        <option value="A">A</option>
+                                        <option value="B">B</option>
+                                        <option value="C">C</option>
+                                        <option value="D">D</option>
+                                        <option value="E">E</option>
+                                    </select>
+                                </div>
+
+                                <div class="input-group">
+                                    <label for="admin-q-explanation">Explanation / Rationale</label>
+                                    <textarea id="admin-q-explanation" rows="4" placeholder="Detail why the correct option is right..." required></textarea>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-question">Save Question</button>
+                                    <button type="button" class="btn btn-secondary hidden" id="btn-cancel-edit-question">Cancel Edit</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Questions List -->
+                        <div class="grid-card">
+                            <div class="card-header-flex">
+                                <h3>Existing Questions</h3>
+                                <div class="search-input-wrapper">
+                                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                    <input type="text" id="admin-q-search" placeholder="Search by text, option, or topic...">
+                                </div>
+                            </div>
+                            <div class="admin-questions-list-wrapper">
+                                <div class="admin-q-list" id="admin-questions-list-container">
+                                    <!-- Populated dynamically -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Admin Flashcards Tab -->
+                <div id="admin-flashcards-tab" class="admin-tab-content">
+                    <div class="admin-questions-layout">
+                        <!-- Flashcard Form -->
+                        <div class="grid-card">
+                            <h3 id="admin-fc-form-title">Create New Flashcard</h3>
+                            <form id="admin-flashcard-form">
+                                <input type="hidden" id="edit-flashcard-id" value="">
+                                
+                                <div class="input-group">
+                                    <label for="admin-fc-category">Category / Topic</label>
+                                    <input type="text" id="admin-fc-category" placeholder="e.g. Immunization, Virology, General" required>
+                                </div>
+                                
+                                <div class="input-group">
+                                    <label for="admin-fc-front">Front Text (Question / Concept)</label>
+                                    <textarea id="admin-fc-front" rows="3" placeholder="Write question or concept here..." required></textarea>
+                                </div>
+
+                                <div class="input-group">
+                                    <label for="admin-fc-back">Back Text (Answer / Rationale)</label>
+                                    <textarea id="admin-fc-back" rows="3" placeholder="Write answer here..." required></textarea>
+                                </div>
+
+                                <div class="form-actions" style="margin-top: 15px;">
+                                    <button type="submit" class="btn btn-primary" id="btn-save-flashcard">Save Flashcard</button>
+                                    <button type="button" class="btn btn-secondary btn-outline hidden" id="btn-cancel-fc-edit" onclick="resetAdminFlashcardForm()">Cancel Edit</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Flashcards List -->
+                        <div class="grid-card">
+                            <div class="card-header-flex">
+                                <h3>Existing Flashcards</h3>
+                                <div class="search-input-wrapper">
+                                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                    <input type="text" id="admin-fc-search" placeholder="Search cards by category or content...">
+                                </div>
+                            </div>
+                            <div class="admin-questions-list-wrapper">
+                                <div class="admin-q-list" id="admin-flashcards-list-container">
+                                    <!-- Populated dynamically -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Admin Report Tasks Tab -->
+                <div id="admin-report-tasks-tab" class="admin-tab-content">
+                    <div class="admin-questions-layout">
+                        <!-- Left Column: Forms -->
+                        <div style="display: flex; flex-direction: column; gap: 24px;">
+                            <!-- Create Mock Exam Form -->
+                            <div class="grid-card">
+                                <h3>Create Timed Mock Exam</h3>
+                                <p class="section-desc">Design a custom, timed exam with selected questions.</p>
+                                <form id="admin-report-task-form">
+                                    <div class="input-group">
+                                        <label for="admin-rt-title">Exam Title / Name</label>
+                                        <input type="text" id="admin-rt-title" placeholder="e.g. Module 59 Final Mock Exam" required>
+                                    </div>
+                                    
+                                    <div class="input-group" style="margin-top: 12px;">
+                                        <label for="admin-rt-duration">Duration (Minutes)</label>
+                                        <input type="number" id="admin-rt-duration" placeholder="e.g. 60" min="1" required>
+                                    </div>
+
+                                    <div class="input-group" style="margin-top: 15px;">
+                                        <div class="card-header-flex" style="margin-bottom: 8px;">
+                                            <label style="margin-bottom: 0;">Select Questions (<span id="admin-rt-checked-count">0</span> selected)</label>
+                                            <div class="search-input-wrapper" style="width: 200px;">
+                                                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                                <input type="text" id="admin-rt-q-search" placeholder="Search questions..." style="padding: 6px 12px 6px 30px; font-size: 0.85rem;">
+                                            </div>
+                                        </div>
+                                        <div class="admin-rt-questions-scroller" id="admin-rt-questions-list">
+                                            <!-- Dynamically generated checklist of all questions grouped by topic -->
+                                        </div>
+                                    </div>
+
+                                    <button type="submit" class="btn btn-primary btn-block" style="margin-top: 20px;">
+                                        <i class="fa-solid fa-file-signature"></i> Publish Mock Exam
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- Add Manual Question Form -->
+                            <div class="grid-card">
+                                <h3>Add Custom Question Manually</h3>
+                                <p class="section-desc">Create a new question and add it directly to the mock exam.</p>
+                                <div class="input-group">
+                                    <label for="admin-rt-manual-text">Question Prompt</label>
+                                    <textarea id="admin-rt-manual-text" rows="3" placeholder="Write question prompt..."></textarea>
+                                </div>
+                                <div class="admin-options-grid" style="margin-top: 10px;">
+                                    <div class="input-group">
+                                        <label for="admin-rt-manual-a">Option A</label>
+                                        <input type="text" id="admin-rt-manual-a" placeholder="Option A text">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-rt-manual-b">Option B</label>
+                                        <input type="text" id="admin-rt-manual-b" placeholder="Option B text">
+                                    </div>
+                                </div>
+                                <div class="admin-options-grid" style="margin-top: 10px;">
+                                    <div class="input-group">
+                                        <label for="admin-rt-manual-c">Option C</label>
+                                        <input type="text" id="admin-rt-manual-c" placeholder="Option C text">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="admin-rt-manual-d">Option D</label>
+                                        <input type="text" id="admin-rt-manual-d" placeholder="Option D text">
+                                    </div>
+                                </div>
+                                <div class="input-group" style="margin-top: 10px;">
+                                    <label for="admin-rt-manual-e">Option E (Optional)</label>
+                                    <input type="text" id="admin-rt-manual-e" placeholder="Option E text (leave empty if none)">
+                                </div>
+                                <div class="input-group" style="margin-top: 10px;">
+                                    <label for="admin-rt-manual-correct">Correct Option</label>
+                                    <select id="admin-rt-manual-correct">
+                                        <option value="A">A</option>
+                                        <option value="B">B</option>
+                                        <option value="C">C</option>
+                                        <option value="D">D</option>
+                                        <option value="E">E</option>
+                                    </select>
+                                </div>
+                                <div class="input-group" style="margin-top: 10px;">
+                                    <label for="admin-rt-manual-explanation">Explanation / Rationale</label>
+                                    <textarea id="admin-rt-manual-explanation" rows="3" placeholder="Write rationale for this question..."></textarea>
+                                </div>
+                                <button type="button" id="btn-admin-rt-add-manual" class="btn btn-secondary btn-block" style="margin-top: 15px;">
+                                    <i class="fa-solid fa-plus"></i> Add Manual Question
+                                </button>
+                                
+                                <!-- Added Manual Questions Preview list -->
+                                <div id="admin-rt-manual-preview-section" class="hidden" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+                                    <h4 style="font-size: 0.9rem; color: var(--text-primary); margin-bottom: 8px;">Manually Added Questions (<span id="admin-rt-manual-count">0</span>)</h4>
+                                    <div id="admin-rt-manual-preview-list" style="display:flex; flex-direction:column; gap: 8px; max-height: 150px; overflow-y: auto;">
+                                        <!-- List of manual question summaries -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Existing Mock Exams List -->
+                        <div class="grid-card">
+                            <h3>Published Mock Exams</h3>
+                            <div class="admin-questions-list-wrapper" style="margin-top: 15px;">
+                                <div class="admin-q-list" id="admin-report-tasks-list">
+                                    <!-- Dynamic list of published report tasks -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Admin Approvals Tab -->
+                <div id="admin-approvals-tab" class="admin-tab-content">
+                    <div class="admin-questions-layout">
+                        <!-- Direct Add User Form -->
+                        <div class="grid-card">
+                            <h3>Add User Directly</h3>
+                            <p class="section-desc">Create approved accounts directly without registration approval.</p>
+                            <form id="admin-direct-user-form">
+                                <div class="input-group">
+                                    <label for="admin-direct-email"><i class="fa-regular fa-envelope"></i> Gmail Address</label>
+                                    <input type="email" id="admin-direct-email" placeholder="e.g. mustafa@gmail.com" required>
+                                </div>
+                                <div class="input-group" style="margin-top: 10px;">
+                                    <label for="admin-direct-password"><i class="fa-solid fa-lock"></i> Password</label>
+                                    <input type="password" id="admin-direct-password" placeholder="••••••••" required>
+                                </div>
+                                <div class="input-group" style="margin-top: 10px;">
+                                    <label for="admin-direct-role">Role</label>
+                                    <select id="admin-direct-role" required>
+                                        <option value="user">Student</option>
+                                        <option value="admin">Admin</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-block" style="margin-top: 15px;">
+                                    <i class="fa-solid fa-user-plus"></i> Add User Account
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Users Management Panel -->
+                        <div class="grid-card">
+                            <div class="card-header-flex">
+                                <h3>Users Registry</h3>
+                                <div class="search-input-wrapper">
+                                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                    <input type="text" id="admin-users-search" placeholder="Search users by email...">
+                                </div>
+                            </div>
+
+                            <h4 style="margin-top: 20px; font-size: 1.1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">Pending Approvals</h4>
+                            <div class="table-responsive" style="margin-top: 10px;">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Email</th>
+                                            <th>Registered</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-pending-users-table-body">
+                                        <!-- Dynamic pending rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="no-pending-users-alert" class="empty-state hidden" style="padding: 20px; text-align: center;">
+                                <span class="text-muted">No pending approvals.</span>
+                            </div>
+
+                            <h4 style="margin-top: 30px; font-size: 1.1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">Approved Users</h4>
+                            <div class="table-responsive" style="margin-top: 10px;">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Registered</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-approved-users-table-body">
+                                        <!-- Dynamic approved rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="no-approved-users-alert" class="empty-state hidden" style="padding: 20px; text-align: center;">
+                                <span class="text-muted">No approved users.</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- ================= ACTIVE TEST MODAL OVERLAY ================= -->
+    <div id="active-test-overlay" class="active-test-overlay hidden">
+        <!-- Test Header -->
+        <header class="test-header">
+            <div class="test-title-section">
+                <i class="fa-solid fa-virus-covid logo-icon"></i>
+                <div>
+                    <h2 id="active-test-title-lbl">Practice Quiz</h2>
+                    <span class="test-mode-badge" id="active-test-mode-lbl">Tutor Mode</span>
+                </div>
+            </div>
+            
+            <div class="test-header-controls">
+                <!-- Highlighter Active State Indicator -->
+                <button class="test-tool-btn" id="btn-test-highlighter" title="Toggle highlighter mode">
+                    <i class="fa-solid fa-highlighter"></i> Highlight Text
+                </button>
+                
+                <span class="test-divider"></span>
+
+                <!-- Test Timer -->
+                <div id="test-timer-wrapper" class="test-timer-container">
+                    <i class="fa-regular fa-clock"></i>
+                    <span id="test-timer-text">00:00:00</span>
+                </div>
+
+                <span class="test-divider"></span>
+
+                <button class="btn btn-danger" id="btn-submit-active-test">
+                    Submit Test <i class="fa-solid fa-circle-check"></i>
+                </button>
+                <button class="btn btn-secondary" id="btn-suspend-active-test" title="Save progress and exit">
+                    Suspend <i class="fa-solid fa-pause"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Test Main Interface -->
+        <div class="test-interface-body" id="test-interface-body">
+            <!-- Left Navigation Sidebar (UWorld Question Map Grid) -->
+            <aside class="test-nav-sidebar">
+                <h3>Questions List</h3>
+                <div class="questions-navigation-grid" id="test-questions-grid">
+                    <!-- Populated via JS (1, 2, 3...) -->
+                </div>
+                <div class="test-nav-legend">
+                    <div class="legend-item"><span class="legend-box current"></span> Current</div>
+                    <div class="legend-item"><span class="legend-box answered"></span> Answered</div>
+                    <div class="legend-item"><span class="legend-box marked"><i class="fa-solid fa-flag text-warning"></i></span> Flagged</div>
+                </div>
+            </aside>
+
+            <!-- Center Question Box -->
+            <section class="test-question-area">
+                <div class="question-header-actions">
+                    <span class="question-number-indicator">Question <strong id="lbl-question-current-idx">1</strong> of <strong id="lbl-question-total-count">10</strong></span>
+                    <button class="btn btn-link btn-flag-question" id="btn-flag-active-question">
+                        <i class="fa-regular fa-flag"></i> Flag Question
+                    </button>
+                </div>
+
+                <!-- Text highlighting is enabled on this container -->
+                <div class="question-prompt-card" id="active-question-prompt">
+                    <!-- Dynamic Question Text -->
+                </div>
+
+                <div class="question-choices-list" id="active-question-choices">
+                    <!-- Dynamic Choice Buttons (A, B, C, D) -->
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="question-navigation-buttons">
+                    <button class="btn btn-secondary" id="btn-prev-question">
+                        <i class="fa-solid fa-chevron-left"></i> Previous
+                    </button>
+                    <button class="btn btn-secondary" id="btn-next-question">
+                        Next <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </div>
+
+                <!-- Tutor Explanation Panel -->
+                <div class="question-explanation-panel hidden" id="active-question-explanation">
+                    <div class="explanation-header">
+                        <i class="fa-solid fa-circle-info"></i> Rationale & Explanation
+                    </div>
+                    <div class="explanation-body" id="lbl-explanation-text">
+                        <!-- Dynamic explanation -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Question Notes Box -->
+            <aside class="test-notes-sidebar" id="test-notes-sidebar">
+                <h3>Question Notes</h3>
+                <p class="notes-desc">Add key points for this specific question. They are saved in your general notebook.</p>
+                <div class="question-notepad-wrapper">
+                    <textarea id="question-notepad-input" rows="12" placeholder="Write a note about this question..."></textarea>
+                    <span class="notepad-status" id="lbl-notepad-status"><i class="fa-solid fa-circle-check"></i> Saved</span>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Main javascript file -->
+    <script src="app.js"></script>
+</body>
+</html>

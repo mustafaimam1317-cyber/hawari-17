@@ -22832,7 +22832,15 @@ function renderAdminApprovalsTab() {
     }
 }
 
-window.approveUserAdmin = function(email, role = 'user') {
+window.approveUserAdmin = async function(email, role = 'user') {
+    const btn = event ? event.currentTarget : null;
+    let originalHtml = "";
+    if (btn) {
+        btn.disabled = true;
+        originalHtml = btn.innerHTML;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Saving...`;
+    }
+
     const user = state.users.find(u => u.email === email);
     if (user) {
         user.status = "approved";
@@ -22841,36 +22849,99 @@ window.approveUserAdmin = function(email, role = 'user') {
         user.tests = [];
         user.notebookNotes = [];
         user.flashcards = [];
-        saveStateToStorage();
-        showToast("User Approved", `Gmail account ${email} is now approved as ${role.toUpperCase()}.`, "success");
+        
+        encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+        
+        try {
+            await syncUsersWithCloud();
+            showToast("User Approved", `Gmail account ${email} is now approved as ${role.toUpperCase()}.`, "success");
+        } catch (e) {
+            console.error("Cloud approval sync failed:", e);
+            showToast("Sync Warning", "Approved locally, but database sync encountered an error. Please reload.", "warning");
+        }
+        
         renderAdminApprovalsTab();
     }
 };
 
-window.rejectUserAdmin = function(email) {
+window.rejectUserAdmin = async function(email) {
     if (confirm(`Are you sure you want to reject and remove registration request for ${email}?`)) {
+        const btn = event ? event.currentTarget : null;
+        let originalHtml = "";
+        if (btn) {
+            btn.disabled = true;
+            originalHtml = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Rejecting...`;
+        }
+
         state.users = state.users.filter(u => u.email !== email);
-        saveStateToStorage();
-        showToast("Request Rejected", `Registration request for ${email} has been rejected.`, "warning");
+        encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+        
+        try {
+            // Delete record directly from Supabase
+            await supabaseRequest(`hawari_users?email=eq.${email}&group_name=eq.${state.activeGroup}`, {
+                method: "DELETE"
+            });
+            showToast("Request Rejected", `Registration request for ${email} has been rejected and deleted.`, "warning");
+        } catch (e) {
+            console.error("Cloud deletion failed:", e);
+            showToast("Deletion Warning", "Deleted locally, but database sync encountered an error. Please check your network.", "warning");
+        }
+
         renderAdminApprovalsTab();
     }
 };
 
-window.toggleUserRoleAdmin = function(email) {
+window.toggleUserRoleAdmin = async function(email) {
+    const btn = event ? event.currentTarget : null;
+    let originalHtml = "";
+    if (btn) {
+        btn.disabled = true;
+        originalHtml = btn.innerHTML;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Updating...`;
+    }
+
     const user = state.users.find(u => u.email === email);
     if (user) {
         user.role = user.role === "admin" ? "user" : "admin";
-        saveStateToStorage();
-        showToast("Role Updated", `Role for ${email} has been changed to ${user.role.toUpperCase()}.`, "success");
+        encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+        
+        try {
+            await syncUsersWithCloud();
+            showToast("Role Updated", `Role for ${email} has been changed to ${user.role.toUpperCase()}.`, "success");
+        } catch (e) {
+            console.error("Cloud role sync failed:", e);
+            showToast("Sync Warning", "Role updated locally, but database sync encountered an error.", "warning");
+        }
+        
         renderAdminApprovalsTab();
     }
 };
 
-window.deleteUserAdmin = function(email) {
+window.deleteUserAdmin = async function(email) {
     if (confirm(`CRITICAL WARNING: Are you sure you want to delete the user account for ${email}? All their test progress, notebooks, and flashcard records will be permanently erased!`)) {
+        const btn = event ? event.currentTarget : null;
+        let originalHtml = "";
+        if (btn) {
+            btn.disabled = true;
+            originalHtml = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Deleting...`;
+        }
+
         state.users = state.users.filter(u => u.email !== email);
-        saveStateToStorage();
-        showToast("Account Deleted", `User account ${email} has been permanently deleted from registry.`, "danger");
+        encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+        
+        try {
+            // Delete record directly from Supabase
+            await supabaseRequest(`hawari_users?email=eq.${email}&group_name=eq.${state.activeGroup}`, {
+                method: "DELETE"
+            });
+            showToast("Account Deleted", `User account ${email} has been permanently deleted from registry.`, "danger");
+        } catch (e) {
+            console.error("Cloud deletion failed:", e);
+            showToast("Deletion Warning", "Deleted locally, but database sync encountered an error.", "warning");
+        }
+        
         renderAdminApprovalsTab();
     }
 };

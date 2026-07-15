@@ -20076,10 +20076,10 @@ function saveStateToStorage() {
             userRecord.flashcards = state.flashcards;
         }
     }
-    localStorage.setItem(getGroupKey(STORAGE_KEYS.USERS), JSON.stringify(state.users));
-    localStorage.setItem(getGroupKey(STORAGE_KEYS.CURRENT_USER), JSON.stringify(state.currentUser));
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+    encryptLocal(getGroupKey(STORAGE_KEYS.CURRENT_USER), state.currentUser);
     localStorage.setItem(STORAGE_KEYS.THEME, JSON.stringify(state.isDarkMode));
-    localStorage.setItem(getGroupKey(STORAGE_KEYS.REPORT_TASKS), JSON.stringify(state.reportTasks));
+    encryptLocal(getGroupKey(STORAGE_KEYS.REPORT_TASKS), state.reportTasks);
     
     // Cloud sync users registry
     syncUsersWithCloud();
@@ -20160,9 +20160,9 @@ function loadStateFromStorage() {
     if (!state.activeGroup) return;
 
     // 2. Users Database
-    const storedUsers = localStorage.getItem(getGroupKey(STORAGE_KEYS.USERS));
+    const storedUsers = decryptLocal(getGroupKey(STORAGE_KEYS.USERS), null);
     if (storedUsers) {
-        state.users = JSON.parse(storedUsers);
+        state.users = storedUsers;
     } else {
         // Pre-seeded Admin and Student accounts
         state.users = [
@@ -20212,13 +20212,13 @@ function loadStateFromStorage() {
             u.password = sha256Sync(u.password);
         }
     });
-    localStorage.setItem(getGroupKey(STORAGE_KEYS.USERS), JSON.stringify(state.users));
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
     // 3. Current User
-    const storedCurrentUser = localStorage.getItem(getGroupKey(STORAGE_KEYS.CURRENT_USER));
+    const storedCurrentUser = decryptLocal(getGroupKey(STORAGE_KEYS.CURRENT_USER), null);
     if (storedCurrentUser) {
         try {
-            state.currentUser = JSON.parse(storedCurrentUser);
+            state.currentUser = storedCurrentUser;
             // Verify user exists in the database
             const dbUser = state.users.find(u => u.email === state.currentUser.email);
             if (dbUser) {
@@ -20249,13 +20249,7 @@ function loadStateFromStorage() {
     }
 
     // 4. Report Tasks Database
-    const rtKey = getGroupKey(STORAGE_KEYS.REPORT_TASKS);
-    const storedRt = localStorage.getItem(rtKey);
-    if (storedRt) {
-        state.reportTasks = JSON.parse(storedRt);
-    } else {
-        state.reportTasks = [];
-    }
+    state.reportTasks = decryptLocal(getGroupKey(STORAGE_KEYS.REPORT_TASKS), []);
 
     // Trigger cloud synchronization in background
     syncUsersWithCloud();
@@ -20284,11 +20278,11 @@ function showToast(title, msg, type = "info") {
     
     container.appendChild(toast);
 
-    // Auto remove after 6 seconds
+    // Auto remove after 3 seconds
     setTimeout(() => {
         toast.style.animation = "slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) reverse forwards";
         setTimeout(() => toast.remove(), 300);
-    }, 6000);
+    }, 3000);
 }
 
 // ================= INITIALIZATION & ROUTING =================
@@ -20618,70 +20612,155 @@ function decryptRC4(base64) {
     }
 }
 
+function encryptLocal(key, value) {
+    try {
+        const str = JSON.stringify(value);
+        const encrypted = encryptRC4(str);
+        localStorage.setItem(key, encrypted);
+    } catch (e) {
+        console.error("Local encryption failed:", e);
+    }
+}
+
+function decryptLocal(key, defaultValue) {
+    try {
+        const val = localStorage.getItem(key);
+        if (!val) return defaultValue;
+        if (val.trim().startsWith("[") || val.trim().startsWith("{") || val.trim().startsWith("\"") || val.trim() === "true" || val.trim() === "false") {
+            return JSON.parse(val);
+        }
+        const decrypted = decryptRC4(val);
+        if (!decrypted) return defaultValue;
+        return JSON.parse(decrypted);
+    } catch (e) {
+        console.error("Local decryption failed:", e);
+        return defaultValue;
+    }
+}
+
+async function supabaseRequest(path, options = {}) {
+    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "";
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "";
+    if (!url || !anonKey) {
+        console.warn("Supabase credentials missing.");
+        return null;
+    }
+    const headers = {
+        "apikey": anonKey,
+        "Authorization": `Bearer ${anonKey}`,
+        "Content-Type": "application/json",
+        ...options.headers
+    };
+    try {
+        const response = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
+            ...options,
+            headers
+        });
+        if (!response.ok) {
+            console.error(`Supabase request to ${path} failed:`, await response.text());
+            return null;
+        }
+        if (options.method === "DELETE" || response.status === 204) {
+            return true;
+        }
+        return await response.json();
+    } catch (e) {
+        console.error(`Supabase request to ${path} error:`, e);
+        return null;
+    }
+}
+
 async function syncUsersWithCloud() {
     if (!state.activeGroup) return;
-    const objectId = CLOUD_SYNC_IDS[state.activeGroup];
-    if (!objectId) return;
-    
-    const url = "https://api.restful-api.dev/objects/" + objectId;
-    
-    try {
-        const res = await fetch(url);
-        if (res.ok) {
-            const json = await res.json();
-            if (json && json.data && json.data.users) {
-                const decryptedText = decryptRC4(json.data.users);
-                if (decryptedText) {
-                    const remoteUsers = JSON.parse(decryptedText);
-                    if (Array.isArray(remoteUsers)) {
-                        // Merge remote users into local state.users
-                        remoteUsers.forEach(ru => {
-                            const localUserIdx = state.users.findIndex(u => u.email === ru.email);
-                            if (localUserIdx >= 0) {
-                                const lu = state.users[localUserIdx];
-                                // Sync status (e.g. pending -> approved)
-                                if (ru.status === "approved" && lu.status !== "approved") {
-                                    lu.status = "approved";
-                                    lu.role = ru.role;
-                                }
-                                // Sync reportTaskProgress if any
-                                if (ru.reportTaskProgress) {
-                                    if (!lu.reportTaskProgress) lu.reportTaskProgress = {};
-                                    Object.assign(lu.reportTaskProgress, ru.reportTaskProgress);
-                                }
-                            } else {
-                                state.users.push(ru);
-                            }
-                        });
+
+    // 1. Fetch all cloud records for active group
+    const cloudRecords = await supabaseRequest(`hawari_users?group_name=eq.${state.activeGroup}`);
+    if (cloudRecords && Array.isArray(cloudRecords)) {
+        // Map cloud database rows to user object structure
+        const cloudUsers = cloudRecords.map(row => {
+            let progress = {};
+            if (row.progress_data) {
+                const dec = decryptRC4(row.progress_data);
+                if (dec) {
+                    try {
+                        progress = JSON.parse(dec);
+                    } catch (e) {
+                        console.error("Failed to parse progress data:", e);
                     }
                 }
             }
-        }
-    } catch (e) {
-        console.error("Cloud fetch failed, using local cache:", e);
-    }
-
-    // Now upload the merged local state.users to the cloud
-    try {
-        const encrypted = encryptRC4(JSON.stringify(state.users));
-        await fetch(url, {
-            method: "PUT",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                name: "hawari_users_" + state.activeGroup,
-                data: {
-                    users: encrypted
-                }
-            })
+            return {
+                email: row.email,
+                password: row.password_hash,
+                role: row.role,
+                status: row.status,
+                dateRegistered: row.date_registered,
+                questions: progress.questions || [],
+                tests: progress.tests || [],
+                notebookNotes: progress.notebookNotes || [],
+                flashcards: progress.flashcards || [],
+                reportTaskProgress: progress.reportTaskProgress || {}
+            };
         });
-    } catch (e) {
-        console.error("Cloud push failed:", e);
+
+        // 2. Merge local state.users with cloudUsers
+        cloudUsers.forEach(cu => {
+            const localUserIdx = state.users.findIndex(u => u.email === cu.email);
+            if (localUserIdx >= 0) {
+                const lu = state.users[localUserIdx];
+                // Sync status (e.g. pending -> approved)
+                if (cu.status === "approved" && lu.status !== "approved") {
+                    lu.status = "approved";
+                    lu.role = cu.role;
+                }
+                // Sync progress data if cloud has newer progress or if local is empty
+                const localHasProgress = lu.questions.length > 0 || lu.tests.length > 0 || lu.notebookNotes.length > 0 || lu.flashcards.length > 0;
+                const cloudHasProgress = cu.questions.length > 0 || cu.tests.length > 0 || cu.notebookNotes.length > 0 || cu.flashcards.length > 0;
+                if (!localHasProgress && cloudHasProgress) {
+                    lu.questions = cu.questions;
+                    lu.tests = cu.tests;
+                    lu.notebookNotes = cu.notebookNotes;
+                    lu.flashcards = cu.flashcards;
+                }
+                if (cu.reportTaskProgress) {
+                    if (!lu.reportTaskProgress) lu.reportTaskProgress = {};
+                    Object.assign(lu.reportTaskProgress, cu.reportTaskProgress);
+                }
+            } else {
+                state.users.push(cu);
+            }
+        });
     }
 
-    // Save to local storage
-    localStorage.setItem(getGroupKey(STORAGE_KEYS.USERS), JSON.stringify(state.users));
+    // 3. For any user in state.users, upsert their record to Supabase
+    for (const user of state.users) {
+        const progress = {
+            questions: user.questions || [],
+            tests: user.tests || [],
+            notebookNotes: user.notebookNotes || [],
+            flashcards: user.flashcards || [],
+            reportTaskProgress: user.reportTaskProgress || {}
+        };
+        const payload = {
+            email: user.email,
+            group_name: state.activeGroup,
+            password_hash: user.password,
+            role: user.role,
+            status: user.status,
+            date_registered: user.dateRegistered,
+            progress_data: encryptRC4(JSON.stringify(progress))
+        };
+        await supabaseRequest("hawari_users", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+    }
+
+    // 4. Save to local storage using encrypted local helper
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 }
 
 // ================= AUTHENTICATION FLOW =================
@@ -20782,6 +20861,22 @@ function initAuthFlow() {
         });
     }
 
+    function checkLoginLockout(email) {
+        const lockoutTime = sessionStorage.getItem("lockout_" + email);
+        if (lockoutTime) {
+            const remaining = parseInt(lockoutTime) - Date.now();
+            if (remaining > 0) {
+                return Math.ceil(remaining / 1000);
+            }
+        }
+        return 0;
+    }
+
+    function setLoginLockout(email) {
+        const lockoutUntil = Date.now() + 5 * 60 * 1000;
+        sessionStorage.setItem("lockout_" + email, lockoutUntil.toString());
+    }
+
     // Submit Password Login
     if (btnLoginSubmit) {
         btnLoginSubmit.addEventListener("click", () => {
@@ -20792,21 +20887,33 @@ function initAuthFlow() {
                 return;
             }
 
+            const lockoutSec = checkLoginLockout(currentAuthenticatingEmail);
+            if (lockoutSec > 0) {
+                showToast("Locked Out", `Too many failed attempts. Try again in ${Math.ceil(lockoutSec / 60)} minute(s).`, "danger");
+                return;
+            }
+
             console.log("[Auth] Searching user records in database for:", currentAuthenticatingEmail);
             const user = state.users.find(u => u.email === currentAuthenticatingEmail);
-            console.log("[Auth] User lookup result:", user);
             const hashedInput = sha256Sync(password);
-            if (user) {
-                console.log("[Auth] Checking password. Input vs DB:", hashedInput === user.password ? "MATCH" : "MISMATCH");
-            }
+            
             if (user && user.password === hashedInput) {
+                sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
+                sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
                 state.currentUser = user;
                 saveStateToStorage();
                 
                 showToast("Login Success", `Welcome to Hawari Course study engine!`, "success");
                 enterWorkspace();
             } else {
-                showToast("Invalid Password", "The password you entered is incorrect.", "danger");
+                let attempts = parseInt(sessionStorage.getItem("attempts_" + currentAuthenticatingEmail) || "0") + 1;
+                sessionStorage.setItem("attempts_" + currentAuthenticatingEmail, attempts.toString());
+                if (attempts >= 5) {
+                    setLoginLockout(currentAuthenticatingEmail);
+                    showToast("Account Locked", "Too many failed attempts. You are locked out for 5 minutes.", "danger");
+                } else {
+                    showToast("Invalid Password", `The password you entered is incorrect. (${5 - attempts} attempts remaining)`, "danger");
+                }
                 passwordLoginInput.value = "";
                 passwordLoginInput.focus();
             }

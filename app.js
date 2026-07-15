@@ -20717,29 +20717,18 @@ async function syncUsersWithCloud() {
     if (cloudRecords && Array.isArray(cloudRecords)) {
         // Map cloud database rows to user object structure
         const cloudUsers = cloudRecords.map(row => {
-            let progress = {};
-            if (row.progress_data) {
-                const dec = decryptRC4(row.progress_data);
-                if (dec) {
-                    try {
-                        progress = JSON.parse(dec);
-                    } catch (e) {
-                        console.error("Failed to parse progress data:", e);
-                    }
-                }
-            }
             return {
                 email: row.email,
                 password: row.password_hash,
                 role: row.role,
                 status: row.status,
                 dateRegistered: row.date_registered,
-                questions: progress.questions || [],
-                tests: progress.tests || [],
-                notebookNotes: progress.notebookNotes || [],
-                flashcards: progress.flashcards || [],
-                reportTaskProgress: progress.reportTaskProgress || {},
-                lastUpdated: progress.lastUpdated || 0
+                questions: row.questions || [],
+                tests: row.tests || [],
+                notebookNotes: row.notebook_notes || [],
+                flashcards: row.flashcards || [],
+                reportTaskProgress: row.report_task_progress || {},
+                lastUpdated: row.last_updated || 0
             };
         });
 
@@ -20803,14 +20792,6 @@ async function syncUsersWithCloud() {
 
     // Upsert records to Supabase in parallel
     const promises = usersToWrite.map(user => {
-        const progress = {
-            questions: user.questions || [],
-            tests: user.tests || [],
-            notebookNotes: user.notebookNotes || [],
-            flashcards: user.flashcards || [],
-            reportTaskProgress: user.reportTaskProgress || {},
-            lastUpdated: user.lastUpdated || 0
-        };
         const payload = {
             email: user.email,
             group_name: group,
@@ -20818,7 +20799,12 @@ async function syncUsersWithCloud() {
             role: user.role,
             status: user.status,
             date_registered: user.dateRegistered,
-            progress_data: encryptRC4(JSON.stringify(progress))
+            questions: user.questions || [],
+            tests: user.tests || [],
+            notebook_notes: user.notebookNotes || [],
+            flashcards: user.flashcards || [],
+            report_task_progress: user.reportTaskProgress || {},
+            last_updated: user.lastUpdated || 0
         };
         return supabaseRequest("hawari_users", {
             method: "POST",
@@ -20964,7 +20950,7 @@ function initAuthFlow() {
 
     // Submit Password Login
     if (btnLoginSubmit) {
-        btnLoginSubmit.addEventListener("click", () => {
+        btnLoginSubmit.addEventListener("click", async () => {
             const password = passwordLoginInput.value;
             console.log("[Auth] Login button clicked. currentAuthenticatingEmail:", currentAuthenticatingEmail);
             if (!password) {
@@ -20983,12 +20969,27 @@ function initAuthFlow() {
             const hashedInput = sha256Sync(password);
             
             if (user && user.password === hashedInput) {
+                // Show loading spinner
+                btnLoginSubmit.disabled = true;
+                btnLoginSubmit.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Logging in...`;
+
                 sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
                 sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
                 state.currentUser = user;
+
+                try {
+                    // Force sync cloud progress to avoid overwriting newer progress from other devices
+                    await syncUsersWithCloud();
+                } catch (e) {
+                    console.error("Login sync failed:", e);
+                }
+
                 loadUserSpecificProgress(user.email);
                 saveStateToStorage();
                 
+                btnLoginSubmit.disabled = false;
+                btnLoginSubmit.innerHTML = `Log In <i class="fa-solid fa-right-to-bracket"></i>`;
+
                 showToast("Login Success", `Welcome to Hawari Course study engine!`, "success");
                 enterWorkspace();
             } else {

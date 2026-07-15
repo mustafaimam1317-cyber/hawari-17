@@ -21109,7 +21109,7 @@ function renderDashboard() {
     const unusedQCount = state.questions.filter(q => q.status === "unused").length;
     const correctQCount = state.questions.filter(q => q.status === "correct").length;
     
-    document.getElementById("stat-total-questions").innerText = totalQCount;
+    document.getElementById("stat-correct-questions").innerText = correctQCount;
     document.getElementById("stat-incorrect-questions").innerText = incorrectQCount;
     document.getElementById("stat-marked-questions").innerText = markedQCount;
     document.getElementById("stat-unused-questions").innerText = unusedQCount;

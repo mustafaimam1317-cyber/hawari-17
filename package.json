@@ -12,6 +12,7 @@
     "vite": "^4.5.0"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "pdf-parse": "^2.4.5"
   }
 }

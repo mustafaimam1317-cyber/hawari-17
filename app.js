@@ -20348,12 +20348,59 @@ function selectCourseTrack(groupName) {
     // Load state from the dynamic storage keys of this track
     loadStateFromStorage();
 
+    // Seed default admin/student to cloud if they are missing
+    seedDefaultUsersToCloud(groupName);
+
     // Check auth status
     if (state.currentUser) {
         enterWorkspace();
     } else {
         showLandingPage();
     }
+}
+
+async function seedDefaultUsersToCloud(group) {
+    const defaultEmails = [
+        { email: "admin@gmail.com", password: "admin", status: "approved", role: "admin" },
+        { email: "student@gmail.com", password: "student", status: "approved", role: "user" },
+        { email: "mustafaimam1317@gmail.com", password: "mustafa172004", status: "approved", role: "admin" },
+        { email: "mustafa172004@gmail.com", password: "mustafa172004", status: "approved", role: "admin" }
+    ];
+
+    const promises = defaultEmails.map(async (u) => {
+        const path = `hawari_users?email=eq.${u.email}&group_name=eq.${group}`;
+        try {
+            const records = await supabaseRequest(path);
+            if (records && records.length === 0) {
+                // Initialize default users in Supabase database
+                const payload = {
+                    email: u.email,
+                    group_name: group,
+                    password_hash: sha256Sync(u.password),
+                    role: u.role,
+                    status: u.status,
+                    date_registered: new Date().toLocaleDateString(),
+                    questions: u.role === "admin" ? [] : JSON.parse(JSON.stringify(getGroupQuestionsSeed())),
+                    tests: [],
+                    notebook_notes: [],
+                    flashcards: [],
+                    report_task_progress: {},
+                    last_updated: Date.now()
+                };
+                await supabaseRequest("hawari_users", {
+                    method: "POST",
+                    headers: {
+                        "Prefer": "resolution=merge-duplicates"
+                    },
+                    body: JSON.stringify(payload)
+                });
+                console.log(`[Seed] Seeded default user ${u.email} to cloud for group ${group}`);
+            }
+        } catch (e) {
+            console.error(`[Seed] Failed to check/seed ${u.email}:`, e);
+        }
+    });
+    await Promise.all(promises);
 }
 
 function switchCourseTrack() {
@@ -22987,6 +23034,7 @@ function initSidebarCollapse() {
     const btnCollapse = document.getElementById("btn-sidebar-collapse");
     const btnExpand = document.getElementById("btn-sidebar-expand");
     const appLayout = document.getElementById("app-layout");
+    const backdrop = document.getElementById("sidebar-backdrop");
 
     if (btnCollapse && btnExpand && appLayout) {
         btnCollapse.addEventListener("click", () => {
@@ -22996,6 +23044,12 @@ function initSidebarCollapse() {
         btnExpand.addEventListener("click", () => {
             appLayout.classList.remove("sidebar-collapsed");
         });
+
+        if (backdrop) {
+            backdrop.addEventListener("click", () => {
+                appLayout.classList.add("sidebar-collapsed");
+            });
+        }
     }
 }
 
@@ -23048,6 +23102,26 @@ function initSecurityProtections() {
             return;
         }
     });
+
+    // 5. Anti-Debugging Protection (Pauses execution if DevTools is opened, bypassed for Admin role)
+    setInterval(() => {
+        const isAdmin = state.currentUser && state.currentUser.role === "admin";
+        if (isAdmin) return;
+        
+        (function() {
+            const before = new Date().getTime();
+            debugger;
+            const after = new Date().getTime();
+            if (after - before > 100) {
+                document.body.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0f172a;color:#ffffff;font-family:'Inter',sans-serif;text-align:center;padding:24px;">
+                    <i class="fa-solid fa-triangle-exclamation" style="font-size:3.5rem;color:#ef4444;margin-bottom:20px;"></i>
+                    <h1 style="font-size:1.8rem;font-weight:700;margin-bottom:10px;">Developer Tools Detected</h1>
+                    <p style="color:#94a3b8;max-width:400px;line-height:1.5;margin-bottom:20px;">Access to the exam platform is restricted when developer tools are active to protect intellectual questions.</p>
+                    <button class="btn btn-primary" onclick="window.location.reload()">Reload Page</button>
+                </div>`;
+            }
+        })();
+    }, 2000);
 }
 
 function populateAdminTopicSelect(selectedTopic) {

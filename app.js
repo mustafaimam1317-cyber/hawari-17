@@ -1,3 +1,7 @@
+// ================= VERCEL WEB ANALYTICS =================
+import { inject } from '@vercel/analytics';
+inject();
+
 // ================= SEED QUESTIONS DATABASE =================
 const SEED_QUESTIONS = [
     {

@@ -20085,6 +20085,12 @@ function saveStateToStorage() {
     
     // Cloud sync users registry
     syncUsersWithCloud();
+
+    // If active user is Admin, also upload the global questions template!
+    const isAdmin = state.currentUser && state.currentUser.role === "admin";
+    if (isAdmin) {
+        saveGlobalQuestionsToCloud();
+    }
 }
 
 // Synchronous SHA-256 implementation for secure password hashing
@@ -20288,7 +20294,7 @@ function showToast(title, msg, type = "info") {
 }
 
 // ================= INITIALIZATION & ROUTING =================
-function selectCourseTrack(groupName) {
+async function selectCourseTrack(groupName) {
     state.activeGroup = groupName;
     localStorage.setItem("hawari_active_group", groupName);
     
@@ -20344,6 +20350,10 @@ function selectCourseTrack(groupName) {
     // Hide course selector page
     const selectorPage = document.getElementById("course-selector-page");
     if (selectorPage) selectorPage.classList.add("hidden");
+
+    // Fetch global questions and report tasks from cloud before loading
+    await fetchGlobalQuestions(groupName);
+    await fetchReportTasksFromCloud(groupName);
 
     // Load state from the dynamic storage keys of this track
     loadStateFromStorage();
@@ -20718,6 +20728,139 @@ async function supabaseRequest(path, options = {}) {
     } catch (e) {
         console.error(`Supabase request to ${path} error:`, e);
         return null;
+    }
+}
+
+let globalQuestionsCache = [];
+
+function mergeQuestionsWithGlobal(userQuestions, globalQuestions) {
+    if (globalQuestions && globalQuestions.length > 0) {
+        return globalQuestions.map(gq => {
+            const uq = userQuestions.find(q => q.id === gq.id) || {};
+            return {
+                id: gq.id,
+                source: gq.source,
+                topic: gq.topic,
+                text: gq.text,
+                options: gq.options,
+                correctOption: gq.correctOption,
+                explanation: gq.explanation,
+                status: uq.status || "unused",
+                marked: uq.marked || false,
+                notes: uq.notes || "",
+                highlightedHtml: uq.highlightedHtml || "",
+                userAnswer: uq.userAnswer || null
+            };
+        });
+    }
+    return userQuestions;
+}
+
+async function fetchGlobalQuestions(group) {
+    try {
+        const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
+        if (records && records.length > 0 && records[0].questions) {
+            globalQuestionsCache = records[0].questions;
+            console.log(`[Sync] Loaded global questions from cloud for group ${group}`);
+        } else {
+            // Fallback to local questions seed and seed it to cloud
+            globalQuestionsCache = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+            await saveGlobalQuestionsToCloud();
+        }
+    } catch (e) {
+        console.error("[Sync] Failed to fetch global questions:", e);
+        globalQuestionsCache = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+    }
+}
+
+async function saveGlobalQuestionsToCloud() {
+    const group = state.activeGroup;
+    if (!group) return;
+
+    // Strip student-specific answers/status from global template
+    const cleanQuestions = state.questions.map(q => {
+        return {
+            id: q.id,
+            source: q.source,
+            topic: q.topic,
+            text: q.text,
+            options: q.options,
+            correctOption: q.correctOption,
+            explanation: q.explanation
+        };
+    });
+
+    const payload = {
+        group_name: group,
+        questions: cleanQuestions,
+        last_updated: Date.now()
+    };
+
+    try {
+        await supabaseRequest("hawari_global_questions", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+        console.log(`[Sync] Saved global questions template to cloud for group ${group}`);
+    } catch (e) {
+        console.error("[Sync] Failed to save global questions to cloud:", e);
+    }
+}
+
+async function fetchReportTasksFromCloud(group) {
+    try {
+        const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${group}`);
+        if (records && Array.isArray(records)) {
+            state.reportTasks = records.map(row => {
+                return {
+                    id: row.id,
+                    title: row.title,
+                    duration: row.time_limit,
+                    questions: row.question_ids || [],
+                    dateCreated: row.date_created
+                };
+            });
+            console.log(`[Sync] Fetched ${state.reportTasks.length} report tasks from cloud for group ${group}`);
+        }
+    } catch (e) {
+        console.error("[Sync] Failed to fetch report tasks from cloud:", e);
+    }
+}
+
+async function saveReportTaskToCloud(rt) {
+    const payload = {
+        id: rt.id,
+        group_name: state.activeGroup,
+        title: rt.title,
+        question_ids: rt.questions,
+        time_limit: rt.duration,
+        date_created: rt.dateCreated
+    };
+    try {
+        await supabaseRequest("hawari_report_tasks", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+        console.log(`[Sync] Saved report task "${rt.title}" to cloud`);
+    } catch (e) {
+        console.error("[Sync] Failed to save report task to cloud:", e);
+    }
+}
+
+async function deleteReportTaskFromCloud(id) {
+    try {
+        await supabaseRequest(`hawari_report_tasks?id=eq.${id}`, {
+            method: "DELETE"
+        });
+        console.log(`[Sync] Deleted report task ${id} from cloud`);
+    } catch (e) {
+        console.error("[Sync] Failed to delete report task from cloud:", e);
     }
 }
 
@@ -23705,6 +23848,9 @@ function renderAdminReportTasksTab() {
 
             state.reportTasks.push(newRt);
             saveStateToStorage();
+            
+            // Sync report task to Supabase cloud
+            saveReportTaskToCloud(newRt);
 
             showToast("Mock Exam Published", `Successfully created "${title}" with ${selectedQs.length} questions.`, "success");
             
@@ -23733,10 +23879,14 @@ function renderAdminReportTasksTab() {
     }
 }
 
-window.deleteReportTaskAdmin = function(id) {
+window.deleteReportTaskAdmin = async function(id) {
     if (confirm("Are you sure you want to delete this mock exam?")) {
         state.reportTasks = state.reportTasks.filter(rt => rt.id !== id);
         saveStateToStorage();
+        
+        // Delete mock exam from Supabase cloud
+        await deleteReportTaskFromCloud(id);
+        
         showToast("Mock Exam Deleted", "The mock exam has been deleted.", "warning");
         renderAdminReportTasksTab();
         updateDashboardStats();
@@ -23750,13 +23900,17 @@ function loadUserSpecificProgress(email) {
     const user = state.users.find(u => u.email === email);
     if (!user) return;
 
-    // Load or initialize questions
+    // Load base questions
     const expectedLength = state.activeGroup === "dermatology" ? 1 : 550;
+    let baseQuestions = [];
     if (user.questions && user.questions.length >= expectedLength) {
-        state.questions = user.questions;
+        baseQuestions = user.questions;
     } else {
-        state.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+        baseQuestions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
     }
+    
+    // Merge with global questions template to pull in admin edits
+    state.questions = mergeQuestionsWithGlobal(baseQuestions, globalQuestionsCache);
 
     // Load or initialize tests
     state.tests = user.tests || [];

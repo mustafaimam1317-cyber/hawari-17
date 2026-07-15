@@ -20673,10 +20673,11 @@ async function supabaseRequest(path, options = {}) {
 }
 
 async function syncUsersWithCloud() {
-    if (!state.activeGroup) return;
+    const group = state.activeGroup;
+    if (!group) return;
 
     // 1. Fetch all cloud records for active group
-    const cloudRecords = await supabaseRequest(`hawari_users?group_name=eq.${state.activeGroup}`);
+    const cloudRecords = await supabaseRequest(`hawari_users?group_name=eq.${group}`);
     if (cloudRecords && Array.isArray(cloudRecords)) {
         // Map cloud database rows to user object structure
         const cloudUsers = cloudRecords.map(row => {
@@ -20734,8 +20735,8 @@ async function syncUsersWithCloud() {
         });
     }
 
-    // 3. For any user in state.users, upsert their record to Supabase
-    for (const user of state.users) {
+    // 3. For any user in state.users, upsert their record to Supabase in parallel
+    const promises = state.users.map(user => {
         const progress = {
             questions: user.questions || [],
             tests: user.tests || [],
@@ -20745,24 +20746,25 @@ async function syncUsersWithCloud() {
         };
         const payload = {
             email: user.email,
-            group_name: state.activeGroup,
+            group_name: group,
             password_hash: user.password,
             role: user.role,
             status: user.status,
             date_registered: user.dateRegistered,
             progress_data: encryptRC4(JSON.stringify(progress))
         };
-        await supabaseRequest("hawari_users", {
+        return supabaseRequest("hawari_users", {
             method: "POST",
             headers: {
                 "Prefer": "resolution=merge-duplicates"
             },
             body: JSON.stringify(payload)
         });
-    }
+    });
+    await Promise.all(promises);
 
     // 4. Save to local storage using encrypted local helper
-    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+    encryptLocal(`${STORAGE_KEYS.USERS}_${group}`, state.users);
 }
 
 // ================= AUTHENTICATION FLOW =================
@@ -20903,6 +20905,7 @@ function initAuthFlow() {
                 sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
                 sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
                 state.currentUser = user;
+                loadUserSpecificProgress(user.email);
                 saveStateToStorage();
                 
                 showToast("Login Success", `Welcome to Hawari Course study engine!`, "success");

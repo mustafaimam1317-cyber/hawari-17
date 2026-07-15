@@ -2180,7 +2180,7 @@ body.group-dermatology.dark-theme {
     animation: fadeInUp 0.8s ease;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     .selector-cards-container {
         grid-template-columns: 1fr;
         gap: 20px;
@@ -2497,7 +2497,7 @@ body.group-dermatology.dark-theme {
 }
 
 /* ================= MOBILE RESPONSIVENESS OVERRIDES ================= */
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     .app-layout {
         grid-template-columns: 1fr !important;
     }

@@ -21340,7 +21340,14 @@ function enterWorkspace() {
 
     document.getElementById("landing-page").classList.add("hidden");
     document.getElementById("auth-overlay").classList.add("hidden");
-    document.getElementById("app-layout").classList.remove("hidden");
+    
+    const appLayout = document.getElementById("app-layout");
+    appLayout.classList.remove("hidden");
+    if (window.innerWidth <= 1024) {
+        appLayout.classList.add("sidebar-collapsed");
+    } else {
+        appLayout.classList.remove("sidebar-collapsed");
+    }
     
     // Set Profile UI elements
     document.getElementById("user-display-name").innerText = state.currentUser.email;

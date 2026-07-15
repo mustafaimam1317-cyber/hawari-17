@@ -20074,6 +20074,8 @@ function saveStateToStorage() {
             userRecord.tests = state.tests;
             userRecord.notebookNotes = state.notebookNotes;
             userRecord.flashcards = state.flashcards;
+            userRecord.lastUpdated = Date.now();
+            state.currentUser.lastUpdated = userRecord.lastUpdated;
         }
     }
     encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
@@ -20672,6 +20674,22 @@ async function supabaseRequest(path, options = {}) {
     }
 }
 
+function triggerViewRefresh() {
+    if (state.activeView === "dashboard") {
+        renderDashboard();
+    } else if (state.activeView === "generate-test") {
+        renderGenerateTest();
+    } else if (state.activeView === "my-tests") {
+        renderMyTests();
+    } else if (state.activeView === "notebook") {
+        renderNotebook();
+    } else if (state.activeView === "flashcards") {
+        renderFlashcardsView();
+    } else if (state.activeView === "report-task") {
+        renderReportTaskStudentView();
+    }
+}
+
 async function syncUsersWithCloud() {
     const group = state.activeGroup;
     if (!group) return;
@@ -20720,7 +20738,8 @@ async function syncUsersWithCloud() {
                 tests: progress.tests || [],
                 notebookNotes: progress.notebookNotes || [],
                 flashcards: progress.flashcards || [],
-                reportTaskProgress: progress.reportTaskProgress || {}
+                reportTaskProgress: progress.reportTaskProgress || {},
+                lastUpdated: progress.lastUpdated || 0
             };
         });
 
@@ -20734,18 +20753,34 @@ async function syncUsersWithCloud() {
                     lu.status = "approved";
                     lu.role = cu.role;
                 }
-                // Sync progress data if cloud has newer progress or if local is empty
-                const localHasProgress = lu.questions.length > 0 || lu.tests.length > 0 || lu.notebookNotes.length > 0 || lu.flashcards.length > 0;
-                const cloudHasProgress = cu.questions.length > 0 || cu.tests.length > 0 || cu.notebookNotes.length > 0 || cu.flashcards.length > 0;
-                if (!localHasProgress && cloudHasProgress) {
+                // Sync progress data if cloud has newer progress
+                const localUpdated = lu.lastUpdated || 0;
+                const cloudUpdated = cu.lastUpdated || 0;
+                
+                if (cloudUpdated > localUpdated) {
                     lu.questions = cu.questions;
                     lu.tests = cu.tests;
                     lu.notebookNotes = cu.notebookNotes;
                     lu.flashcards = cu.flashcards;
+                    lu.lastUpdated = cu.lastUpdated;
+                    
+                    // If this is the current logged-in user, also update global state!
+                    if (state.currentUser && state.currentUser.email === lu.email) {
+                        state.questions = lu.questions;
+                        state.tests = lu.tests;
+                        state.notebookNotes = lu.notebookNotes;
+                        state.flashcards = lu.flashcards;
+                        state.currentUser.lastUpdated = lu.lastUpdated;
+                        
+                        triggerViewRefresh();
+                    }
                 }
                 if (cu.reportTaskProgress) {
                     if (!lu.reportTaskProgress) lu.reportTaskProgress = {};
                     Object.assign(lu.reportTaskProgress, cu.reportTaskProgress);
+                    if (state.currentUser && state.currentUser.email === lu.email) {
+                        triggerViewRefresh();
+                    }
                 }
             } else {
                 state.users.push(cu);
@@ -20773,7 +20808,8 @@ async function syncUsersWithCloud() {
             tests: user.tests || [],
             notebookNotes: user.notebookNotes || [],
             flashcards: user.flashcards || [],
-            reportTaskProgress: user.reportTaskProgress || {}
+            reportTaskProgress: user.reportTaskProgress || {},
+            lastUpdated: user.lastUpdated || 0
         };
         const payload = {
             email: user.email,

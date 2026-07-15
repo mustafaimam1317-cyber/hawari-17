@@ -20818,7 +20818,7 @@ function initAuthFlow() {
 
     // Email Step Continue
     if (btnSendCode) {
-        btnSendCode.addEventListener("click", () => {
+        btnSendCode.addEventListener("click", async () => {
             let email = emailInput.value.trim().toLowerCase();
             console.log("[Auth] Continue button clicked. Input email value:", email);
             if (!email) {
@@ -20834,6 +20834,20 @@ function initAuthFlow() {
                 showToast("Gmail Only", "Only Gmail email accounts are allowed on this portal.", "warning");
                 return;
             }
+
+            // Show loading spinner on button
+            btnSendCode.disabled = true;
+            btnSendCode.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Checking...`;
+
+            try {
+                // Sync with cloud to get latest approvals/registrations
+                await syncUsersWithCloud();
+            } catch (e) {
+                console.error("Cloud check failed:", e);
+            }
+
+            btnSendCode.disabled = false;
+            btnSendCode.innerHTML = `Continue <i class="fa-solid fa-arrow-right"></i>`;
 
             currentAuthenticatingEmail = email;
 
@@ -20927,7 +20941,7 @@ function initAuthFlow() {
 
     // Submit New Registration Request
     if (btnRegisterSubmit) {
-        btnRegisterSubmit.addEventListener("click", async () => {
+        btnRegisterSubmit.addEventListener("click", () => {
             const password = passwordRegInput.value;
             const confirm = passwordRegConfirmInput.value;
 
@@ -20951,8 +20965,8 @@ function initAuthFlow() {
             };
             state.users.push(newUser);
             
-            // Sync registry with cloud
-            await syncUsersWithCloud();
+            // Sync registry with cloud in the background to provide instant UI transition
+            syncUsersWithCloud();
 
             showToast("Sign-up Request Sent", "Your account has been registered and is pending Admin approval.", "warning");
             showAuthStep("auth-pending-step");
@@ -22792,7 +22806,7 @@ window.approveUserAdmin = function(email, role = 'user') {
     if (user) {
         user.status = "approved";
         user.role = role;
-        user.questions = JSON.parse(JSON.stringify(SEED_QUESTIONS));
+        user.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
         user.tests = [];
         user.notebookNotes = [];
         user.flashcards = [];

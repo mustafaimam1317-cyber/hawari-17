@@ -20080,6 +20080,9 @@ function saveStateToStorage() {
     localStorage.setItem(getGroupKey(STORAGE_KEYS.CURRENT_USER), JSON.stringify(state.currentUser));
     localStorage.setItem(STORAGE_KEYS.THEME, JSON.stringify(state.isDarkMode));
     localStorage.setItem(getGroupKey(STORAGE_KEYS.REPORT_TASKS), JSON.stringify(state.reportTasks));
+    
+    // Cloud sync users registry
+    syncUsersWithCloud();
 }
 
 // Synchronous SHA-256 implementation for secure password hashing
@@ -20253,6 +20256,9 @@ function loadStateFromStorage() {
     } else {
         state.reportTasks = [];
     }
+
+    // Trigger cloud synchronization in background
+    syncUsersWithCloud();
 }
 
 // ================= TOAST SYSTEM GENERATOR =================
@@ -20543,6 +20549,141 @@ function switchView(viewName) {
     }
 }
 
+// ================= SECURITY & SANITIZATION UTILITIES =================
+function sanitizeHTML(str) {
+    if (!str) return "";
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function sanitizeRichHTML(html) {
+    if (!html) return "";
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    const blockedTags = doc.querySelectorAll("script, iframe, object, embed, style, link, meta");
+    blockedTags.forEach(el => el.remove());
+    const allElements = doc.querySelectorAll("*");
+    allElements.forEach(el => {
+        const attrs = Array.from(el.attributes);
+        attrs.forEach(attr => {
+            if (attr.name.startsWith("on")) {
+                el.removeAttribute(attr.name);
+            }
+        });
+    });
+    return doc.body.innerHTML;
+}
+
+// ================= CLOUD SYNCHRONIZATION (RESTFUL-API.DEV) =================
+const CLOUD_SYNC_IDS = {
+    infection: "ff8081819d82fab6019f628a21cd6064",
+    dermatology: "ff8081819d82fab6019f628a21fc6065"
+};
+
+function rc4(key, str) {
+    let s = [], j = 0, x, res = '';
+    for (let i = 0; i < 256; i++) {
+        s[i] = i;
+    }
+    for (let i = 0; i < 256; i++) {
+        j = (j + s[i] + key.charCodeAt(i % key.length)) % 256;
+        x = s[i]; s[i] = s[j]; s[j] = x;
+    }
+    let i = 0, y = 0;
+    j = 0;
+    for (y = 0; y < str.length; y++) {
+        i = (i + 1) % 256;
+        j = (j + s[i]) % 256;
+        x = s[i]; s[i] = s[j]; s[j] = x;
+        res += String.fromCharCode(str.charCodeAt(y) ^ s[(s[i] + s[j]) % 256]);
+    }
+    return res;
+}
+
+function encryptRC4(text) {
+    const encrypted = rc4("hawari_secure_key_2026", text);
+    return btoa(unescape(encodeURIComponent(encrypted)));
+}
+
+function decryptRC4(base64) {
+    try {
+        const text = decodeURIComponent(escape(atob(base64)));
+        return rc4("hawari_secure_key_2026", text);
+    } catch(e) {
+        return "";
+    }
+}
+
+async function syncUsersWithCloud() {
+    if (!state.activeGroup) return;
+    const objectId = CLOUD_SYNC_IDS[state.activeGroup];
+    if (!objectId) return;
+    
+    const url = "https://api.restful-api.dev/objects/" + objectId;
+    
+    try {
+        const res = await fetch(url);
+        if (res.ok) {
+            const json = await res.json();
+            if (json && json.data && json.data.users) {
+                const decryptedText = decryptRC4(json.data.users);
+                if (decryptedText) {
+                    const remoteUsers = JSON.parse(decryptedText);
+                    if (Array.isArray(remoteUsers)) {
+                        // Merge remote users into local state.users
+                        remoteUsers.forEach(ru => {
+                            const localUserIdx = state.users.findIndex(u => u.email === ru.email);
+                            if (localUserIdx >= 0) {
+                                const lu = state.users[localUserIdx];
+                                // Sync status (e.g. pending -> approved)
+                                if (ru.status === "approved" && lu.status !== "approved") {
+                                    lu.status = "approved";
+                                    lu.role = ru.role;
+                                }
+                                // Sync reportTaskProgress if any
+                                if (ru.reportTaskProgress) {
+                                    if (!lu.reportTaskProgress) lu.reportTaskProgress = {};
+                                    Object.assign(lu.reportTaskProgress, ru.reportTaskProgress);
+                                }
+                            } else {
+                                state.users.push(ru);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Cloud fetch failed, using local cache:", e);
+    }
+
+    // Now upload the merged local state.users to the cloud
+    try {
+        const encrypted = encryptRC4(JSON.stringify(state.users));
+        await fetch(url, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                name: "hawari_users_" + state.activeGroup,
+                data: {
+                    users: encrypted
+                }
+            })
+        });
+    } catch (e) {
+        console.error("Cloud push failed:", e);
+    }
+
+    // Save to local storage
+    localStorage.setItem(getGroupKey(STORAGE_KEYS.USERS), JSON.stringify(state.users));
+}
+
 // ================= AUTHENTICATION FLOW =================
 let simulatedCode = null;
 let currentAuthenticatingEmail = null;
@@ -20674,12 +20815,12 @@ function initAuthFlow() {
 
     // Submit New Registration Request
     if (btnRegisterSubmit) {
-        btnRegisterSubmit.addEventListener("click", () => {
+        btnRegisterSubmit.addEventListener("click", async () => {
             const password = passwordRegInput.value;
             const confirm = passwordRegConfirmInput.value;
 
-            if (!password || password.length < 4) {
-                showToast("Weak Password", "Password must be at least 4 characters long.", "danger");
+            if (!password || password.length < 6) {
+                showToast("Weak Password", "Password must be at least 6 characters long.", "danger");
                 return;
             }
 
@@ -20697,7 +20838,9 @@ function initAuthFlow() {
                 dateRegistered: new Date().toLocaleDateString()
             };
             state.users.push(newUser);
-            saveStateToStorage();
+            
+            // Sync registry with cloud
+            await syncUsersWithCloud();
 
             showToast("Sign-up Request Sent", "Your account has been registered and is pending Admin approval.", "warning");
             showAuthStep("auth-pending-step");
@@ -20707,7 +20850,10 @@ function initAuthFlow() {
 
     // Checking status on pending page
     if (btnCheckStatus) {
-        btnCheckStatus.addEventListener("click", () => {
+        btnCheckStatus.addEventListener("click", async () => {
+            // Load latest approvals from cloud
+            await syncUsersWithCloud();
+
             const user = state.users.find(u => u.email === currentAuthenticatingEmail);
             if (user && user.status === "approved") {
                 showToast("Approved!", "Your registration request has been approved by the Admin.", "success");
@@ -21326,14 +21472,14 @@ function initTestControls() {
                         // Remove if empty
                         state.notebookNotes = state.notebookNotes.filter(n => n.qId !== qId);
                     } else {
-                        existingNote.content = content;
+                        existingNote.content = sanitizeHTML(content);
                         existingNote.timestamp = new Date().toLocaleDateString();
                     }
                 } else if (content !== "") {
                     const newNote = {
                         id: "note_" + Date.now(),
                         title: noteTitle,
-                        content: content,
+                        content: sanitizeHTML(content),
                         timestamp: new Date().toLocaleDateString(),
                         qId: qId,
                         type: "Question Note"
@@ -21935,8 +22081,8 @@ function renderNotebook() {
         if (!activeNoteId) return;
         const activeNote = state.notebookNotes.find(n => n.id === activeNoteId);
         if (activeNote) {
-            activeNote.title = noteTitleInput.value.trim() || "Untitled Note";
-            activeNote.content = noteBodyArea.innerHTML;
+            activeNote.title = sanitizeHTML(noteTitleInput.value.trim()) || "Untitled Note";
+            activeNote.content = sanitizeRichHTML(noteBodyArea.innerHTML);
             activeNote.timestamp = new Date().toLocaleDateString();
             
             saveStateToStorage();
@@ -22089,6 +22235,13 @@ function renderAdminPanel() {
                 content.classList.remove("active");
             });
             document.getElementById(target).classList.add("active");
+
+            // Sync with cloud users list if entering approvals tab
+            if (target === "admin-approvals-tab") {
+                syncUsersWithCloud().then(() => {
+                    renderAdminApprovalsTab();
+                });
+            }
         };
     });
 
@@ -22813,9 +22966,9 @@ function renderAdminFlashcardsTab() {
     form.onsubmit = (e) => {
         e.preventDefault();
         const fcIdInput = document.getElementById("edit-flashcard-id").value;
-        const categoryVal = document.getElementById("admin-fc-category").value.trim();
-        const frontVal = document.getElementById("admin-fc-front").value.trim();
-        const backVal = document.getElementById("admin-fc-back").value.trim();
+        const categoryVal = sanitizeHTML(document.getElementById("admin-fc-category").value.trim());
+        const frontVal = sanitizeHTML(document.getElementById("admin-fc-front").value.trim());
+        const backVal = sanitizeHTML(document.getElementById("admin-fc-back").value.trim());
 
         if (fcIdInput) {
             // EDIT
@@ -22971,16 +23124,21 @@ function renderAdminReportTasksTab() {
 
             const qObj = {
                 id: "manual_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
-                text: promptText,
-                options: { A: optA, B: optB, C: optC, D: optD },
+                text: sanitizeHTML(promptText),
+                options: { 
+                    A: sanitizeHTML(optA), 
+                    B: sanitizeHTML(optB), 
+                    C: sanitizeHTML(optC), 
+                    D: sanitizeHTML(optD) 
+                },
                 correctOption: correctOption,
-                explanation: explanation || "Correct answer confirmed.",
+                explanation: sanitizeHTML(explanation) || "Correct answer confirmed.",
                 status: "unused",
                 marked: false,
                 notes: "",
                 highlightedHtml: ""
             };
-            if (optE) qObj.options.E = optE;
+            if (optE) qObj.options.E = sanitizeHTML(optE);
 
             window.rtManualQuestions.push(qObj);
 

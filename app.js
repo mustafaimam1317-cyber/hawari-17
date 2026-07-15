@@ -20256,9 +20256,6 @@ function loadStateFromStorage() {
         state.flashcards = [];
     }
 
-    // 4. Report Tasks Database
-    state.reportTasks = decryptLocal(getGroupKey(STORAGE_KEYS.REPORT_TASKS), []);
-
     // Trigger cloud synchronization in background
     syncUsersWithCloud();
 }
@@ -20351,12 +20348,14 @@ async function selectCourseTrack(groupName) {
     const selectorPage = document.getElementById("course-selector-page");
     if (selectorPage) selectorPage.classList.add("hidden");
 
-    // Fetch global questions and report tasks from cloud before loading
+    // Fetch global questions from cloud before loading
     await fetchGlobalQuestions(groupName);
-    await fetchReportTasksFromCloud(groupName);
 
     // Load state from the dynamic storage keys of this track
     loadStateFromStorage();
+
+    // Fetch report tasks from cloud after loading to prevent local storage overwrite
+    await fetchReportTasksFromCloud(groupName);
 
     // Seed default admin/student to cloud if they are missing
     seedDefaultUsersToCloud(groupName);
@@ -21303,14 +21302,7 @@ function enterWorkspace() {
 
     document.getElementById("landing-page").classList.add("hidden");
     document.getElementById("auth-overlay").classList.add("hidden");
-    
-    const appLayout = document.getElementById("app-layout");
-    appLayout.classList.remove("hidden");
-    if (window.innerWidth <= 767) {
-        appLayout.classList.add("sidebar-collapsed");
-    } else {
-        appLayout.classList.remove("sidebar-collapsed");
-    }
+    document.getElementById("app-layout").classList.remove("hidden");
     
     // Set Profile UI elements
     document.getElementById("user-display-name").innerText = state.currentUser.email;
@@ -23147,7 +23139,6 @@ function initSidebarCollapse() {
     const btnCollapse = document.getElementById("btn-sidebar-collapse");
     const btnExpand = document.getElementById("btn-sidebar-expand");
     const appLayout = document.getElementById("app-layout");
-    const backdrop = document.getElementById("sidebar-backdrop");
 
     if (btnCollapse && btnExpand && appLayout) {
         btnCollapse.addEventListener("click", () => {
@@ -23157,12 +23148,6 @@ function initSidebarCollapse() {
         btnExpand.addEventListener("click", () => {
             appLayout.classList.remove("sidebar-collapsed");
         });
-
-        if (backdrop) {
-            backdrop.addEventListener("click", () => {
-                appLayout.classList.add("sidebar-collapsed");
-            });
-        }
     }
 }
 

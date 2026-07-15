@@ -21343,7 +21343,7 @@ function enterWorkspace() {
     
     const appLayout = document.getElementById("app-layout");
     appLayout.classList.remove("hidden");
-    if (window.innerWidth <= 1024) {
+    if (window.innerWidth <= 767) {
         appLayout.classList.add("sidebar-collapsed");
     } else {
         appLayout.classList.remove("sidebar-collapsed");

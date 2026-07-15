@@ -20355,9 +20355,15 @@ function selectCourseTrack(groupName) {
 }
 
 function switchCourseTrack() {
-    // Clear user session for the current group
-    state.currentUser = null;
+    // Save active state before clearing session
     saveStateToStorage();
+
+    // Clear user session for the current group
+    const activeGroupKey = state.activeGroup ? getGroupKey(STORAGE_KEYS.CURRENT_USER) : null;
+    state.currentUser = null;
+    if (activeGroupKey) {
+        encryptLocal(activeGroupKey, null);
+    }
 
     // Reset group selection
     state.activeGroup = null;

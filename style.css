@@ -1376,7 +1376,10 @@ input:checked + .slider:before {
     grid-template-columns: 0px 1fr;
 }
 .test-interface-body.hide-left-sidebar .test-nav-sidebar {
-    display: none;
+    width: 0;
+    padding: 0;
+    border: none;
+    overflow: hidden;
 }
 
 /* Sidebar navigation of questions map */

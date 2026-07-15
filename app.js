@@ -20639,47 +20639,15 @@ const CLOUD_SYNC_IDS = {
     dermatology: "ff8081819d82fab6019f628a21fc6065"
 };
 
-function rc4(key, str) {
-    let s = [], j = 0, x, res = '';
-    for (let i = 0; i < 256; i++) {
-        s[i] = i;
-    }
-    for (let i = 0; i < 256; i++) {
-        j = (j + s[i] + key.charCodeAt(i % key.length)) % 256;
-        x = s[i]; s[i] = s[j]; s[j] = x;
-    }
-    let i = 0, y = 0;
-    j = 0;
-    for (y = 0; y < str.length; y++) {
-        i = (i + 1) % 256;
-        j = (j + s[i]) % 256;
-        x = s[i]; s[i] = s[j]; s[j] = x;
-        res += String.fromCharCode(str.charCodeAt(y) ^ s[(s[i] + s[j]) % 256]);
-    }
-    return res;
-}
-
-function encryptRC4(text) {
-    const encrypted = rc4("hawari_secure_key_2026", text);
-    return btoa(unescape(encodeURIComponent(encrypted)));
-}
-
-function decryptRC4(base64) {
-    try {
-        const text = decodeURIComponent(escape(atob(base64)));
-        return rc4("hawari_secure_key_2026", text);
-    } catch(e) {
-        return "";
-    }
-}
-
 function encryptLocal(key, value) {
     try {
-        const str = JSON.stringify(value);
-        const encrypted = encryptRC4(str);
-        localStorage.setItem(key, encrypted);
+        if (value === null || value === undefined) {
+            localStorage.removeItem(key);
+        } else {
+            localStorage.setItem(key, JSON.stringify(value));
+        }
     } catch (e) {
-        console.error("Local encryption failed:", e);
+        console.error("Local save failed:", e);
     }
 }
 
@@ -20687,14 +20655,9 @@ function decryptLocal(key, defaultValue) {
     try {
         const val = localStorage.getItem(key);
         if (!val) return defaultValue;
-        if (val.trim().startsWith("[") || val.trim().startsWith("{") || val.trim().startsWith("\"") || val.trim() === "true" || val.trim() === "false") {
-            return JSON.parse(val);
-        }
-        const decrypted = decryptRC4(val);
-        if (!decrypted) return defaultValue;
-        return JSON.parse(decrypted);
+        return JSON.parse(val);
     } catch (e) {
-        console.error("Local decryption failed:", e);
+        console.error("Local load failed:", e);
         return defaultValue;
     }
 }

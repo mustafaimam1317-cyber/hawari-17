@@ -189,9 +189,7 @@
         <aside class="sidebar">
             <div class="sidebar-brand">
                 <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1;">
-                    <div class="logo-wrapper">
-                        <i class="fa-solid fa-virus-covid logo-icon" id="sidebar-logo"></i>
-                    </div>
+                        <img src="/favicon.png" id="sidebar-logo" style="width: 30px; height: 30px; object-fit: contain; display: block;" alt="Logo">
                     <div class="brand-text">
                         <h1 id="sidebar-brand-name">Hawari Infection</h1>
                         <span class="user-role-badge" id="current-user-role">User</span>
@@ -240,11 +238,7 @@
                     </div>
                     <div class="user-info">
                         <h4 id="user-display-name">user@gmail.com</h4>
-                        <div style="display:flex;gap:12px;margin: 4px 0;">
-                            <button id="btn-export-backup" class="btn btn-link" style="padding:0;font-size:0.75rem;color:var(--primary-color);text-decoration:none;" title="Download your progress as JSON"><i class="fa-solid fa-download"></i> Export Progress</button>
-                            <button id="btn-import-backup" class="btn btn-link" style="padding:0;font-size:0.75rem;color:var(--color-success);text-decoration:none;" title="Upload progress from JSON file"><i class="fa-solid fa-upload"></i> Import</button>
-                        </div>
-                        <input type="file" id="input-import-backup-file" accept=".json" class="hidden">
+
                         <button id="btn-logout" class="btn-logout-link"><i class="fa-solid fa-power-off"></i> Logout</button>
                     </div>
                 </div>
@@ -1016,6 +1010,10 @@
             </div>
             
             <div class="test-header-controls">
+                <button class="test-tool-btn" id="btn-toggle-test-questions-sidebar" title="Toggle Questions Sidebar">
+                    <i class="fa-solid fa-columns"></i> Questions Grid
+                </button>
+                
                 <!-- Highlighter Active State Indicator -->
                 <button class="test-tool-btn" id="btn-test-highlighter" title="Toggle highlighter mode">
                     <i class="fa-solid fa-highlighter"></i> Highlight Text

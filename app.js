@@ -20311,9 +20311,7 @@ function selectCourseTrack(groupName) {
 
     if (groupName === "infection") {
         if (brandName) brandName.innerText = "Hawari Infection";
-        if (logoIcon) {
-            logoIcon.className = "fa-solid fa-virus-covid logo-icon";
-        }
+        // Keep custom brand logo image
         if (authBrandTitle) authBrandTitle.innerText = "Hawari Infection";
         if (authBrandLogo) {
             authBrandLogo.className = "fa-solid fa-virus-covid brand-logo-icon";
@@ -20327,9 +20325,7 @@ function selectCourseTrack(groupName) {
         if (landingMCQCount) landingMCQCount.innerText = "560+ MCQ Bank";
     } else {
         if (brandName) brandName.innerText = "Hawari Dermatology";
-        if (logoIcon) {
-            logoIcon.className = "fa-solid fa-hand-dots logo-icon";
-        }
+        // Keep custom brand logo image
         if (authBrandTitle) authBrandTitle.innerText = "Hawari Dermatology";
         if (authBrandLogo) {
             authBrandLogo.className = "fa-solid fa-hand-dots brand-logo-icon";
@@ -21470,6 +21466,21 @@ function initTestControls() {
             notesSidebar.classList.remove("hidden");
             testInterfaceBody.classList.remove("no-notes-sidebar");
         }
+    }
+
+    // Questions Sidebar toggler
+    const btnToggleQuestions = document.getElementById("btn-toggle-test-questions-sidebar");
+    if (btnToggleQuestions && testInterfaceBody) {
+        testInterfaceBody.classList.remove("hide-left-sidebar");
+        btnToggleQuestions.classList.remove("active");
+        btnToggleQuestions.onclick = () => {
+            testInterfaceBody.classList.toggle("hide-left-sidebar");
+            if (testInterfaceBody.classList.contains("hide-left-sidebar")) {
+                btnToggleQuestions.classList.add("active");
+            } else {
+                btnToggleQuestions.classList.remove("active");
+            }
+        };
     }
 
     // Highlighter mode toggler

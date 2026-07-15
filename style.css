@@ -1364,9 +1364,19 @@ input:checked + .slider:before {
     grid-template-columns: 240px 1fr 280px;
     height: calc(100vh - 70px);
     overflow: hidden;
+    transition: grid-template-columns 0.2s ease-in-out;
 }
 .test-interface-body.no-notes-sidebar {
     grid-template-columns: 240px 1fr;
+}
+.test-interface-body.hide-left-sidebar {
+    grid-template-columns: 0px 1fr 280px;
+}
+.test-interface-body.hide-left-sidebar.no-notes-sidebar {
+    grid-template-columns: 0px 1fr;
+}
+.test-interface-body.hide-left-sidebar .test-nav-sidebar {
+    display: none;
 }
 
 /* Sidebar navigation of questions map */

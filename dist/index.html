@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hawari Infection - Premium UWorld Quiz System</title>
+    <title>Hawari Course Platform - Premium UWorld Quiz System</title>
+    <link rel="icon" type="image/png" href="/assets/favicon-4b34a7d5.png">
+    <!-- Strict Content Security Policy for advanced site hardening -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; connect-src 'self' https://*.supabase.co https://*.supabase.in https://restful-api.dev; img-src 'self' data:; frame-src 'none'; object-src 'none';">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,8 +16,8 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-a7be007d.js"></script>
-  <link rel="stylesheet" href="/assets/index-db9bc674.css">
+  <script type="module" crossorigin src="/assets/index-1c169a74.js"></script>
+  <link rel="stylesheet" href="/assets/index-598d9ed8.css">
 </head>
 <body class="light-theme">
     
@@ -110,7 +113,7 @@
             <div id="auth-email-step" class="auth-step active">
                 <div class="input-group">
                     <label for="auth-email"><i class="fa-regular fa-envelope"></i> Enter Gmail Address</label>
-                    <input type="email" id="auth-email" placeholder="e.g. name@gmail.com" required>
+                    <input type="email" id="auth-email" placeholder="e.g. name@gmail.com" maxlength="80" required>
                     <span class="input-help">Only Gmail accounts are accepted.</span>
                 </div>
                 <button id="btn-send-code" class="btn btn-primary btn-block" style="margin-bottom: 12px;">
@@ -129,7 +132,7 @@
                 </div>
                 <div class="input-group">
                     <label for="auth-login-password"><i class="fa-solid fa-lock"></i> Password</label>
-                    <input type="password" id="auth-login-password" placeholder="••••••••" required>
+                    <input type="password" id="auth-login-password" placeholder="••••••••" maxlength="32" required>
                 </div>
                 <button id="btn-login-submit" class="btn btn-primary btn-block">
                     Log In <i class="fa-solid fa-right-to-bracket"></i>
@@ -145,11 +148,11 @@
                 </div>
                 <div class="input-group">
                     <label for="auth-reg-password"><i class="fa-solid fa-lock"></i> Choose Password</label>
-                    <input type="password" id="auth-reg-password" placeholder="••••••••" required>
+                    <input type="password" id="auth-reg-password" placeholder="••••••••" maxlength="32" required>
                 </div>
                 <div class="input-group" style="margin-top: 10px;">
                     <label for="auth-reg-confirm"><i class="fa-solid fa-lock"></i> Confirm Password</label>
-                    <input type="password" id="auth-reg-confirm" placeholder="••••••••" required>
+                    <input type="password" id="auth-reg-confirm" placeholder="••••••••" maxlength="32" required>
                 </div>
                 <button id="btn-register-submit" class="btn btn-primary btn-block" style="margin-top: 15px;">
                     Send Registration Request <i class="fa-solid fa-paper-plane"></i>
@@ -188,9 +191,7 @@
         <aside class="sidebar">
             <div class="sidebar-brand">
                 <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1;">
-                    <div class="logo-wrapper">
-                        <i class="fa-solid fa-virus-covid logo-icon" id="sidebar-logo"></i>
-                    </div>
+                        <img src="/assets/favicon-4b34a7d5.png" id="sidebar-logo" style="width: 30px; height: 30px; object-fit: contain; display: block;" alt="Logo">
                     <div class="brand-text">
                         <h1 id="sidebar-brand-name">Hawari Infection</h1>
                         <span class="user-role-badge" id="current-user-role">User</span>
@@ -239,11 +240,7 @@
                     </div>
                     <div class="user-info">
                         <h4 id="user-display-name">user@gmail.com</h4>
-                        <div style="display:flex;gap:12px;margin: 4px 0;">
-                            <button id="btn-export-backup" class="btn btn-link" style="padding:0;font-size:0.75rem;color:var(--primary-color);text-decoration:none;" title="Download your progress as JSON"><i class="fa-solid fa-download"></i> Export Progress</button>
-                            <button id="btn-import-backup" class="btn btn-link" style="padding:0;font-size:0.75rem;color:var(--color-success);text-decoration:none;" title="Upload progress from JSON file"><i class="fa-solid fa-upload"></i> Import</button>
-                        </div>
-                        <input type="file" id="input-import-backup-file" accept=".json" class="hidden">
+
                         <button id="btn-logout" class="btn-logout-link"><i class="fa-solid fa-power-off"></i> Logout</button>
                     </div>
                 </div>
@@ -1015,6 +1012,10 @@
             </div>
             
             <div class="test-header-controls">
+                <button class="test-tool-btn" id="btn-toggle-test-questions-sidebar" title="Toggle Questions Sidebar">
+                    <i class="fa-solid fa-columns"></i> Questions Grid
+                </button>
+                
                 <!-- Highlighter Active State Indicator -->
                 <button class="test-tool-btn" id="btn-test-highlighter" title="Toggle highlighter mode">
                     <i class="fa-solid fa-highlighter"></i> Highlight Text

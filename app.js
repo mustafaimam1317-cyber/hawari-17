@@ -20676,8 +20676,26 @@ async function syncUsersWithCloud() {
     const group = state.activeGroup;
     if (!group) return;
 
-    // 1. Fetch all cloud records for active group
-    const cloudRecords = await supabaseRequest(`hawari_users?group_name=eq.${group}`);
+    const isAdmin = state.currentUser && state.currentUser.role === "admin";
+    
+    // Determine target email to fetch/sync
+    let targetEmail = null;
+    if (state.currentUser) {
+        targetEmail = state.currentUser.email;
+    } else if (typeof currentAuthenticatingEmail !== 'undefined' && currentAuthenticatingEmail) {
+        targetEmail = currentAuthenticatingEmail;
+    }
+
+    // 1. Fetch cloud records
+    let queryPath = `hawari_users?group_name=eq.${group}`;
+    if (!isAdmin && targetEmail) {
+        queryPath += `&email=eq.${targetEmail}`;
+    } else if (!isAdmin && !targetEmail) {
+        // If not admin and no target email, nothing to sync
+        return;
+    }
+
+    const cloudRecords = await supabaseRequest(queryPath);
     if (cloudRecords && Array.isArray(cloudRecords)) {
         // Map cloud database rows to user object structure
         const cloudUsers = cloudRecords.map(row => {
@@ -20735,8 +20753,21 @@ async function syncUsersWithCloud() {
         });
     }
 
-    // 3. For any user in state.users, upsert their record to Supabase in parallel
-    const promises = state.users.map(user => {
+    // 3. Determine which users to write back to Supabase
+    let usersToWrite = [];
+    if (isAdmin) {
+        // Admins sync all users
+        usersToWrite = state.users;
+    } else if (targetEmail) {
+        // Students/Guests only write their own record
+        const matchingUser = state.users.find(u => u.email === targetEmail);
+        if (matchingUser) {
+            usersToWrite = [matchingUser];
+        }
+    }
+
+    // Upsert records to Supabase in parallel
+    const promises = usersToWrite.map(user => {
         const progress = {
             questions: user.questions || [],
             tests: user.tests || [],

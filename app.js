@@ -21029,6 +21029,7 @@ async function syncUsersWithCloud() {
                     lu.tests = cu.tests;
                     lu.notebookNotes = cu.notebookNotes;
                     lu.flashcards = cu.flashcards;
+                    lu.reportTaskProgress = cu.reportTaskProgress || {};
                     lu.lastUpdated = cu.lastUpdated;
                     
                     // If this is the current logged-in user, also update global state!
@@ -21039,13 +21040,6 @@ async function syncUsersWithCloud() {
                         state.flashcards = lu.flashcards;
                         state.currentUser.lastUpdated = lu.lastUpdated;
                         
-                        triggerViewRefresh();
-                    }
-                }
-                if (cu.reportTaskProgress) {
-                    if (!lu.reportTaskProgress) lu.reportTaskProgress = {};
-                    Object.assign(lu.reportTaskProgress, cu.reportTaskProgress);
-                    if (state.currentUser && state.currentUser.email === lu.email) {
                         triggerViewRefresh();
                     }
                 }

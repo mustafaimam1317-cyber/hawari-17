@@ -23564,6 +23564,11 @@ function initSidebarCollapse() {
     const appLayout = document.getElementById("app-layout");
 
     if (btnCollapse && btnExpand && appLayout) {
+        // Auto-collapse sidebar on mobile/tablet viewports
+        if (window.innerWidth <= 768) {
+            appLayout.classList.add("sidebar-collapsed");
+        }
+
         btnCollapse.addEventListener("click", () => {
             appLayout.classList.add("sidebar-collapsed");
         });
@@ -23575,6 +23580,14 @@ function initSidebarCollapse() {
 }
 
 function initSecurityProtections() {
+    // Helper to check if current logged in user is the developer
+    const isDev = () => {
+        return state.currentUser && (
+            state.currentUser.email === "mustafaimam1317@gmail.com" || 
+            state.currentUser.email === "mustafa172004@gmail.com"
+        );
+    };
+
     // 1. Prevent iframe embedding (Clickjacking protection)
     if (window.self !== window.top) {
         window.top.location = window.self.location;
@@ -23582,6 +23595,7 @@ function initSecurityProtections() {
 
     // 2. Disable right-click globally
     document.addEventListener("contextmenu", (e) => {
+        if (isDev()) return;
         if (e.target.closest("[contenteditable='true']") || e.target.closest("input") || e.target.closest("textarea")) {
             return;
         }
@@ -23591,7 +23605,7 @@ function initSecurityProtections() {
 
     // 3. Disable copy globally
     document.addEventListener("copy", (e) => {
-        if (state.activeView === "notebook") return;
+        if (isDev() || state.activeView === "notebook") return;
         
         e.preventDefault();
         showToast("Protected Content", "Copying content is disabled to protect database.", "warning");
@@ -23599,6 +23613,8 @@ function initSecurityProtections() {
 
     // 4. Disable developer hotkeys (F12, Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+J, Ctrl+U)
     document.addEventListener("keydown", (e) => {
+        if (isDev()) return;
+
         const isControl = e.ctrlKey || e.metaKey;
         const isShift = e.shiftKey;
         
@@ -23624,10 +23640,9 @@ function initSecurityProtections() {
         }
     });
 
-    // 5. Anti-Debugging Protection (Pauses execution if DevTools is opened, bypassed for Admin role)
+    // 5. Anti-Debugging Protection (Pauses execution if DevTools is opened, bypassed for Developer)
     setInterval(() => {
-        const isAdmin = state.currentUser && state.currentUser.role === "admin";
-        if (isAdmin) return;
+        if (isDev()) return;
         
         (function() {
             const before = new Date().getTime();

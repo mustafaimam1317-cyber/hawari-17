@@ -2517,6 +2517,94 @@ body.group-dermatology.dark-theme {
     #active-quiz-questions-grid {
         grid-template-columns: repeat(8, 1fr) !important;
     }
+
+    /* General App Layout Mobile Overrides */
+    .app-layout {
+        grid-template-columns: 1fr !important;
+    }
+    .sidebar {
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        bottom: 0 !important;
+        width: 260px !important;
+        z-index: 1000 !important;
+        transform: translateX(0);
+    }
+    .app-layout.sidebar-collapsed .sidebar {
+        transform: translateX(-260px) !important;
+        width: 0 !important;
+    }
+    .btn-sidebar-expand-floating {
+        position: fixed !important;
+        left: 15px !important;
+        bottom: 15px !important;
+        z-index: 999 !important;
+    }
+    .dashboard-main-grid {
+        grid-template-columns: 1fr !important;
+        gap: 20px !important;
+    }
+    .dashboard-stats-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 12px !important;
+    }
+    .stat-card {
+        padding: 12px !important;
+        gap: 10px !important;
+    }
+    .stat-icon {
+        width: 38px !important;
+        height: 38px !important;
+        font-size: 1.2rem !important;
+    }
+    .stat-value {
+        font-size: 1.3rem !important;
+    }
+    .page-header h2 {
+        font-size: 1.5rem !important;
+    }
+    .content-area {
+        padding: 15px !important;
+        overflow-x: hidden !important;
+    }
+
+    /* Practice Test Workspace Overrides */
+    .test-interface-body {
+        grid-template-columns: 1fr !important;
+        height: auto !important;
+        overflow-y: auto !important;
+    }
+    .test-nav-sidebar {
+        border-right: none !important;
+        border-bottom: 1px solid var(--border-color) !important;
+        width: 100% !important;
+        padding: 15px !important;
+    }
+    .test-question-area {
+        width: 100% !important;
+        padding: 15px !important;
+        height: auto !important;
+        overflow-y: visible !important;
+    }
+    .test-notes-sidebar {
+        width: 100% !important;
+        border-left: none !important;
+        border-top: 1px solid var(--border-color) !important;
+        padding: 15px !important;
+        height: auto !important;
+    }
+    .test-header {
+        height: auto !important;
+        flex-direction: column !important;
+        gap: 12px !important;
+        padding: 12px 16px !important;
+        align-items: flex-start !important;
+    }
+    .test-header-controls {
+        width: 100% !important;
+        justify-content: space-between !important;
+    }
 }
 
 

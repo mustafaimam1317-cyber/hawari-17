@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hawari Course Platform - Premium UWorld Quiz System</title>
-    <link rel="icon" type="image/png" href="/assets/favicon-4b34a7d5.png">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="manifest" href="/manifest.json">
     <!-- Strict Content Security Policy for advanced site hardening -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; connect-src 'self' https://*.supabase.co https://*.supabase.in https://restful-api.dev; img-src 'self' data:; frame-src 'none'; object-src 'none';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; connect-src 'self' https://*.supabase.co https://*.supabase.in https://restful-api.dev; img-src 'self' data:; frame-src 'none'; object-src 'none'; manifest-src 'self';">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,7 +17,7 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-b9977f98.js"></script>
+  <script type="module" crossorigin src="/assets/index-f592760a.js"></script>
   <link rel="stylesheet" href="/assets/index-abcdbf78.css">
 </head>
 <body class="light-theme">
@@ -192,7 +193,7 @@
         <aside class="sidebar">
             <div class="sidebar-brand">
                 <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1;">
-                        <img src="/assets/favicon-4b34a7d5.png" id="sidebar-logo" style="width: 30px; height: 30px; object-fit: contain; display: block;" alt="Logo">
+                        <img src="/favicon.png" id="sidebar-logo" style="width: 30px; height: 30px; object-fit: contain; display: block;" alt="Logo">
                     <div class="brand-text">
                         <h1 id="sidebar-brand-name">Hawari Infection</h1>
                         <span class="user-role-badge" id="current-user-role">User</span>
@@ -373,22 +374,8 @@
                     </div>
                 </div>
 
-                <!-- Performance Analytics & Public Leaderboard Grid -->
-                <div class="dashboard-main-grid" style="margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;">
-                    <!-- Performance Diagnostics Analytics -->
-                    <div class="grid-card">
-                        <div class="card-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px;">
-                            <h3 style="display: flex; align-items: center; gap: 8px; font-size: 1.1rem; font-weight: 700;">
-                                <i class="fa-solid fa-chart-pie" style="color: var(--primary-color);"></i>
-                                Topic Performance Analysis
-                            </h3>
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 15px;" id="dashboard-weak-topics-container">
-                            <!-- Populated dynamically via JS -->
-                        </div>
-                    </div>
-
-                    <!-- Public Student Leaderboard -->
+                <!-- Public Leaderboard Section -->
+                <div style="margin-top: 24px;">
                     <div class="grid-card">
                         <div class="card-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px;">
                             <h3 style="display: flex; align-items: center; gap: 8px; font-size: 1.1rem; font-weight: 700;">

@@ -20513,6 +20513,15 @@ document.addEventListener("DOMContentLoaded", () => {
             showToast("Announcement Cleared", "Announcement successfully deleted.", "success");
         };
     }
+
+    // Register PWA Service Worker
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js')
+                .then(reg => console.log('[PWA] Service Worker registered successfully:', reg.scope))
+                .catch(err => console.error('[PWA] Service Worker registration failed:', err));
+        });
+    }
 });
 
 // Theme setup
@@ -21645,9 +21654,8 @@ function renderDashboard() {
     // Update Mock Exams Dashboard Stats
     updateDashboardStats();
 
-    // Render announcements, performance analytics, and public leaderboard
+    // Render announcements and public leaderboard
     renderAnnouncementWidget();
-    calculatePerformanceAnalytics();
     renderPublicLeaderboard();
 
     // Quick Actions
@@ -21683,158 +21691,6 @@ function renderDashboard() {
             }
         };
     }
-}
-
-function classifyQuestionTopic(qText, defaultTopic) {
-    if (!qText) return defaultTopic || "General Medicine";
-    const text = qText.toLowerCase();
-    
-    // Infection Topics
-    if (text.includes("virus") || text.includes("viral") || text.includes("hiv") || text.includes("hepatitis") || text.includes("herpes") || text.includes("dengue") || text.includes("influenza") || text.includes("measles") || text.includes("pox") || text.includes("rabies")) {
-        return "Virology";
-    }
-    if (text.includes("bacteri") || text.includes("coccus") || text.includes("bacillus") || text.includes("strep") || text.includes("staph") || text.includes("tuberculosis") || text.includes("penicillin") || text.includes("tetanus") || text.includes("meningitis")) {
-        return "Bacteriology";
-    }
-    if (text.includes("fung") || text.includes("myco") || text.includes("candida") || text.includes("aspergillus") || text.includes("tinea") || text.includes("dermatophyte")) {
-        return "Mycology";
-    }
-    if (text.includes("parasit") || text.includes("malaria") || text.includes("amoeba") || text.includes("plasmodium") || text.includes("helminth") || text.includes("leishmania") || text.includes("toxoplasma")) {
-        return "Parasitology";
-    }
-    
-    // Dermatology Topics
-    if (text.includes("acne") || text.includes("eczema") || text.includes("psoriasis") || text.includes("melanoma") || text.includes("dermatitis") || text.includes("scabies") || text.includes("urticaria") || text.includes("pemphigus") || text.includes("hair") || text.includes("alopecia") || text.includes("nail") || text.includes("pruritus") || text.includes("lichen")) {
-        return "Dermatology Core";
-    }
-    
-    return defaultTopic || "General Medicine";
-}
-
-function calculatePerformanceAnalytics() {
-    const container = document.getElementById("dashboard-weak-topics-container");
-    if (!container) return;
-
-    container.innerHTML = "";
-
-    const userRecord = state.currentUser ? state.users.find(u => u.email === state.currentUser.email) : null;
-    if (!userRecord) return;
-
-    const topicStats = {};
-
-    function logQuestion(topic, isCorrect) {
-        if (!topicStats[topic]) {
-            topicStats[topic] = { correct: 0, incorrect: 0, total: 0 };
-        }
-        if (isCorrect) {
-            topicStats[topic].correct++;
-        } else {
-            topicStats[topic].incorrect++;
-        }
-        topicStats[topic].total++;
-    }
-
-    // 1. Scan Standard Practice Questions
-    state.questions.forEach(q => {
-        if (q.status === "correct" || q.status === "incorrect") {
-            const topic = classifyQuestionTopic(q.text, q.topic);
-            logQuestion(topic, q.status === "correct");
-        }
-    });
-
-    // 2. Scan Mock Exams (Report Tasks)
-    if (userRecord.reportTaskProgress) {
-        Object.keys(userRecord.reportTaskProgress).forEach(rtId => {
-            const progress = userRecord.reportTaskProgress[rtId];
-            if (progress && progress.completed && progress.answers) {
-                const rt = state.reportTasks.find(t => t.id === rtId);
-                if (rt && rt.questions) {
-                    rt.questions.forEach(q => {
-                        const userAns = progress.answers[q.id];
-                        if (userAns !== undefined) {
-                            const isCorrect = parseInt(userAns) === parseInt(q.correctOption);
-                            const topic = classifyQuestionTopic(q.text, q.topic);
-                            logQuestion(topic, isCorrect);
-                        }
-                    });
-                }
-            }
-        });
-    }
-
-    // 3. Scan Course Quizzes
-    state.quizResults.forEach(res => {
-        if (res.email === state.currentUser.email && res.status === "completed" && res.answers) {
-            const qz = state.courseQuizzes.find(q => q.id === res.quiz_id);
-            if (qz && qz.questions) {
-                qz.questions.forEach((q, idx) => {
-                    const userAns = res.answers[idx];
-                    if (userAns !== undefined) {
-                        const isCorrect = parseInt(userAns) === parseInt(q.correctOption);
-                        const topic = classifyQuestionTopic(q.text, q.topic);
-                        logQuestion(topic, isCorrect);
-                    }
-                });
-            }
-        }
-    });
-
-    const weakTopics = [];
-    Object.keys(topicStats).forEach(topic => {
-        const stats = topicStats[topic];
-        if (stats.total > 0) {
-            const failureRate = Math.round((stats.incorrect / stats.total) * 100);
-            weakTopics.push({
-                name: topic,
-                failureRate: failureRate,
-                correct: stats.correct,
-                incorrect: stats.incorrect,
-                total: stats.total
-            });
-        }
-    });
-
-    weakTopics.sort((a, b) => b.failureRate - a.failureRate);
-
-    if (weakTopics.length === 0) {
-        container.innerHTML = `
-            <div style="text-align: center; padding: 20px; color: var(--text-muted);">
-                <i class="fa-solid fa-chart-line" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5;"></i>
-                <p style="margin: 0; font-size: 0.9rem;">No performance data available yet. Solve some questions to view analytics!</p>
-            </div>
-        `;
-        return;
-    }
-
-    weakTopics.slice(0, 4).forEach(item => {
-        let recommendation = "Good performance";
-        let colorClass = "var(--color-success)";
-        
-        if (item.failureRate > 50) {
-            recommendation = "⚠️ Highly recommended to review";
-            colorClass = "var(--color-danger)";
-        } else if (item.failureRate > 20) {
-            recommendation = "⚠️ Needs review";
-            colorClass = "var(--color-warning)";
-        }
-
-        const div = document.createElement("div");
-        div.style.cssText = "display: flex; flex-direction: column; gap: 6px;";
-        div.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.95rem;">
-                <span style="font-weight: 600; color: var(--text-primary);">${item.name}</span>
-                <span style="font-weight: 700; color: ${colorClass};">${item.failureRate}% Failure Rate</span>
-            </div>
-            <div style="width: 100%; height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; position: relative;">
-                <div style="width: ${item.failureRate}%; height: 100%; background: ${colorClass}; border-radius: 4px; transition: width 0.5s ease;"></div>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--text-muted);">
-                <span>Solved: ${item.total} | Correct: ${item.correct} | Incorrect: ${item.incorrect}</span>
-                <span style="font-weight: 500; color: ${item.failureRate > 20 ? colorClass : 'var(--text-muted)'};">${recommendation}</span>
-            </div>
-        `;
-        container.appendChild(div);
-    });
 }
 
 function renderPublicLeaderboard() {

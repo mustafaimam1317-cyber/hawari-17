@@ -632,14 +632,31 @@
             <!-- ================= REPORT TASK STUDENT VIEW ================= -->
             <section id="report-task-view" class="view-section hidden">
                 <div class="page-header">
-                    <div>
-                        <h2>Report Tasks</h2>
-                        <p>Access active timed mock exams published by the Admin track coordinator.</p>
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 16px;">
+                        <div>
+                            <h2>Reports & Quizzes</h2>
+                            <p>Access active timed mock exams and scheduled course quizzes.</p>
+                        </div>
+                        <!-- Sub-tab Bar -->
+                        <div class="admin-tabs-bar" style="margin-top: 0; border-bottom: none; padding: 4px; background: rgba(30, 41, 59, 0.4); border-radius: 12px; display: inline-flex; gap: 4px;">
+                            <button class="admin-tab-btn active" id="btn-tab-report-tasks" style="padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">Report Tasks</button>
+                            <button class="admin-tab-btn" id="btn-tab-course-quizzes" style="padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">Course Quiz</button>
+                        </div>
                     </div>
                 </div>
 
-                <div id="student-report-tasks-container" class="report-tasks-student-grid">
-                    <!-- Populated dynamically: list of available mock exams -->
+                <!-- Report Tasks Sub-view -->
+                <div id="subview-report-tasks" class="report-subview">
+                    <div id="student-report-tasks-container" class="report-tasks-student-grid">
+                        <!-- Populated dynamically: list of available mock exams -->
+                    </div>
+                </div>
+
+                <!-- Course Quizzes Sub-view -->
+                <div id="subview-course-quizzes" class="report-subview hidden">
+                    <div id="student-course-quizzes-container" class="report-tasks-student-grid">
+                        <!-- Populated dynamically: list of available quizzes -->
+                    </div>
                 </div>
             </section>
 
@@ -656,6 +673,7 @@
                     <button class="admin-tab-btn active" data-target="admin-questions-tab">Manage Questions</button>
                     <button class="admin-tab-btn" data-target="admin-flashcards-tab">Manage Flashcards</button>
                     <button class="admin-tab-btn" data-target="admin-report-tasks-tab">Manage Report Tasks</button>
+                    <button class="admin-tab-btn" data-target="admin-quizzes-tab">Manage Course Quizzes</button>
                     <button class="admin-tab-btn" data-target="admin-approvals-tab">
                         Registration Requests <span class="badge badge-warning" id="admin-pending-badge">0</span>
                     </button>
@@ -922,6 +940,140 @@
                     </div>
                 </div>
 
+                <!-- Admin Course Quizzes Tab -->
+                <div id="admin-quizzes-tab" class="admin-tab-content">
+                    <div class="admin-questions-layout">
+                        <!-- Left Column: Forms -->
+                        <div style="display: flex; flex-direction: column; gap: 24px;">
+                            <!-- Create Quiz Form -->
+                            <div class="grid-card">
+                                <h3>Create Course Quiz</h3>
+                                <p class="section-desc">Design a quiz with manual questions, specific start/end times, and anti-cheat constraints.</p>
+                                <form id="admin-quiz-form">
+                                    <div class="input-group">
+                                        <label for="admin-quiz-title">Quiz Title / Name</label>
+                                        <input type="text" id="admin-quiz-title" placeholder="e.g. Infection Control Exam" required>
+                                    </div>
+                                    
+                                    <div class="input-group" style="margin-top: 12px;">
+                                        <label for="admin-quiz-duration">Duration (Minutes)</label>
+                                        <input type="number" id="admin-quiz-duration" placeholder="e.g. 30" min="1" required>
+                                    </div>
+
+                                    <div class="input-group" style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                        <div>
+                                            <label for="admin-quiz-start">Start Date & Time</label>
+                                            <input type="datetime-local" id="admin-quiz-start" required>
+                                        </div>
+                                        <div>
+                                            <label for="admin-quiz-end">End Date & Time</label>
+                                            <input type="datetime-local" id="admin-quiz-end" required>
+                                        </div>
+                                    </div>
+
+                                    <!-- Add Question Manually -->
+                                    <div style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+                                        <h4 style="font-size: 0.95rem; color: var(--text-primary); margin-bottom: 10px;">Add Question</h4>
+                                        <div class="input-group">
+                                            <label for="admin-quiz-q-text">Question Text</label>
+                                            <textarea id="admin-quiz-q-text" rows="3" placeholder="Type the question content here..."></textarea>
+                                        </div>
+                                        <div class="input-group" style="margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                            <div>
+                                                <label for="admin-quiz-q-a">Option A</label>
+                                                <input type="text" id="admin-quiz-q-a" placeholder="Option A">
+                                            </div>
+                                            <div>
+                                                <label for="admin-quiz-q-b">Option B</label>
+                                                <input type="text" id="admin-quiz-q-b" placeholder="Option B">
+                                            </div>
+                                            <div>
+                                                <label for="admin-quiz-q-c">Option C</label>
+                                                <input type="text" id="admin-quiz-q-c" placeholder="Option C">
+                                            </div>
+                                            <div>
+                                                <label for="admin-quiz-q-d">Option D</label>
+                                                <input type="text" id="admin-quiz-q-d" placeholder="Option D">
+                                            </div>
+                                        </div>
+                                        <div class="input-group" style="margin-top: 8px;">
+                                            <label for="admin-quiz-q-correct">Correct Option</label>
+                                            <select id="admin-quiz-q-correct">
+                                                <option value="0">Option A</option>
+                                                <option value="1">Option B</option>
+                                                <option value="2">Option C</option>
+                                                <option value="3">Option D</option>
+                                            </select>
+                                        </div>
+                                        <div class="input-group" style="margin-top: 8px;">
+                                            <label for="admin-quiz-q-exp">Explanation</label>
+                                            <textarea id="admin-quiz-q-exp" rows="2" placeholder="Explain why the option is correct..."></textarea>
+                                        </div>
+                                        <button type="button" class="btn btn-secondary btn-outline btn-block" id="btn-admin-quiz-add-q" style="margin-top: 10px;">
+                                            <i class="fa-solid fa-plus"></i> Add Question to Quiz
+                                        </button>
+                                    </div>
+
+                                    <!-- Manual Questions Preview list -->
+                                    <div id="admin-quiz-questions-preview-section" class="hidden" style="margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+                                        <h4 style="font-size: 0.9rem; color: var(--text-primary); margin-bottom: 8px;">Added Questions (<span id="admin-quiz-questions-count">0</span>)</h4>
+                                        <div id="admin-quiz-questions-preview-list" style="display:flex; flex-direction:column; gap: 8px; max-height: 150px; overflow-y: auto;">
+                                            <!-- List of added questions -->
+                                        </div>
+                                    </div>
+
+                                    <div style="margin-top: 20px;">
+                                        <button type="submit" class="btn btn-primary btn-block">
+                                            <i class="fa-solid fa-cloud-arrow-up"></i> Publish Quiz to Cloud
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: List and Leaderboard -->
+                        <div style="display: flex; flex-direction: column; gap: 24px;">
+                            <!-- Published Quizzes -->
+                            <div class="grid-card">
+                                <h3>Published Course Quizzes</h3>
+                                <div class="admin-questions-list-wrapper" style="margin-top: 15px;">
+                                    <div class="admin-q-list" id="admin-quizzes-list">
+                                        <!-- Dynamic list of published quizzes -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Leaderboard Submissions -->
+                            <div class="grid-card">
+                                <h3>Quiz Results & Leaderboard</h3>
+                                <div class="input-group" style="margin-top: 10px;">
+                                    <label for="admin-quiz-select-dropdown">Select Quiz</label>
+                                    <select id="admin-quiz-select-dropdown">
+                                        <option value="">-- Choose Quiz --</option>
+                                    </select>
+                                </div>
+                                <div style="margin-top: 15px; overflow-x: auto;">
+                                    <table class="admin-table" style="width: 100%; border-collapse: collapse; text-align: left;">
+                                        <thead>
+                                            <tr style="border-bottom: 2px solid var(--border-color);">
+                                                <th style="padding: 10px; color: var(--text-secondary);">Student Email</th>
+                                                <th style="padding: 10px; color: var(--text-secondary);">Submitted At</th>
+                                                <th style="padding: 10px; color: var(--text-secondary);">Score</th>
+                                                <th style="padding: 10px; color: var(--text-secondary);">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="admin-quiz-leaderboard-tbody">
+                                            <tr>
+                                                <td colspan="4" style="padding: 20px; text-align: center; color: var(--text-muted);">Select a quiz above to view submissions</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Admin Approvals Tab -->
                 <div id="admin-approvals-tab" class="admin-tab-content">
                     <div class="admin-questions-layout">
@@ -1110,6 +1262,67 @@
                     <span class="notepad-status" id="lbl-notepad-status"><i class="fa-solid fa-circle-check"></i> Saved</span>
                 </div>
             </aside>
+        </div>
+    </div>
+
+    <!-- ================= ACTIVE QUIZ MODAL OVERLAY (STRICT EXAM) ================= -->
+    <div id="active-quiz-overlay" class="active-test-overlay hidden" style="user-select: none; -webkit-user-select: none; z-index: 2000; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-primary); display: flex; flex-direction: column;">
+        <!-- Quiz Header -->
+        <header class="test-header">
+            <div class="test-title-section">
+                <i class="fa-solid fa-graduation-cap logo-icon" style="color: var(--primary-color);"></i>
+                <div>
+                    <h2 id="active-quiz-title-lbl">Course Quiz</h2>
+                    <span class="test-mode-badge" id="active-quiz-mode-lbl" style="background-color: var(--color-danger-soft); color: var(--color-danger);">Strict Exam Mode</span>
+                </div>
+            </div>
+            
+            <div class="test-header-controls">
+                <!-- Test Timer -->
+                <div class="test-timer" id="quiz-timer-wrapper">
+                    <i class="fa-regular fa-clock timer-icon"></i>
+                    <span class="timer-text" id="quiz-timer-text">00:00</span>
+                </div>
+
+                <span class="test-divider"></span>
+
+                <!-- Submit Button -->
+                <button class="btn btn-danger" id="btn-submit-active-quiz">
+                    Submit Exam <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Quiz Workspace -->
+        <div class="test-workspace" style="display: flex; flex-grow: 1; height: calc(100vh - 70px);">
+            <!-- Left Main Section -->
+            <section class="test-main-section" style="flex-grow: 1; padding: 40px; overflow-y: auto; display: flex; flex-direction: column; justify-content: space-between;">
+                <div class="active-question-card">
+                    <div class="question-header-row">
+                        <span class="question-index-badge" id="active-quiz-q-index">Question 1 of 10</span>
+                    </div>
+
+                    <!-- Question Content -->
+                    <div class="question-body-text" id="active-quiz-q-body" style="font-size: 1.2rem; font-weight: 500; color: var(--text-primary); margin: 20px 0; line-height: 1.6;">
+                        <!-- Question Text -->
+                    </div>
+
+                    <!-- Options list -->
+                    <div class="question-options-list" id="active-quiz-options-container" style="display: flex; flex-direction: column; gap: 12px; margin-top: 24px;">
+                        <!-- Dynamic options -->
+                    </div>
+                </div>
+
+                <!-- Navigation Buttons -->
+                <div class="question-navigation-buttons" style="margin-top: 30px; display: flex; gap: 15px; border-top: 1px solid var(--border-color); padding-top: 20px;">
+                    <button class="btn btn-secondary" id="btn-prev-quiz-q">
+                        <i class="fa-solid fa-chevron-left"></i> Previous
+                    </button>
+                    <button class="btn btn-secondary" id="btn-next-quiz-q">
+                        Next <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </div>
+            </section>
         </div>
     </div>
 

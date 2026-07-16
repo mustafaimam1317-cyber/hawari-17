@@ -20036,7 +20036,10 @@ let state = {
     isDarkMode: false,
     activeView: "dashboard",
     adminActiveTab: "admin-questions-tab",
-    reportTasks: []
+    reportTasks: [],
+    courseQuizzes: [],
+    quizResults: [],
+    activeQuiz: null
 };
 
 // ================= LOCAL STORAGE MANAGER =================
@@ -20356,6 +20359,8 @@ async function selectCourseTrack(groupName) {
 
     // Fetch report tasks from cloud after loading to prevent local storage overwrite
     await fetchReportTasksFromCloud(groupName);
+    await fetchCourseQuizzes(groupName);
+    await fetchQuizResults(groupName);
 
     // Seed default admin/student to cloud if they are missing
     seedDefaultUsersToCloud(groupName);
@@ -20519,6 +20524,23 @@ function initAppTheme() {
 // Single Page Application Routing
 function initRouter() {
     window.addEventListener("hashchange", () => {
+        if (state.activeQuiz && !state.activeQuiz.isReview) {
+            if (confirm("تحذير: مغادرة الصفحة الآن ستنهي اختبارك بدرجة صفر. هل تريد الاستمرار؟")) {
+                submitQuizCheatZero(state.activeQuiz.quizId, state.currentUser.email);
+                state.activeQuiz = null;
+                document.getElementById("active-quiz-overlay").classList.add("hidden");
+                document.body.style.overflow = "auto";
+                const sidebar = document.querySelector(".sidebar");
+                if (sidebar) sidebar.classList.remove("hidden");
+                const appLayout = document.getElementById("app-layout");
+                if (appLayout) appLayout.style.gridTemplateColumns = "";
+            } else {
+                // Revert hash change to keep them locked
+                window.location.hash = "#report-task";
+                return;
+            }
+        }
+
         if (!state.activeGroup) {
             window.location.hash = "";
             switchCourseTrack();
@@ -20548,6 +20570,14 @@ function initRouter() {
             const href = item.getAttribute("href");
             window.location.hash = href;
         });
+    });
+
+    window.addEventListener("beforeunload", (e) => {
+        if (state.activeQuiz && !state.activeQuiz.isReview) {
+            const msg = "مغادرة الصفحة الآن ستنهي اختبارك بدرجة صفر!";
+            e.returnValue = msg;
+            return msg;
+        }
     });
 }
 
@@ -20823,6 +20853,102 @@ async function deleteReportTaskFromCloud(id) {
         console.log(`[Sync] Deleted report task ${id} from cloud`);
     } catch (e) {
         console.error("[Sync] Failed to delete report task from cloud:", e);
+    }
+}
+
+async function fetchCourseQuizzes(group) {
+    try {
+        const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
+        if (records && Array.isArray(records)) {
+            state.courseQuizzes = records.map(row => {
+                return {
+                    id: row.id,
+                    title: row.title,
+                    questions: row.questions || [],
+                    duration: row.time_limit,
+                    startTime: row.start_time,
+                    endTime: row.end_time,
+                    status: row.status
+                };
+            });
+            console.log(`[Sync] Fetched ${state.courseQuizzes.length} quizzes from cloud`);
+        }
+    } catch (e) {
+        console.error("[Sync] Failed to fetch course quizzes:", e);
+    }
+}
+
+async function saveCourseQuizToCloud(quiz) {
+    const payload = {
+        id: quiz.id,
+        group_name: state.activeGroup,
+        title: quiz.title,
+        questions: quiz.questions,
+        time_limit: quiz.duration,
+        start_time: quiz.startTime,
+        end_time: quiz.endTime,
+        status: quiz.status || 'active'
+    };
+    try {
+        await supabaseRequest("hawari_course_quizzes", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+        console.log(`[Sync] Saved course quiz "${quiz.title}" to cloud`);
+    } catch (e) {
+        console.error("[Sync] Failed to save course quiz:", e);
+    }
+}
+
+async function deleteCourseQuizFromCloud(id) {
+    try {
+        await supabaseRequest(`hawari_course_quizzes?id=eq.${id}`, {
+            method: "DELETE"
+        });
+        console.log(`[Sync] Deleted quiz ${id} from cloud`);
+    } catch (e) {
+        console.error("[Sync] Failed to delete course quiz:", e);
+    }
+}
+
+async function fetchQuizResults(group) {
+    try {
+        const records = await supabaseRequest(`hawari_quiz_results?group_name=eq.${group}`);
+        if (records && Array.isArray(records)) {
+            state.quizResults = records;
+            console.log(`[Sync] Fetched ${state.quizResults.length} quiz results from cloud`);
+        }
+    } catch (e) {
+        console.error("[Sync] Failed to fetch quiz results:", e);
+    }
+}
+
+async function saveQuizResultToCloud(result) {
+    const payload = {
+        id: result.id || `${result.quiz_id}_${result.email}`,
+        quiz_id: result.quiz_id,
+        email: result.email,
+        group_name: state.activeGroup,
+        score: result.score,
+        total_questions: result.total_questions,
+        answers: result.answers,
+        submitted_at: result.submitted_at || new Date().toISOString(),
+        status: result.status
+    };
+    try {
+        await supabaseRequest("hawari_quiz_results", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+        console.log(`[Sync] Saved quiz result for ${result.email} to cloud`);
+    } catch (e) {
+        console.error("[Sync] Failed to save quiz result:", e);
     }
 }
 
@@ -21299,6 +21425,12 @@ function enterWorkspace() {
     }
     // Load progress for this specific logged-in user
     loadUserSpecificProgress(state.currentUser.email);
+
+    // Check if reload happened during active quiz session (Anti-cheat)
+    const activeQuizSession = localStorage.getItem("active_quiz_session");
+    if (activeQuizSession) {
+        submitQuizCheatZero(activeQuizSession, state.currentUser.email);
+    }
 
     document.getElementById("landing-page").classList.add("hidden");
     document.getElementById("auth-overlay").classList.add("hidden");
@@ -22602,6 +22734,13 @@ function renderAdminPanel() {
                 syncUsersWithCloud().then(() => {
                     renderAdminApprovalsTab();
                 });
+            } else if (target === "admin-quizzes-tab") {
+                Promise.all([
+                    fetchCourseQuizzes(state.activeGroup),
+                    fetchQuizResults(state.activeGroup)
+                ]).then(() => {
+                    renderAdminQuizzesTab();
+                });
             }
         };
     });
@@ -22706,6 +22845,7 @@ function renderAdminPanel() {
     renderAdminFlashcardsTab();
     renderAdminReportTasksTab();
     renderAdminApprovalsTab();
+    renderAdminQuizzesTab();
 }
 
 function renderAdminQuestionsTab() {
@@ -24004,58 +24144,111 @@ function initBackupRestoreFlow() {
 }
 
 function renderReportTaskStudentView() {
+    initStudentReportTabs();
     const container = document.getElementById("student-report-tasks-container");
     if (!container) return;
 
     container.innerHTML = "";
-    const publishedTasks = state.reportTasks;
+    
+    // Merge standard report tasks and archived quizzes
+    const now = new Date().getTime();
+    const archivedQuizzes = state.courseQuizzes.filter(qz => {
+        const end = new Date(qz.endTime).getTime();
+        return qz.status === 'moved_to_reports' || now > end;
+    }).map(qz => {
+        return {
+            id: qz.id,
+            title: `[Quiz] ${qz.title}`,
+            duration: qz.duration,
+            questions: qz.questions,
+            isQuizArchive: true
+        };
+    });
+
+    const publishedTasks = [...state.reportTasks, ...archivedQuizzes];
 
     if (publishedTasks.length === 0) {
         container.innerHTML = `
             <div class="empty-state" style="grid-column: 1 / -1; padding: 40px; text-align: center; background: var(--bg-secondary); border-radius: 16px; border: 1px solid var(--border-color);">
                 <i class="fa-solid fa-file-signature" style="font-size: 3rem; color: var(--text-muted); margin-bottom: 15px;"></i>
                 <h3 style="color: var(--text-primary); margin-bottom: 8px;">No active mock exams published</h3>
-                <p class="text-muted">Your coordinator has not posted any report tasks for this track yet.</p>
+                <p class="text-muted">Your coordinator has not posted any report tasks or practice quizzes for this track yet.</p>
             </div>
         `;
         return;
     }
 
     publishedTasks.forEach(rt => {
-        // Look up current user progress
-        const userRecord = state.users.find(u => u.email === state.currentUser.email);
-        const progress = (userRecord && userRecord.reportTaskProgress) ? userRecord.reportTaskProgress[rt.id] : null;
-
         let statusHtml = "";
         let scoreHtml = "";
         let buttonHtml = "";
 
-        if (progress) {
-            if (progress.completed) {
-                statusHtml = `<div class="rt-status-indicator rt-status-completed"><i class="fa-solid fa-circle-check"></i> Solved</div>`;
-                scoreHtml = `<div class="rt-score-display">${progress.score}%</div>`;
+        if (rt.isQuizArchive) {
+            // Find quiz results
+            const result = state.quizResults.find(r => r.quiz_id === rt.id && r.email === state.currentUser.email);
+            if (result) {
+                const isFailed = result.status === 'failed';
+                statusHtml = isFailed
+                    ? `<div class="rt-status-indicator rt-status-inprogress" style="background-color: var(--color-danger-soft); color: var(--color-danger);"><i class="fa-solid fa-circle-xmark"></i> Failed (Left Quiz)</div>`
+                    : `<div class="rt-status-indicator rt-status-completed"><i class="fa-solid fa-circle-check"></i> Solved (Practice)</div>`;
+                
+                scoreHtml = `<div class="rt-score-display">${result.score}%</div>`;
                 buttonHtml = `
-                    <button class="btn btn-secondary btn-block" onclick="reviewReportTaskStudent('${rt.id}')">
-                        <i class="fa-solid fa-chart-pie"></i> Review Results
-                    </button>
+                    <div style="display: flex; gap: 8px; flex-direction: column;">
+                        <button class="btn btn-secondary btn-block" onclick="reviewCourseQuizStudent('${rt.id}')">
+                            <i class="fa-solid fa-chart-pie"></i> Review Results
+                        </button>
+                        <button class="btn btn-primary btn-block btn-outline" onclick="retakeCourseQuizStudent('${rt.id}')">
+                            <i class="fa-solid fa-rotate-right"></i> Retake Quiz
+                        </button>
+                    </div>
                 `;
             } else {
-                statusHtml = `<div class="rt-status-indicator rt-status-inprogress"><i class="fa-solid fa-circle-play"></i> In Progress</div>`;
-                scoreHtml = `<div style="font-size:0.9rem; color:var(--text-secondary); margin: 15px 0;">Suspended with ${Object.keys(progress.answers || {}).length} answered</div>`;
+                statusHtml = `<div class="rt-status-indicator rt-status-unsolved"><i class="fa-regular fa-circle"></i> Unsolved Practice</div>`;
+                scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">Archived quiz (Practice)</div>`;
                 buttonHtml = `
-                    <button class="btn btn-primary btn-block" onclick="startReportTaskStudent('${rt.id}')">
-                        <i class="fa-solid fa-rotate-right"></i> Resume Mock Exam
+                    <button class="btn btn-primary btn-block" onclick="startCourseQuizStudent('${rt.id}')">
+                        <i class="fa-solid fa-play"></i> Start Practice Quiz
                     </button>
                 `;
             }
         } else {
-            statusHtml = `<div class="rt-status-indicator rt-status-unsolved"><i class="fa-regular fa-circle"></i> Unsolved</div>`;
-            scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">Ready to start</div>`;
-            buttonHtml = `
-                <button class="btn btn-primary btn-block" onclick="startReportTaskStudent('${rt.id}')">
-                    <i class="fa-solid fa-play"></i> Start Mock Exam
-                </button>
-            `;
+            // Look up current user progress for Mock Exams
+            const userRecord = state.users.find(u => u.email === state.currentUser.email);
+            const progress = (userRecord && userRecord.reportTaskProgress) ? userRecord.reportTaskProgress[rt.id] : null;
+
+            if (progress) {
+                if (progress.completed) {
+                    statusHtml = `<div class="rt-status-indicator rt-status-completed"><i class="fa-solid fa-circle-check"></i> Solved</div>`;
+                    scoreHtml = `<div class="rt-score-display">${progress.score}%</div>`;
+                    buttonHtml = `
+                        <div style="display: flex; gap: 8px; flex-direction: column;">
+                            <button class="btn btn-secondary btn-block" onclick="reviewReportTaskStudent('${rt.id}')">
+                                <i class="fa-solid fa-chart-pie"></i> Review Results
+                            </button>
+                            <button class="btn btn-primary btn-block btn-outline" onclick="retakeReportTaskStudent('${rt.id}')">
+                                <i class="fa-solid fa-rotate-right"></i> Retake Exam
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    statusHtml = `<div class="rt-status-indicator rt-status-inprogress"><i class="fa-solid fa-circle-play"></i> In Progress</div>`;
+                    scoreHtml = `<div style="font-size:0.9rem; color:var(--text-secondary); margin: 15px 0;">Suspended with ${Object.keys(progress.answers || {}).length} answered</div>`;
+                    buttonHtml = `
+                        <button class="btn btn-primary btn-block" onclick="startReportTaskStudent('${rt.id}')">
+                            <i class="fa-solid fa-rotate-right"></i> Resume Mock Exam
+                        </button>
+                    `;
+                }
+            } else {
+                statusHtml = `<div class="rt-status-indicator rt-status-unsolved"><i class="fa-regular fa-circle"></i> Unsolved</div>`;
+                scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">Ready to start</div>`;
+                buttonHtml = `
+                    <button class="btn btn-primary btn-block" onclick="startReportTaskStudent('${rt.id}')">
+                        <i class="fa-solid fa-play"></i> Start Mock Exam
+                    </button>
+                `;
+            }
         }
 
         const card = document.createElement("div");
@@ -24067,6 +24260,138 @@ function renderReportTaskStudentView() {
                 <div class="rt-card-meta">
                     <span class="rt-meta-badge"><i class="fa-regular fa-clock"></i> ${rt.duration} Min</span>
                     <span class="rt-meta-badge"><i class="fa-solid fa-list-check"></i> ${rt.questions.length} Questions</span>
+                </div>
+                ${scoreHtml}
+            </div>
+            <div style="margin-top: 15px;">
+                ${buttonHtml}
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+window.retakeReportTaskStudent = function(rtId) {
+    if (!confirm("Are you sure you want to retake this exam? This will clear your current score and progress for this mock exam.")) return;
+    const userRecord = state.users.find(u => u.email === state.currentUser.email);
+    if (userRecord && userRecord.reportTaskProgress) {
+        delete userRecord.reportTaskProgress[rtId];
+        saveStateToStorage();
+        showToast("Exam Reset", "You can now start the exam again.", "success");
+        renderReportTaskStudentView();
+    }
+};
+
+window.retakeCourseQuizStudent = async function(quizId) {
+    if (!confirm("Are you sure you want to retake this quiz? This will delete your current score and allow you to re-solve it.")) return;
+    try {
+        const id = `${quizId}_${state.currentUser.email}`;
+        await supabaseRequest(`hawari_quiz_results?id=eq.${id}`, {
+            method: "DELETE"
+        });
+        showToast("Quiz Reset", "You can now start the quiz again.", "success");
+        await fetchQuizResults(state.activeGroup);
+        renderReportTaskStudentView();
+    } catch (e) {
+        console.error("Failed to retake course quiz:", e);
+    }
+};
+
+function initStudentReportTabs() {
+    const btnReportTasks = document.getElementById("btn-tab-report-tasks");
+    const btnCourseQuizzes = document.getElementById("btn-tab-course-quizzes");
+    const subviewReportTasks = document.getElementById("subview-report-tasks");
+    const subviewCourseQuizzes = document.getElementById("subview-course-quizzes");
+
+    if (btnReportTasks && btnCourseQuizzes && subviewReportTasks && subviewCourseQuizzes) {
+        // Remove existing listener to prevent double binding
+        const clone1 = btnReportTasks.cloneNode(true);
+        const clone2 = btnCourseQuizzes.cloneNode(true);
+        btnReportTasks.parentNode.replaceChild(clone1, btnReportTasks);
+        btnCourseQuizzes.parentNode.replaceChild(clone2, btnCourseQuizzes);
+
+        clone1.addEventListener("click", () => {
+            clone1.classList.add("active");
+            clone2.classList.remove("active");
+            subviewReportTasks.classList.remove("hidden");
+            subviewCourseQuizzes.classList.add("hidden");
+            renderReportTaskStudentView();
+        });
+
+        clone2.addEventListener("click", () => {
+            clone2.classList.add("active");
+            clone1.classList.remove("active");
+            subviewCourseQuizzes.classList.remove("hidden");
+            subviewReportTasks.classList.add("hidden");
+            renderCourseQuizzesStudentView();
+        });
+    }
+}
+
+function renderCourseQuizzesStudentView() {
+    const container = document.getElementById("student-course-quizzes-container");
+    if (!container) return;
+
+    container.innerHTML = "";
+    
+    const now = new Date().getTime();
+    
+    // Filter active quizzes
+    const quizzes = state.courseQuizzes.filter(qz => {
+        const start = new Date(qz.startTime).getTime();
+        const end = new Date(qz.endTime).getTime();
+        return now >= start && qz.status !== 'moved_to_reports' && now <= end;
+    });
+
+    if (quizzes.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state" style="grid-column: 1 / -1; padding: 40px; text-align: center; background: var(--bg-secondary); border-radius: 16px; border: 1px solid var(--border-color);">
+                <i class="fa-solid fa-graduation-cap" style="font-size: 3rem; color: var(--text-muted); margin-bottom: 15px;"></i>
+                <h3 style="color: var(--text-primary); margin-bottom: 8px;">No active quizzes</h3>
+                <p class="text-muted">There are no course quizzes currently scheduled or active.</p>
+            </div>
+        `;
+        return;
+    }
+
+    quizzes.forEach(qz => {
+        const result = state.quizResults.find(r => r.quiz_id === qz.id && r.email === state.currentUser.email);
+
+        let statusHtml = "";
+        let scoreHtml = "";
+        let buttonHtml = "";
+
+        if (result) {
+            const isFailed = result.status === 'failed';
+            statusHtml = isFailed
+                ? `<div class="rt-status-indicator rt-status-inprogress" style="background-color: var(--color-danger-soft); color: var(--color-danger);"><i class="fa-solid fa-circle-xmark"></i> Failed (Left Exam)</div>`
+                : `<div class="rt-status-indicator rt-status-completed"><i class="fa-solid fa-circle-check"></i> Submitted</div>`;
+            
+            scoreHtml = `<div class="rt-score-display">${result.score}%</div>`;
+            buttonHtml = `
+                <button class="btn btn-secondary btn-block" disabled>
+                    <i class="fa-solid fa-lock"></i> Submitted (Locked until Quiz Ends)
+                </button>
+            `;
+        } else {
+            statusHtml = `<div class="rt-status-indicator rt-status-unsolved"><i class="fa-regular fa-clock"></i> Active</div>`;
+            scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">Ends: ${new Date(qz.endTime).toLocaleString()}</div>`;
+            buttonHtml = `
+                <button class="btn btn-primary btn-block" onclick="startCourseQuizStudent('${qz.id}')">
+                    <i class="fa-solid fa-pen-nib"></i> Start Strict Quiz
+                </button>
+            `;
+        }
+
+        const card = document.createElement("div");
+        card.className = "report-task-card";
+        card.innerHTML = `
+            <div>
+                ${statusHtml}
+                <h3 style="color:var(--text-primary); font-weight:700; font-size:1.2rem; margin-top:8px;">${qz.title}</h3>
+                <div class="rt-card-meta">
+                    <span class="rt-meta-badge"><i class="fa-regular fa-clock"></i> ${qz.duration} Min</span>
+                    <span class="rt-meta-badge"><i class="fa-solid fa-list-check"></i> ${qz.questions.length} Questions</span>
                 </div>
                 ${scoreHtml}
             </div>
@@ -24265,4 +24590,652 @@ function updateDashboardStats() {
 
     solvedEl.innerText = solvedCount;
     unsolvedEl.innerText = unsolvedCount;
+}
+
+// ================= COURSE QUIZ STRICT WORKSPACE & FLOW =================
+let quizTimerInterval = null;
+
+window.startCourseQuizStudent = function(quizId) {
+    const qz = state.courseQuizzes.find(q => q.id === quizId);
+    if (!qz) return;
+
+    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === state.currentUser.email);
+    if (result) {
+        showToast("Error", "You have already submitted this quiz.", "danger");
+        return;
+    }
+
+    const isPractice = qz.status === "moved_to_reports" || new Date().getTime() > new Date(qz.endTime).getTime();
+
+    if (isPractice) {
+        if (!confirm("هل تريد بدء هذا الاختبار كتدريب؟")) return;
+    } else {
+        if (!confirm("هل أنت مستعد لبدء الاختبار؟ بمجرد البدء، لا يمكنك مغادرة الصفحة أو تحديثها وإلا ستحصل على درجة صفر.")) {
+            return;
+        }
+        localStorage.setItem("active_quiz_session", quizId);
+    }
+
+    state.activeQuiz = {
+        quizId: qz.id,
+        title: qz.title,
+        questions: qz.questions,
+        answers: {},
+        currentQuestionIdx: 0,
+        timeRemaining: qz.duration * 60,
+        isPractice: isPractice
+    };
+
+    const overlay = document.getElementById("active-quiz-overlay");
+    overlay.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebar) sidebar.classList.add("hidden");
+    const appLayout = document.getElementById("app-layout");
+    if (appLayout) appLayout.style.gridTemplateColumns = "1fr";
+
+    overlay.oncopy = (e) => e.preventDefault();
+    overlay.oncut = (e) => e.preventDefault();
+    overlay.oncontextmenu = (e) => e.preventDefault();
+
+    document.getElementById("btn-prev-quiz-q").onclick = () => {
+        if (state.activeQuiz.currentQuestionIdx > 0) {
+            loadQuizQuestion(state.activeQuiz.currentQuestionIdx - 1);
+        }
+    };
+
+    document.getElementById("btn-next-quiz-q").onclick = () => {
+        if (state.activeQuiz.currentQuestionIdx < state.activeQuiz.questions.length - 1) {
+            loadQuizQuestion(state.activeQuiz.currentQuestionIdx + 1);
+        }
+    };
+
+    document.getElementById("btn-submit-active-quiz").onclick = () => {
+        if (confirm("هل أنت متأكد من تسليم الإجابات وإنهاء الاختبار؟")) {
+            submitActiveQuiz();
+        }
+    };
+
+    const timerText = document.getElementById("quiz-timer-text");
+    const updateQuizTimer = () => {
+        const m = Math.floor(state.activeQuiz.timeRemaining / 60);
+        const s = state.activeQuiz.timeRemaining % 60;
+        timerText.innerText = `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    };
+    updateQuizTimer();
+
+    if (quizTimerInterval) clearInterval(quizTimerInterval);
+    quizTimerInterval = setInterval(() => {
+        state.activeQuiz.timeRemaining--;
+        updateQuizTimer();
+
+        if (state.activeQuiz.timeRemaining <= 0) {
+            clearInterval(quizTimerInterval);
+            showToast("Time's Up", "انتهى الوقت المحدد للاختبار. يتم التسليم تلقائياً.", "warning");
+            submitActiveQuiz();
+        }
+    }, 1000);
+
+    loadQuizQuestion(0);
+};
+
+function loadQuizQuestion(idx) {
+    if (!state.activeQuiz) return;
+    state.activeQuiz.currentQuestionIdx = idx;
+
+    const q = state.activeQuiz.questions[idx];
+    const total = state.activeQuiz.questions.length;
+
+    document.getElementById("active-quiz-q-index").innerText = `Question ${idx + 1} of ${total}`;
+    document.getElementById("active-quiz-q-body").innerHTML = sanitizeRichHTML(q.text || "");
+
+    const container = document.getElementById("active-quiz-options-container");
+    container.innerHTML = "";
+
+    const options = q.options || [];
+    options.forEach((optText, optIdx) => {
+        const optBtn = document.createElement("button");
+        optBtn.className = "question-option-btn";
+        
+        const label = String.fromCharCode(65 + optIdx);
+        optBtn.innerHTML = `
+            <span class="option-letter">${label}</span>
+            <div class="option-content">${sanitizeHTML(optText)}</div>
+        `;
+
+        if (state.activeQuiz.answers[idx] === optIdx) {
+            optBtn.classList.add("selected");
+        }
+
+        optBtn.onclick = () => {
+            selectQuizOption(idx, optIdx);
+        };
+
+        container.appendChild(optBtn);
+    });
+
+    const prevBtn = document.getElementById("btn-prev-quiz-q");
+    const nextBtn = document.getElementById("btn-next-quiz-q");
+
+    prevBtn.disabled = idx === 0;
+    nextBtn.disabled = idx === total - 1;
+}
+
+function selectQuizOption(qIdx, optIdx) {
+    if (!state.activeQuiz) return;
+    state.activeQuiz.answers[qIdx] = optIdx;
+    loadQuizQuestion(qIdx);
+}
+
+async function submitActiveQuiz() {
+    if (quizTimerInterval) clearInterval(quizTimerInterval);
+    if (!state.activeQuiz) return;
+
+    const qzId = state.activeQuiz.quizId;
+    const questions = state.activeQuiz.questions;
+    const answers = state.activeQuiz.answers;
+
+    let correctCount = 0;
+    questions.forEach((q, idx) => {
+        const userAns = answers[idx];
+        if (userAns !== undefined && parseInt(userAns) === parseInt(q.correctOption)) {
+            correctCount++;
+        }
+    });
+
+    const score = Math.round((correctCount / questions.length) * 100);
+
+    const resultObj = {
+        id: `${qzId}_${state.currentUser.email}`,
+        quiz_id: qzId,
+        email: state.currentUser.email,
+        score: score,
+        total_questions: questions.length,
+        answers: answers,
+        status: "completed",
+        submitted_at: new Date().toISOString()
+    };
+
+    const isPractice = state.activeQuiz.isPractice;
+
+    try {
+        await saveQuizResultToCloud(resultObj);
+        showToast("Success", `لقد أنهيت الاختبار بنجاح بنسبة ${score}%!`, "success");
+        
+        localStorage.removeItem("active_quiz_session");
+        state.activeQuiz = null;
+
+        document.getElementById("active-quiz-overlay").classList.add("hidden");
+        document.body.style.overflow = "auto";
+
+        const sidebar = document.querySelector(".sidebar");
+        if (sidebar) sidebar.classList.remove("hidden");
+        const appLayout = document.getElementById("app-layout");
+        if (appLayout) appLayout.style.gridTemplateColumns = "";
+
+        await fetchQuizResults(state.activeGroup);
+        if (isPractice) {
+            renderReportTaskStudentView();
+        } else {
+            renderCourseQuizzesStudentView();
+        }
+    } catch (e) {
+        console.error("Failed to submit quiz:", e);
+        showToast("Error", "فشلت عملية تسليم الاختبار. حاول مرة أخرى.", "danger");
+    }
+}
+
+async function submitQuizCheatZero(quizId, email) {
+    const quiz = state.courseQuizzes.find(q => q.id === quizId);
+    const title = quiz ? quiz.title : "Course Quiz";
+    
+    localStorage.removeItem("active_quiz_session");
+    
+    const resultObj = {
+        id: `${quizId}_${email}`,
+        quiz_id: quizId,
+        email: email,
+        score: 0,
+        total_questions: quiz ? quiz.questions.length : 0,
+        answers: {},
+        status: "failed",
+        submitted_at: new Date().toISOString()
+    };
+    
+    try {
+        await saveQuizResultToCloud(resultObj);
+        showToast("Strict Exam Violation", `لقد حصلت على درجة صفر في اختبار "${title}" لمغادرتك الصفحة.`, "danger");
+        await fetchQuizResults(state.activeGroup);
+        triggerViewRefresh();
+    } catch (e) {
+        console.error("Failed to submit cheat zero:", e);
+    }
+}
+
+window.reviewCourseQuizStudent = function(quizId) {
+    const qz = state.courseQuizzes.find(q => q.id === quizId);
+    if (!qz) return;
+
+    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === state.currentUser.email);
+    if (!result) return;
+
+    state.activeQuiz = {
+        quizId: qz.id,
+        title: qz.title,
+        questions: qz.questions,
+        answers: result.answers || {},
+        currentQuestionIdx: 0,
+        isReview: true
+    };
+
+    const overlay = document.getElementById("active-quiz-overlay");
+    overlay.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+
+    document.getElementById("quiz-timer-text").innerText = "Review";
+    document.getElementById("btn-submit-active-quiz").onclick = () => {
+        exitQuizReview();
+    };
+    document.getElementById("btn-submit-active-quiz").innerHTML = `Exit Review <i class="fa-solid fa-right-from-bracket"></i>`;
+    document.getElementById("btn-submit-active-quiz").className = "btn btn-secondary";
+
+    document.getElementById("btn-prev-quiz-q").onclick = () => {
+        if (state.activeQuiz.currentQuestionIdx > 0) {
+            loadQuizQuestionReview(state.activeQuiz.currentQuestionIdx - 1);
+        }
+    };
+
+    document.getElementById("btn-next-quiz-q").onclick = () => {
+        if (state.activeQuiz.currentQuestionIdx < state.activeQuiz.questions.length - 1) {
+            loadQuizQuestionReview(state.activeQuiz.currentQuestionIdx + 1);
+        }
+    };
+
+    loadQuizQuestionReview(0);
+};
+
+function loadQuizQuestionReview(idx) {
+    if (!state.activeQuiz) return;
+    state.activeQuiz.currentQuestionIdx = idx;
+
+    const q = state.activeQuiz.questions[idx];
+    const total = state.activeQuiz.questions.length;
+
+    document.getElementById("active-quiz-q-index").innerText = `Question ${idx + 1} of ${total}`;
+    document.getElementById("active-quiz-q-body").innerHTML = sanitizeRichHTML(q.text || "");
+
+    const container = document.getElementById("active-quiz-options-container");
+    container.innerHTML = "";
+
+    const userAns = state.activeQuiz.answers[idx];
+    const correctAns = parseInt(q.correctOption);
+
+    const options = q.options || [];
+    options.forEach((optText, optIdx) => {
+        const optBtn = document.createElement("button");
+        optBtn.className = "question-option-btn";
+        
+        const label = String.fromCharCode(65 + optIdx);
+        optBtn.innerHTML = `
+            <span class="option-letter">${label}</span>
+            <div class="option-content">${sanitizeHTML(optText)}</div>
+        `;
+
+        if (optIdx === correctAns) {
+            optBtn.classList.add("correct");
+        } else if (userAns !== undefined && parseInt(userAns) === optIdx && parseInt(userAns) !== correctAns) {
+            optBtn.classList.add("incorrect");
+        }
+
+        container.appendChild(optBtn);
+    });
+
+    let expPanel = document.getElementById("active-quiz-explanation");
+    if (!expPanel) {
+        expPanel = document.createElement("div");
+        expPanel.id = "active-quiz-explanation";
+        expPanel.className = "question-explanation-panel";
+        expPanel.style.marginTop = "25px";
+        document.querySelector("#active-quiz-overlay .active-question-card").appendChild(expPanel);
+    }
+    
+    expPanel.innerHTML = `
+        <div class="explanation-header">
+            <i class="fa-solid fa-circle-info"></i> Explanation
+        </div>
+        <div class="explanation-body">
+            ${sanitizeRichHTML(q.explanation || "No explanation provided.")}
+        </div>
+    `;
+
+    const prevBtn = document.getElementById("btn-prev-quiz-q");
+    const nextBtn = document.getElementById("btn-next-quiz-q");
+
+    prevBtn.disabled = idx === 0;
+    nextBtn.disabled = idx === total - 1;
+}
+
+function exitQuizReview() {
+    state.activeQuiz = null;
+    document.getElementById("active-quiz-overlay").classList.add("hidden");
+    document.body.style.overflow = "auto";
+    
+    const submitBtn = document.getElementById("btn-submit-active-quiz");
+    submitBtn.innerHTML = `Submit Exam <i class="fa-solid fa-paper-plane"></i>`;
+    submitBtn.className = "btn btn-danger";
+
+    const expPanel = document.getElementById("active-quiz-explanation");
+    if (expPanel) expPanel.remove();
+
+    renderReportTaskStudentView();
+}
+
+// ================= ADMIN: COURSE QUIZZES & LEADERBOARD =================
+let tempQuizQuestions = [];
+
+function renderAdminQuizzesTab() {
+    const quizListContainer = document.getElementById("admin-quizzes-list");
+    if (!quizListContainer) return;
+
+    quizListContainer.innerHTML = "";
+
+    if (state.courseQuizzes.length === 0) {
+        quizListContainer.innerHTML = `
+            <div class="empty-state" style="padding: 20px; text-align: center; color: var(--text-muted); width: 100%;">
+                <i class="fa-solid fa-graduation-cap" style="font-size: 2rem; margin-bottom: 10px;"></i>
+                <p>No course quizzes created yet.</p>
+            </div>
+        `;
+    } else {
+        state.courseQuizzes.forEach(qz => {
+            const start = new Date(qz.startTime).toLocaleString();
+            const end = new Date(qz.endTime).toLocaleString();
+            const now = new Date().getTime();
+            const endTimeMs = new Date(qz.endTime).getTime();
+            
+            let statusLabel = "";
+            let actionBtn = "";
+
+            if (qz.status === "moved_to_reports" || now > endTimeMs) {
+                statusLabel = `<span class="badge badge-secondary" style="background-color: var(--text-muted); color: #fff; padding: 2px 6px; border-radius: 4px;">Expired / Archived</span>`;
+                actionBtn = `<button class="btn btn-secondary btn-sm" disabled style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-circle-check"></i> Already in Reports</button>`;
+            } else {
+                statusLabel = `<span class="badge badge-success" style="background-color: var(--color-success); color: #fff; padding: 2px 6px; border-radius: 4px;">Active</span>`;
+                actionBtn = `<button class="btn btn-warning btn-sm" onclick="moveQuizToReports('${qz.id}')" style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-file-export"></i> Move to Reports</button>`;
+            }
+
+            const row = document.createElement("div");
+            row.className = "quiz-admin-card";
+            row.style.cssText = "background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 15px; border-radius: 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap; width: 100%; box-sizing: border-box;";
+            row.innerHTML = `
+                <div>
+                    <h4 style="margin: 0 0 5px 0; color: var(--text-primary);">${sanitizeHTML(qz.title)}</h4>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); display: flex; gap: 15px; flex-wrap: wrap;">
+                        <span><i class="fa-regular fa-clock"></i> ${qz.duration} Min</span>
+                        <span><i class="fa-solid fa-list-check"></i> ${qz.questions.length} Qs</span>
+                        <span><i class="fa-regular fa-calendar-days"></i> ${start} - ${end}</span>
+                        ${statusLabel}
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    ${actionBtn}
+                    <button class="btn btn-primary btn-sm" onclick="viewQuizLeaderboard('${qz.id}')" style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-chart-column"></i> Leaderboard</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteCourseQuiz('${qz.id}')" style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-trash-can"></i> Delete</button>
+                </div>
+            `;
+            quizListContainer.appendChild(row);
+        });
+    }
+
+    populateQuizLeaderboardFilter();
+    renderQuizLeaderboard();
+
+    // Bind Add Question button click
+    const addQBtn = document.getElementById("btn-admin-quiz-add-q");
+    if (addQBtn && !addQBtn.dataset.bound) {
+        addQBtn.dataset.bound = "true";
+        addQBtn.onclick = (e) => {
+            e.preventDefault();
+            addTempQuestionToQuiz();
+        };
+    }
+
+    // Bind Form submit button
+    const quizForm = document.getElementById("admin-quiz-form");
+    if (quizForm && !quizForm.dataset.bound) {
+        quizForm.dataset.bound = "true";
+        quizForm.onsubmit = (e) => {
+            e.preventDefault();
+            publishCourseQuiz();
+        };
+    }
+
+    // Bind Leaderboard dropdown selection change
+    const leaderboardSelect = document.getElementById("admin-quiz-select-dropdown");
+    if (leaderboardSelect && !leaderboardSelect.dataset.bound) {
+        leaderboardSelect.dataset.bound = "true";
+        leaderboardSelect.onchange = () => {
+            renderQuizLeaderboard();
+        };
+    }
+}
+
+window.moveQuizToReports = async function(quizId) {
+    const qz = state.courseQuizzes.find(q => q.id === quizId);
+    if (!qz) return;
+    if (!confirm(`Are you sure you want to move "${qz.title}" to reports immediately? This will end the active strict window.`)) return;
+
+    qz.status = "moved_to_reports";
+    await saveCourseQuizToCloud(qz);
+    showToast("Quiz Moved", "Quiz has been successfully transferred to practice report tasks.", "success");
+    renderAdminQuizzesTab();
+};
+
+window.deleteCourseQuiz = async function(quizId) {
+    if (!confirm("Are you sure you want to delete this course quiz? This cannot be undone.")) return;
+    
+    state.courseQuizzes = state.courseQuizzes.filter(q => q.id !== quizId);
+    state.quizResults = state.quizResults.filter(r => r.quiz_id !== quizId);
+
+    try {
+        await deleteCourseQuizFromCloud(quizId);
+        await supabaseRequest(`hawari_quiz_results?quiz_id=eq.${quizId}`, {
+            method: "DELETE"
+        });
+        showToast("Deleted", "Course quiz and all associated results deleted.", "success");
+        renderAdminQuizzesTab();
+    } catch (e) {
+        console.error("Failed to delete quiz:", e);
+    }
+};
+
+window.viewQuizLeaderboard = function(quizId) {
+    const select = document.getElementById("admin-quiz-select-dropdown");
+    if (select) {
+        select.value = quizId;
+        renderQuizLeaderboard();
+    }
+};
+
+function populateQuizLeaderboardFilter() {
+    const select = document.getElementById("admin-quiz-select-dropdown");
+    if (!select) return;
+
+    const currentVal = select.value;
+    select.innerHTML = '<option value="">-- Choose Quiz --</option>';
+
+    state.courseQuizzes.forEach(qz => {
+        const opt = document.createElement("option");
+        opt.value = qz.id;
+        opt.innerText = qz.title;
+        select.appendChild(opt);
+    });
+
+    if (currentVal && state.courseQuizzes.some(q => q.id === currentVal)) {
+        select.value = currentVal;
+    }
+}
+
+function renderQuizLeaderboard() {
+    const container = document.getElementById("admin-quiz-leaderboard-tbody");
+    if (!container) return;
+
+    container.innerHTML = "";
+    
+    const select = document.getElementById("admin-quiz-select-dropdown");
+    const quizId = select ? select.value : "";
+
+    if (!quizId) {
+        container.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 20px;">
+                    Select a quiz above to view submissions
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    const filteredResults = state.quizResults.filter(r => r.quiz_id === quizId);
+
+    if (filteredResults.length === 0) {
+        container.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 20px;">
+                    No student submissions found for this quiz.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    filteredResults.sort((a, b) => b.score - a.score || new Date(a.submitted_at) - new Date(b.submitted_at));
+
+    filteredResults.forEach((res, index) => {
+        const row = document.createElement("tr");
+        const statusBadge = res.status === "failed"
+            ? `<span class="badge badge-danger" style="background-color: var(--color-danger); color: #fff; padding: 2px 6px; border-radius: 4px;">Failed (Left Exam)</span>`
+            : `<span class="badge badge-success" style="background-color: var(--color-success); color: #fff; padding: 2px 6px; border-radius: 4px;">Completed</span>`;
+
+        row.innerHTML = `
+            <td style="padding: 10px; color: var(--text-primary);">${sanitizeHTML(res.email)}</td>
+            <td style="padding: 10px; color: var(--text-secondary);">${new Date(res.submitted_at).toLocaleString()}</td>
+            <td style="padding: 10px; font-weight: 600; color: var(--text-primary);">${res.score}%</td>
+            <td style="padding: 10px;">${statusBadge}</td>
+        `;
+        container.appendChild(row);
+    });
+}
+
+window.addTempQuestionToQuiz = function() {
+    const textVal = document.getElementById("admin-quiz-q-text").value.trim();
+    const optA = document.getElementById("admin-quiz-q-a").value.trim();
+    const optB = document.getElementById("admin-quiz-q-b").value.trim();
+    const optC = document.getElementById("admin-quiz-q-c").value.trim();
+    const optD = document.getElementById("admin-quiz-q-d").value.trim();
+    const correct = document.getElementById("admin-quiz-q-correct").value;
+    const explanation = document.getElementById("admin-quiz-q-exp").value.trim();
+
+    if (!textVal || !optA || !optB || !optC || !optD) {
+        showToast("Missing Fields", "Please fill in the question text and all options A-D.", "warning");
+        return;
+    }
+
+    const qObj = {
+        id: `qz_q_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        text: textVal,
+        options: [optA, optB, optC, optD],
+        correctOption: parseInt(correct),
+        explanation: explanation
+    };
+
+    tempQuizQuestions.push(qObj);
+    updateTempQuestionsList();
+
+    document.getElementById("admin-quiz-q-text").value = "";
+    document.getElementById("admin-quiz-q-a").value = "";
+    document.getElementById("admin-quiz-q-b").value = "";
+    document.getElementById("admin-quiz-q-c").value = "";
+    document.getElementById("admin-quiz-q-d").value = "";
+    document.getElementById("admin-quiz-q-correct").value = "0";
+    document.getElementById("admin-quiz-q-exp").value = "";
+
+    showToast("Question Added", "Question successfully added to the quiz template.", "success");
+};
+
+function updateTempQuestionsList() {
+    const container = document.getElementById("admin-quiz-questions-preview-list");
+    const countBadge = document.getElementById("admin-quiz-questions-count");
+    const previewSection = document.getElementById("admin-quiz-questions-preview-section");
+
+    if (countBadge) {
+        countBadge.innerText = tempQuizQuestions.length;
+    }
+
+    if (previewSection) {
+        if (tempQuizQuestions.length > 0) {
+            previewSection.classList.remove("hidden");
+        } else {
+            previewSection.classList.add("hidden");
+        }
+    }
+
+    if (!container) return;
+    container.innerHTML = "";
+
+    tempQuizQuestions.forEach((q, idx) => {
+        const item = document.createElement("div");
+        item.style.cssText = "background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;";
+        item.innerHTML = `
+            <div style="font-size: 0.85rem; max-width: 80%; color: var(--text-primary);">
+                <strong>Q${idx + 1}:</strong> ${sanitizeHTML(q.text.substring(0, 100))}${q.text.length > 100 ? "..." : ""}
+            </div>
+            <button class="btn btn-danger btn-sm" type="button" style="padding: 2px 6px; font-size: 0.75rem;" onclick="removeTempQuestion(${idx})">Remove</button>
+        `;
+        container.appendChild(item);
+    });
+}
+
+window.removeTempQuestion = function(idx) {
+    tempQuizQuestions.splice(idx, 1);
+    updateTempQuestionsList();
+};
+
+window.publishCourseQuiz = async function() {
+    const title = document.getElementById("admin-quiz-title").value.trim();
+    const duration = parseInt(document.getElementById("admin-quiz-duration").value);
+    const start = document.getElementById("admin-quiz-start").value;
+    const end = document.getElementById("admin-quiz-end").value;
+
+    if (!title || isNaN(duration) || !start || !end) {
+        showToast("Missing Fields", "Please complete all quiz metadata fields (Title, Duration, Start/End times).", "warning");
+        return;
+    }
+
+    if (tempQuizQuestions.length === 0) {
+        showToast("No Questions", "Please add at least one question to the quiz.", "warning");
+        return;
+    }
+
+    const quizObj = {
+        id: `qz_${Date.now()}`,
+        title: title,
+        duration: duration,
+        startTime: new Date(start).toISOString(),
+        endTime: new Date(end).toISOString(),
+        questions: tempQuizQuestions,
+        status: "active"
+    };
+
+    state.courseQuizzes.push(quizObj);
+    await saveCourseQuizToCloud(quizObj);
+
+    showToast("Quiz Published", `Course quiz "${title}" has been successfully published.`, "success");
+    
+    document.getElementById("admin-quiz-form").reset();
+    tempQuizQuestions = [];
+    updateTempQuestionsList();
+    
+    renderAdminQuizzesTab();
 }

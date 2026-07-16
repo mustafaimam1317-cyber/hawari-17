@@ -2496,4 +2496,27 @@ body.group-dermatology.dark-theme {
     margin: 8px 0;
 }
 
+/* Mobile Responsiveness for Course Quiz Sidebar */
+@media (max-width: 768px) {
+    #active-quiz-overlay .test-workspace {
+        flex-direction: column !important;
+        height: auto !important;
+        overflow-y: auto !important;
+    }
+    #active-quiz-overlay .test-main-section {
+        flex-grow: 1 !important;
+        padding: 20px !important;
+        height: auto !important;
+    }
+    #active-quiz-sidebar {
+        width: 100% !important;
+        border-left: none !important;
+        border-top: 1px solid var(--border-color) !important;
+        padding: 15px !important;
+    }
+    #active-quiz-questions-grid {
+        grid-template-columns: repeat(8, 1fr) !important;
+    }
+}
+
 

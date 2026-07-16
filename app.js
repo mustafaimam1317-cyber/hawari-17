@@ -24700,12 +24700,12 @@ function loadQuizQuestion(idx) {
     const options = q.options || [];
     options.forEach((optText, optIdx) => {
         const optBtn = document.createElement("button");
-        optBtn.className = "question-option-btn";
+        optBtn.className = "choice-btn";
         
         const label = String.fromCharCode(65 + optIdx);
         optBtn.innerHTML = `
-            <span class="option-letter">${label}</span>
-            <div class="option-content">${sanitizeHTML(optText)}</div>
+            <span class="choice-letter">${label}</span>
+            <div class="choice-text">${sanitizeHTML(optText)}</div>
         `;
 
         if (state.activeQuiz.answers[idx] === optIdx) {
@@ -24724,6 +24724,8 @@ function loadQuizQuestion(idx) {
 
     prevBtn.disabled = idx === 0;
     nextBtn.disabled = idx === total - 1;
+
+    renderQuizSidebarGrid();
 }
 
 function selectQuizOption(qIdx, optIdx) {
@@ -24732,13 +24734,89 @@ function selectQuizOption(qIdx, optIdx) {
     loadQuizQuestion(qIdx);
 }
 
+function renderQuizSidebarGrid() {
+    const grid = document.getElementById("active-quiz-questions-grid");
+    if (!grid || !state.activeQuiz) return;
+
+    grid.innerHTML = "";
+
+    const questions = state.activeQuiz.questions;
+    const answers = state.activeQuiz.answers;
+    const currentIdx = state.activeQuiz.currentQuestionIdx;
+    const isReview = state.activeQuiz.isReview;
+
+    questions.forEach((q, idx) => {
+        const btn = document.createElement("button");
+        btn.style.cssText = "width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; box-sizing: border-box; outline: none; border: 1.5px solid transparent; margin: auto;";
+        btn.innerText = idx + 1;
+
+        const isAnswered = answers[idx] !== undefined;
+
+        if (isReview) {
+            const correctAns = parseInt(q.correctOption);
+            const userAns = answers[idx];
+            
+            if (userAns === undefined) {
+                btn.style.borderColor = "var(--color-danger)";
+                btn.style.color = "var(--color-danger)";
+                btn.style.backgroundColor = "transparent";
+            } else if (parseInt(userAns) === correctAns) {
+                btn.style.backgroundColor = "var(--color-success)";
+                btn.style.borderColor = "var(--color-success)";
+                btn.style.color = "#ffffff";
+            } else {
+                btn.style.backgroundColor = "var(--color-danger)";
+                btn.style.borderColor = "var(--color-danger)";
+                btn.style.color = "#ffffff";
+            }
+        } else {
+            if (isAnswered) {
+                btn.style.backgroundColor = "var(--color-success)";
+                btn.style.borderColor = "var(--color-success)";
+                btn.style.color = "#ffffff";
+            } else {
+                btn.style.borderColor = "var(--text-muted)";
+                btn.style.color = "var(--text-muted)";
+                btn.style.backgroundColor = "transparent";
+            }
+        }
+
+        if (idx === currentIdx) {
+            btn.style.borderWidth = "2px";
+            btn.style.borderColor = "var(--primary-color)";
+            if (!isAnswered && !isReview) {
+                btn.style.color = "var(--primary-color)";
+                btn.style.backgroundColor = "var(--primary-color-soft)";
+            }
+        }
+
+        btn.onclick = (e) => {
+            e.preventDefault();
+            if (isReview) {
+                loadQuizQuestionReview(idx);
+            } else {
+                loadQuizQuestion(idx);
+            }
+        };
+
+        grid.appendChild(btn);
+    });
+}
+
 async function submitActiveQuiz() {
-    if (quizTimerInterval) clearInterval(quizTimerInterval);
     if (!state.activeQuiz) return;
 
     const qzId = state.activeQuiz.quizId;
     const questions = state.activeQuiz.questions;
     const answers = state.activeQuiz.answers;
+
+    const unansweredCount = questions.filter((q, idx) => answers[idx] === undefined).length;
+    if (unansweredCount > 0) {
+        showToast("Unanswered Questions", `لديك ${unansweredCount} أسئلة لم تقم بالإجابة عليها. يجب حل جميع الأسئلة قبل التسليم.`, "warning");
+        return;
+    }
+
+    if (quizTimerInterval) clearInterval(quizTimerInterval);
 
     let correctCount = 0;
     questions.forEach((q, idx) => {
@@ -24878,18 +24956,18 @@ function loadQuizQuestionReview(idx) {
     const options = q.options || [];
     options.forEach((optText, optIdx) => {
         const optBtn = document.createElement("button");
-        optBtn.className = "question-option-btn";
+        optBtn.className = "choice-btn";
         
         const label = String.fromCharCode(65 + optIdx);
         optBtn.innerHTML = `
-            <span class="option-letter">${label}</span>
-            <div class="option-content">${sanitizeHTML(optText)}</div>
+            <span class="choice-letter">${label}</span>
+            <div class="choice-text">${sanitizeHTML(optText)}</div>
         `;
 
         if (optIdx === correctAns) {
-            optBtn.classList.add("correct");
+            optBtn.classList.add("correct-choice");
         } else if (userAns !== undefined && parseInt(userAns) === optIdx && parseInt(userAns) !== correctAns) {
-            optBtn.classList.add("incorrect");
+            optBtn.classList.add("incorrect-choice");
         }
 
         container.appendChild(optBtn);
@@ -24918,6 +24996,8 @@ function loadQuizQuestionReview(idx) {
 
     prevBtn.disabled = idx === 0;
     nextBtn.disabled = idx === total - 1;
+
+    renderQuizSidebarGrid();
 }
 
 function exitQuizReview() {

@@ -1323,6 +1323,17 @@
                     </button>
                 </div>
             </section>
+            
+            <!-- Quiz Questions Sidebar Navigation -->
+            <aside class="quiz-sidebar" id="active-quiz-sidebar" style="width: 240px; border-left: 1px solid var(--border-color); background: var(--bg-secondary); padding: 20px; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; box-sizing: border-box;">
+                <h4 style="margin: 0; color: var(--text-primary); font-size: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                    <span>Questions Grid</span>
+                    <i class="fa-solid fa-list-ol" style="color: var(--primary-color);"></i>
+                </h4>
+                <div id="active-quiz-questions-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+                    <!-- Question numbers will be rendered dynamically -->
+                </div>
+            </aside>
         </div>
     </div>
 

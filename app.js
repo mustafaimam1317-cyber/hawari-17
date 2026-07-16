@@ -24330,25 +24330,25 @@ function renderCourseQuizzesStudentView() {
     
     const now = new Date().getTime();
     
-    // Filter active quizzes
+    // Filter quizzes that have not expired or been moved to reports yet
     const quizzes = state.courseQuizzes.filter(qz => {
-        const start = new Date(qz.startTime).getTime();
         const end = new Date(qz.endTime).getTime();
-        return now >= start && qz.status !== 'moved_to_reports' && now <= end;
+        return qz.status !== 'moved_to_reports' && now <= end;
     });
 
     if (quizzes.length === 0) {
         container.innerHTML = `
             <div class="empty-state" style="grid-column: 1 / -1; padding: 40px; text-align: center; background: var(--bg-secondary); border-radius: 16px; border: 1px solid var(--border-color);">
                 <i class="fa-solid fa-graduation-cap" style="font-size: 3rem; color: var(--text-muted); margin-bottom: 15px;"></i>
-                <h3 style="color: var(--text-primary); margin-bottom: 8px;">No active quizzes</h3>
-                <p class="text-muted">There are no course quizzes currently scheduled or active.</p>
+                <h3 style="color: var(--text-primary); margin-bottom: 8px;">No active or upcoming quizzes</h3>
+                <p class="text-muted">There are no course quizzes currently scheduled.</p>
             </div>
         `;
         return;
     }
 
     quizzes.forEach(qz => {
+        const start = new Date(qz.startTime).getTime();
         const result = state.quizResults.find(r => r.quiz_id === qz.id && r.email === state.currentUser.email);
 
         let statusHtml = "";
@@ -24367,9 +24367,19 @@ function renderCourseQuizzesStudentView() {
                     <i class="fa-solid fa-lock"></i> Submitted (Locked until Quiz Ends)
                 </button>
             `;
+        } else if (now < start) {
+            // Scheduled/Upcoming Quiz
+            statusHtml = `<div class="rt-status-indicator rt-status-unsolved" style="background-color: var(--border-color); color: var(--text-muted);"><i class="fa-regular fa-calendar"></i> Upcoming</div>`;
+            scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">Opens: ${new Date(qz.startTime).toLocaleString()}</div>`;
+            buttonHtml = `
+                <button class="btn btn-secondary btn-block" disabled style="cursor: not-allowed; opacity: 0.6;">
+                    <i class="fa-solid fa-lock"></i> Not Active Yet (Opens: ${new Date(qz.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})})
+                </button>
+            `;
         } else {
-            statusHtml = `<div class="rt-status-indicator rt-status-unsolved"><i class="fa-regular fa-clock"></i> Active</div>`;
-            scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">Ends: ${new Date(qz.endTime).toLocaleString()}</div>`;
+            // Active Quiz
+            statusHtml = `<div class="rt-status-indicator rt-status-unsolved" style="background-color: var(--color-success-soft); color: var(--color-success);"><i class="fa-solid fa-play"></i> Active</div>`;
+            scoreHtml = `<div style="font-size:0.9rem; color:var(--text-secondary); margin: 15px 0;">Ends: ${new Date(qz.endTime).toLocaleString()}</div>`;
             buttonHtml = `
                 <button class="btn btn-primary btn-block" onclick="startCourseQuizStudent('${qz.id}')">
                     <i class="fa-solid fa-pen-nib"></i> Start Strict Quiz

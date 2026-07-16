@@ -2603,7 +2603,19 @@ body.group-dermatology.dark-theme {
     }
     .test-header-controls {
         width: 100% !important;
-        justify-content: space-between !important;
+        justify-content: flex-start !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }
+    /* Compress utility buttons to icons on mobile to save space */
+    #btn-toggle-test-questions-sidebar,
+    #btn-test-highlighter {
+        font-size: 0 !important;
+        padding: 8px 12px !important;
+    }
+    #btn-toggle-test-questions-sidebar i,
+    #btn-test-highlighter i {
+        font-size: 1.1rem !important;
     }
 }
 

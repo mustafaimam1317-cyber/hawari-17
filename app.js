@@ -20039,7 +20039,8 @@ let state = {
     reportTasks: [],
     courseQuizzes: [],
     quizResults: [],
-    activeQuiz: null
+    activeQuiz: null,
+    announcement: ""
 };
 
 // ================= LOCAL STORAGE MANAGER =================
@@ -20361,6 +20362,7 @@ async function selectCourseTrack(groupName) {
     await fetchReportTasksFromCloud(groupName);
     await fetchCourseQuizzes(groupName);
     await fetchQuizResults(groupName);
+    await fetchAnnouncement(groupName);
 
     // Seed default admin/student to cloud if they are missing
     seedDefaultUsersToCloud(groupName);
@@ -20489,6 +20491,28 @@ document.addEventListener("DOMContentLoaded", () => {
     initSidebarCollapse();
     initSecurityProtections();
     initBackupRestoreFlow();
+
+    // Admin Announcements Form bindings
+    const annForm = document.getElementById("admin-announcements-form");
+    if (annForm) {
+        annForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const text = document.getElementById("admin-announcement-text").value.trim();
+            if (!text) return;
+            await saveAnnouncementToCloud(text);
+            showToast("Announcement Published", "Announcement successfully updated on the dashboard.", "success");
+        };
+    }
+
+    const annClearBtn = document.getElementById("btn-clear-announcement");
+    if (annClearBtn) {
+        annClearBtn.onclick = async () => {
+            if (!confirm("Are you sure you want to clear the active announcement?")) return;
+            await deleteAnnouncementFromCloud();
+            document.getElementById("admin-announcement-text").value = "";
+            showToast("Announcement Cleared", "Announcement successfully deleted.", "success");
+        };
+    }
 });
 
 // Theme setup
@@ -20914,6 +20938,74 @@ async function deleteCourseQuizFromCloud(id) {
     }
 }
 
+async function fetchAnnouncement(groupName) {
+    try {
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${groupName}`);
+        if (records && records.length > 0) {
+            state.announcement = records[0].content;
+        } else {
+            state.announcement = "";
+        }
+    } catch (e) {
+        console.error("[Sync] Failed to fetch announcement:", e);
+        state.announcement = "";
+    }
+    renderAnnouncementWidget();
+}
+
+async function saveAnnouncementToCloud(content) {
+    const group = state.activeGroup;
+    if (!group) return;
+
+    const payload = {
+        group_name: group,
+        content: content,
+        updated_at: new Date().toISOString()
+    };
+
+    try {
+        await supabaseRequest("hawari_announcements", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+        state.announcement = content;
+        renderAnnouncementWidget();
+    } catch (e) {
+        console.error("[Sync] Failed to save announcement:", e);
+    }
+}
+
+async function deleteAnnouncementFromCloud() {
+    const group = state.activeGroup;
+    if (!group) return;
+
+    try {
+        await supabaseRequest(`hawari_announcements?group_name=eq.${group}`, {
+            method: "DELETE"
+        });
+        state.announcement = "";
+        renderAnnouncementWidget();
+    } catch (e) {
+        console.error("[Sync] Failed to delete announcement:", e);
+    }
+}
+
+function renderAnnouncementWidget() {
+    const card = document.getElementById("dashboard-announcements-card");
+    const contentLbl = document.getElementById("dashboard-announcements-content");
+    if (!card || !contentLbl) return;
+
+    if (state.announcement) {
+        contentLbl.innerText = state.announcement;
+        card.classList.remove("hidden");
+    } else {
+        card.classList.add("hidden");
+    }
+}
+
 async function fetchQuizResults(group) {
     try {
         const records = await supabaseRequest(`hawari_quiz_results?group_name=eq.${group}`);
@@ -21006,6 +21098,7 @@ async function syncUsersWithCloud() {
                 notebookNotes: row.notebook_notes || [],
                 flashcards: row.flashcards || [],
                 reportTaskProgress: row.report_task_progress || {},
+                displayName: row.display_name || "",
                 lastUpdated: row.last_updated || 0
             };
         });
@@ -21019,6 +21112,13 @@ async function syncUsersWithCloud() {
                 if (cu.status === "approved" && lu.status !== "approved") {
                     lu.status = "approved";
                     lu.role = cu.role;
+                }
+                // Unconditionally sync display name if cloud has it
+                if (cu.displayName) {
+                    lu.displayName = cu.displayName;
+                    if (state.currentUser && state.currentUser.email === lu.email) {
+                        state.currentUser.displayName = cu.displayName;
+                    }
                 }
                 // Sync progress data if cloud has newer progress
                 const localUpdated = lu.lastUpdated || 0;
@@ -21076,6 +21176,7 @@ async function syncUsersWithCloud() {
             notebook_notes: user.notebookNotes || [],
             flashcards: user.flashcards || [],
             report_task_progress: user.reportTaskProgress || {},
+            display_name: user.displayName || "",
             last_updated: user.lastUpdated || 0
         };
         return supabaseRequest("hawari_users", {
@@ -21544,6 +21645,11 @@ function renderDashboard() {
     // Update Mock Exams Dashboard Stats
     updateDashboardStats();
 
+    // Render announcements, performance analytics, and public leaderboard
+    renderAnnouncementWidget();
+    calculatePerformanceAnalytics();
+    renderPublicLeaderboard();
+
     // Quick Actions
     const btnQuickGen = document.getElementById("btn-quick-generate");
     if (btnQuickGen) {
@@ -21578,6 +21684,308 @@ function renderDashboard() {
         };
     }
 }
+
+function classifyQuestionTopic(qText, defaultTopic) {
+    if (!qText) return defaultTopic || "General Medicine";
+    const text = qText.toLowerCase();
+    
+    // Infection Topics
+    if (text.includes("virus") || text.includes("viral") || text.includes("hiv") || text.includes("hepatitis") || text.includes("herpes") || text.includes("dengue") || text.includes("influenza") || text.includes("measles") || text.includes("pox") || text.includes("rabies")) {
+        return "Virology";
+    }
+    if (text.includes("bacteri") || text.includes("coccus") || text.includes("bacillus") || text.includes("strep") || text.includes("staph") || text.includes("tuberculosis") || text.includes("penicillin") || text.includes("tetanus") || text.includes("meningitis")) {
+        return "Bacteriology";
+    }
+    if (text.includes("fung") || text.includes("myco") || text.includes("candida") || text.includes("aspergillus") || text.includes("tinea") || text.includes("dermatophyte")) {
+        return "Mycology";
+    }
+    if (text.includes("parasit") || text.includes("malaria") || text.includes("amoeba") || text.includes("plasmodium") || text.includes("helminth") || text.includes("leishmania") || text.includes("toxoplasma")) {
+        return "Parasitology";
+    }
+    
+    // Dermatology Topics
+    if (text.includes("acne") || text.includes("eczema") || text.includes("psoriasis") || text.includes("melanoma") || text.includes("dermatitis") || text.includes("scabies") || text.includes("urticaria") || text.includes("pemphigus") || text.includes("hair") || text.includes("alopecia") || text.includes("nail") || text.includes("pruritus") || text.includes("lichen")) {
+        return "Dermatology Core";
+    }
+    
+    return defaultTopic || "General Medicine";
+}
+
+function calculatePerformanceAnalytics() {
+    const container = document.getElementById("dashboard-weak-topics-container");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    const userRecord = state.currentUser ? state.users.find(u => u.email === state.currentUser.email) : null;
+    if (!userRecord) return;
+
+    const topicStats = {};
+
+    function logQuestion(topic, isCorrect) {
+        if (!topicStats[topic]) {
+            topicStats[topic] = { correct: 0, incorrect: 0, total: 0 };
+        }
+        if (isCorrect) {
+            topicStats[topic].correct++;
+        } else {
+            topicStats[topic].incorrect++;
+        }
+        topicStats[topic].total++;
+    }
+
+    // 1. Scan Standard Practice Questions
+    state.questions.forEach(q => {
+        if (q.status === "correct" || q.status === "incorrect") {
+            const topic = classifyQuestionTopic(q.text, q.topic);
+            logQuestion(topic, q.status === "correct");
+        }
+    });
+
+    // 2. Scan Mock Exams (Report Tasks)
+    if (userRecord.reportTaskProgress) {
+        Object.keys(userRecord.reportTaskProgress).forEach(rtId => {
+            const progress = userRecord.reportTaskProgress[rtId];
+            if (progress && progress.completed && progress.answers) {
+                const rt = state.reportTasks.find(t => t.id === rtId);
+                if (rt && rt.questions) {
+                    rt.questions.forEach(q => {
+                        const userAns = progress.answers[q.id];
+                        if (userAns !== undefined) {
+                            const isCorrect = parseInt(userAns) === parseInt(q.correctOption);
+                            const topic = classifyQuestionTopic(q.text, q.topic);
+                            logQuestion(topic, isCorrect);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    // 3. Scan Course Quizzes
+    state.quizResults.forEach(res => {
+        if (res.email === state.currentUser.email && res.status === "completed" && res.answers) {
+            const qz = state.courseQuizzes.find(q => q.id === res.quiz_id);
+            if (qz && qz.questions) {
+                qz.questions.forEach((q, idx) => {
+                    const userAns = res.answers[idx];
+                    if (userAns !== undefined) {
+                        const isCorrect = parseInt(userAns) === parseInt(q.correctOption);
+                        const topic = classifyQuestionTopic(q.text, q.topic);
+                        logQuestion(topic, isCorrect);
+                    }
+                });
+            }
+        }
+    });
+
+    const weakTopics = [];
+    Object.keys(topicStats).forEach(topic => {
+        const stats = topicStats[topic];
+        if (stats.total > 0) {
+            const failureRate = Math.round((stats.incorrect / stats.total) * 100);
+            weakTopics.push({
+                name: topic,
+                failureRate: failureRate,
+                correct: stats.correct,
+                incorrect: stats.incorrect,
+                total: stats.total
+            });
+        }
+    });
+
+    weakTopics.sort((a, b) => b.failureRate - a.failureRate);
+
+    if (weakTopics.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+                <i class="fa-solid fa-chart-line" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5;"></i>
+                <p style="margin: 0; font-size: 0.9rem;">No performance data available yet. Solve some questions to view analytics!</p>
+            </div>
+        `;
+        return;
+    }
+
+    weakTopics.slice(0, 4).forEach(item => {
+        let recommendation = "Good performance";
+        let colorClass = "var(--color-success)";
+        
+        if (item.failureRate > 50) {
+            recommendation = "⚠️ Highly recommended to review";
+            colorClass = "var(--color-danger)";
+        } else if (item.failureRate > 20) {
+            recommendation = "⚠️ Needs review";
+            colorClass = "var(--color-warning)";
+        }
+
+        const div = document.createElement("div");
+        div.style.cssText = "display: flex; flex-direction: column; gap: 6px;";
+        div.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.95rem;">
+                <span style="font-weight: 600; color: var(--text-primary);">${item.name}</span>
+                <span style="font-weight: 700; color: ${colorClass};">${item.failureRate}% Failure Rate</span>
+            </div>
+            <div style="width: 100%; height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; position: relative;">
+                <div style="width: ${item.failureRate}%; height: 100%; background: ${colorClass}; border-radius: 4px; transition: width 0.5s ease;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--text-muted);">
+                <span>Solved: ${item.total} | Correct: ${item.correct} | Incorrect: ${item.incorrect}</span>
+                <span style="font-weight: 500; color: ${item.failureRate > 20 ? colorClass : 'var(--text-muted)'};">${recommendation}</span>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function renderPublicLeaderboard() {
+    const container = document.getElementById("dashboard-leaderboard-container");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    const leaderboardData = [];
+
+    state.users.forEach(user => {
+        if (user.status !== "approved") return;
+
+        const solvedPracticeCount = (user.questions || []).filter(q => q.status === "correct" || q.status === "incorrect").length;
+
+        let quizSolvedCount = 0;
+        let quizScoreSum = 0;
+        state.quizResults.forEach(res => {
+            if (res.email === user.email && res.status === "completed") {
+                quizSolvedCount++;
+                quizScoreSum += res.score;
+            }
+        });
+
+        let examSolvedCount = 0;
+        let examScoreSum = 0;
+        if (user.reportTaskProgress) {
+            Object.keys(user.reportTaskProgress).forEach(rtId => {
+                const progress = user.reportTaskProgress[rtId];
+                if (progress && progress.completed) {
+                    examSolvedCount++;
+                    examScoreSum += progress.score || 0;
+                }
+            });
+        }
+
+        const totalSolved = solvedPracticeCount + quizSolvedCount + examSolvedCount;
+        const totalGradedCount = quizSolvedCount + examSolvedCount;
+        const avgGradedScore = totalGradedCount > 0 
+            ? Math.round((quizScoreSum + examScoreSum) / totalGradedCount) 
+            : 0;
+
+        const rankScore = totalSolved + (avgGradedScore * 10);
+
+        leaderboardData.push({
+            email: user.email,
+            displayName: user.displayName || "",
+            totalSolved: totalSolved,
+            avgScore: avgGradedScore,
+            rankScore: rankScore
+        });
+    });
+
+    leaderboardData.sort((a, b) => b.rankScore - a.rankScore);
+
+    const activeList = leaderboardData.filter(item => item.totalSolved > 0);
+
+    if (activeList.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+                <i class="fa-solid fa-trophy" style="font-size: 2rem; margin-bottom: 10px; opacity: 0.5;"></i>
+                <p style="margin: 0; font-size: 0.9rem;">No leaderboard records found yet.</p>
+            </div>
+        `;
+        return;
+    }
+
+    activeList.slice(0, 5).forEach((item, index) => {
+        const div = document.createElement("div");
+        div.style.cssText = "display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);";
+
+        let nameToShow = item.displayName;
+        if (!nameToShow) {
+            const parts = item.email.split("@");
+            const first = parts[0];
+            if (first.length > 3) {
+                nameToShow = first.substring(0, 3) + "***@" + parts[1];
+            } else {
+                nameToShow = first + "***@" + parts[1];
+            }
+        }
+
+        let rankBadge = "";
+        if (index === 0) {
+            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #fcd34d, #f59e0b); color:#ffffff; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;"><i class="fa-solid fa-crown"></i></span>`;
+        } else if (index === 1) {
+            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #e2e8f0, #cbd5e1); color:#475569; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;">2</span>`;
+        } else if (index === 2) {
+            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #ffedd5, #fdba74); color:#c2410c; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;">3</span>`;
+        } else {
+            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; border:1px solid var(--border-color); color:var(--text-muted); font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;">${index + 1}</span>`;
+        }
+
+        div.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 12px;">
+                ${rankBadge}
+                <span style="font-weight:600; color: var(--text-primary); font-size: 0.95rem;">${nameToShow}</span>
+            </div>
+            <div style="display: flex; gap: 15px; font-size: 0.85rem; color: var(--text-secondary); font-weight: 500;">
+                <span>Solved: <strong style="color:var(--primary-color);">${item.totalSolved}</strong></span>
+                <span>Avg: <strong style="color:var(--color-success);">${item.avgScore}%</strong></span>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+window.downloadStudentNotes = function() {
+    if (!state.notebookNotes || state.notebookNotes.length === 0) {
+        showToast("No Notes", "لديك قائمة مفكرة فارغة. لا توجد ملاحظات لتحميلها.", "warning");
+        return;
+    }
+
+    let content = `# Hawari Course Platform - Notebook Export\n`;
+    content += `Generated on: ${new Date().toLocaleString()}\n`;
+    content += `Student Email: ${state.currentUser ? state.currentUser.email : "N/A"}\n`;
+    content += `Course Track: ${state.activeGroup === "infection" ? "Hawari Infection" : "Hawari Dermatology"}\n`;
+    content += `==================================================\n\n`;
+
+    state.notebookNotes.forEach((note, index) => {
+        const cleanTitle = (note.title || "Untitled Note").replace(/[<>"]/g, "");
+        const cleanBody = (note.content || "").replace(/<[^>]*>/g, ""); // strip HTML tags securely
+
+        content += `Note #${index + 1}: ${cleanTitle}\n`;
+        if (note.lastSaved) {
+            content += `Last Updated: ${new Date(note.lastSaved).toLocaleString()}\n`;
+        }
+        content += `--------------------------------------------------\n`;
+        content += `${cleanBody}\n`;
+        content += `==================================================\n\n`;
+    });
+
+    try {
+        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `hawari_notebook_notes_${state.activeGroup}_${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        showToast("Success", "Notebook notes downloaded successfully.", "success");
+    } catch (e) {
+        console.error("Failed to download notebook notes:", e);
+        showToast("Error", "Failed to compile notebook download.", "danger");
+    }
+};
 
 // ================= VIEW: GENERATE TEST =================
 let selectedSource = "Past Exam";
@@ -22735,6 +23143,11 @@ function renderAdminPanel() {
                 ]).then(() => {
                     renderAdminQuizzesTab();
                 });
+            } else if (target === "admin-announcements-tab") {
+                fetchAnnouncement(state.activeGroup).then(() => {
+                    const txt = document.getElementById("admin-announcement-text");
+                    if (txt) txt.value = state.announcement || "";
+                });
             }
         };
     });
@@ -23134,6 +23547,11 @@ function renderAdminApprovalsTab() {
             tr.innerHTML = `
                 <td><strong>${user.email}</strong> ${isSelf ? '<span class="text-muted" style="font-size:0.8rem">(You)</span>' : ''}</td>
                 <td>
+                    <input type="text" value="${user.displayName || ''}" placeholder="Set nickname..." 
+                           style="padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); font-size: 0.85rem; width: 140px; box-sizing: border-box;" 
+                           onchange="updateUserDisplayName('${user.email}', this.value)" />
+                </td>
+                <td>
                     <span class="badge ${user.role === 'admin' ? 'badge-danger' : 'badge-primary'}" style="text-transform: capitalize; padding: 4px 8px; border-radius: 4px;">
                         ${user.role === 'admin' ? 'Admin' : 'Student'}
                     </span>
@@ -23154,6 +23572,21 @@ function renderAdminApprovalsTab() {
         });
     }
 }
+
+window.updateUserDisplayName = async function(email, newName) {
+    const user = state.users.find(u => u.email === email);
+    if (!user) return;
+    newName = newName.trim();
+    if (user.displayName === newName) return;
+
+    user.displayName = newName;
+    user.lastUpdated = Date.now();
+
+    // Trigger local state save and cloud upload sync
+    saveStateToStorage();
+    showToast("Name Updated", `Set display name for ${email} to "${newName || email}"`, "success");
+    renderAdminApprovalsTab();
+};
 
 window.approveUserAdmin = async function(email, role = 'user') {
     const btn = event ? event.currentTarget : null;

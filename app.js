@@ -20498,6 +20498,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initAuthFlow();
     initSidebarCollapse();
     initSecurityProtections();
+    initVideoPortal();
     initBackupRestoreFlow();
 
     // Admin Announcements Form bindings
@@ -20565,6 +20566,14 @@ function initAppTheme() {
 // Single Page Application Routing
 function initRouter() {
     window.addEventListener("hashchange", () => {
+        let hash = window.location.hash.substring(1) || "dashboard";
+        
+        // Intercept video portal hashes
+        if (hash.startsWith("video-portal") || hash.startsWith("video-subscribe")) {
+            handleVideoPortalRouting(hash);
+            return;
+        }
+
         if (state.activeQuiz && !state.activeQuiz.isReview) {
             if (confirm("تحذير: مغادرة الصفحة الآن ستنهي اختبارك بدرجة صفر. هل تريد الاستمرار؟")) {
                 submitQuizCheatZero(state.activeQuiz.quizId, state.currentUser.email);
@@ -20592,7 +20601,7 @@ function initRouter() {
             return;
         }
         
-        let hash = window.location.hash.substring(1) || "dashboard";
+        hash = window.location.hash.substring(1) || "dashboard";
         
         // Prevent accessing admin panel if not admin
         if (hash === "admin-panel" && state.currentUser.role !== "admin") {
@@ -25647,3 +25656,1009 @@ window.publishCourseQuiz = async function() {
     
     renderAdminQuizzesTab();
 }
+
+// ================= VIDEO PORTAL IMPLEMENTATION =================
+let vpState = {
+    currentUser: null,       // { email, role: 'admin'|'instructor'|'assistant'|'student', course_id }
+    courses: [],             // hawari_video_courses
+    activeCourse: null,      // active course object in workspace
+    videos: [],              // videos of active course
+    shorts: [],              // short videos of active course
+    subscriptions: [],       // subscription links of active course
+    requests: [],            // subscription requests of active course
+    activeTab: 'videos',     // active tab: 'videos'|'shorts'|'subs'|'settings'
+    activeSubTab: 'links',   // active subtab: 'links'|'requests'
+    studentPlaylistTab: 'videos' // 'videos'|'shorts'
+};
+
+const DB_LOCAL_KEYS = {
+    COURSES: 'hawari_vp_courses',
+    CONTENT: 'hawari_vp_content',
+    SUBSCRIPTIONS: 'hawari_vp_subscriptions',
+    REQUESTS: 'hawari_vp_requests'
+};
+
+function getLocalData(key) {
+    const val = localStorage.getItem(key);
+    return val ? JSON.parse(val) : [];
+}
+
+function saveLocalData(key, data) {
+    localStorage.setItem(key, JSON.stringify(data));
+}
+
+function getVpLocalKey(table) {
+    if (table.includes("courses")) return DB_LOCAL_KEYS.COURSES;
+    if (table.includes("content")) return DB_LOCAL_KEYS.CONTENT;
+    if (table.includes("subscriptions")) return DB_LOCAL_KEYS.SUBSCRIPTIONS;
+    return DB_LOCAL_KEYS.REQUESTS;
+}
+
+// Database query helpers with local emulated storage fallbacks
+async function dbGet(table, queryParams = "") {
+    try {
+        const records = await supabaseRequest(`${table}${queryParams ? "?" + queryParams : ""}`);
+        if (records !== null) return records;
+    } catch (e) {
+        console.warn(`Supabase DB query to ${table} failed, reading local fallback.`, e);
+    }
+    const localKey = getVpLocalKey(table);
+    let localData = getLocalData(localKey);
+    if (queryParams) {
+        const parts = queryParams.split("&");
+        parts.forEach(part => {
+            const eqIdx = part.indexOf("=eq.");
+            if (eqIdx >= 0) {
+                const key = part.substring(0, eqIdx);
+                const val = part.substring(eqIdx + 4);
+                localData = localData.filter(row => String(row[key]) === String(val));
+            }
+        });
+    }
+    return localData;
+}
+
+async function dbPost(table, payload) {
+    let success = false;
+    try {
+        const records = await supabaseRequest(table, {
+            method: "POST",
+            headers: { "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify(payload)
+        });
+        if (records !== null) success = true;
+    } catch (e) {
+        console.warn(`Supabase DB post to ${table} failed, writing local fallback.`, e);
+    }
+    const localKey = getVpLocalKey(table);
+    let localData = getLocalData(localKey);
+    const idKey = payload.id ? 'id' : (payload.email ? 'email' : null);
+    if (idKey) {
+        const idx = localData.findIndex(row => String(row[idKey]) === String(payload[idKey]));
+        if (idx >= 0) {
+            localData[idx] = payload;
+        } else {
+            localData.push(payload);
+        }
+    } else {
+        localData.push(payload);
+    }
+    saveLocalData(localKey, localData);
+    return success;
+}
+
+async function dbDelete(table, idQuery) {
+    let success = false;
+    try {
+        const res = await supabaseRequest(`${table}?${idQuery}`, {
+            method: "DELETE"
+        });
+        if (res !== null) success = true;
+    } catch (e) {
+        console.warn(`Supabase DB delete on ${table} failed, deleting local fallback.`, e);
+    }
+    const localKey = getVpLocalKey(table);
+    let localData = getLocalData(localKey);
+    const parts = idQuery.split("&");
+    parts.forEach(part => {
+        const eqIdx = part.indexOf("=eq.");
+        if (eqIdx >= 0) {
+            const key = part.substring(0, eqIdx);
+            const val = part.substring(eqIdx + 4);
+            localData = localData.filter(row => String(row[key]) !== String(val));
+        }
+    });
+    saveLocalData(localKey, localData);
+    return success;
+}
+
+// Router hook dispatcher for Video Portal hashes
+window.handleVideoPortalRouting = async function(hash) {
+    const selectorPage = document.getElementById("course-selector-page");
+    if (selectorPage) selectorPage.classList.add("hidden");
+    const appLayout = document.getElementById("app-layout");
+    if (appLayout) appLayout.classList.add("hidden");
+    const activeQuizOverlay = document.getElementById("active-quiz-overlay");
+    if (activeQuizOverlay) activeQuizOverlay.classList.add("hidden");
+
+    const vpView = document.getElementById("video-portal-view");
+    vpView.classList.remove("hidden");
+
+    // Clear sub-panels
+    document.getElementById("vp-auth-panel").classList.add("hidden");
+    document.getElementById("vp-subscribe-panel").classList.add("hidden");
+    document.getElementById("vp-admin-panel").classList.add("hidden");
+    document.getElementById("vp-instructor-workspace").classList.add("hidden");
+    document.getElementById("vp-student-workspace").classList.add("hidden");
+
+    if (hash.startsWith("video-subscribe")) {
+        // Parse subscription link ID
+        const subId = hash.includes("sub_id=") ? hash.split("sub_id=")[1] : "";
+        if (!subId) {
+            showToast("Invalid URL", "Subscription ID is missing.", "danger");
+            window.location.hash = "#video-portal";
+            return;
+        }
+
+        const subscriptions = await dbGet("hawari_video_subscriptions", `id=eq.${subId}`);
+        if (subscriptions.length === 0) {
+            showToast("Link Expired", "This subscription link is invalid or has been deleted.", "warning");
+            window.location.hash = "#video-portal";
+            return;
+        }
+
+        const sub = subscriptions[0];
+        const courses = await dbGet("hawari_video_courses", `id=eq.${sub.course_id}`);
+        if (courses.length === 0) {
+            showToast("Course Deleted", "The course associated with this subscription link is deleted.", "danger");
+            window.location.hash = "#video-portal";
+            return;
+        }
+
+        // Show subscription registration form
+        document.getElementById("vp-sub-course-title").innerText = `Subscribe to: ${courses[0].name}`;
+        document.getElementById("vp-sub-price-tag").innerText = `Subscription Price: ${sub.price}`;
+        document.getElementById("vp-subscribe-panel").classList.remove("hidden");
+        
+        // Save targeted sub parameters in registration dataset
+        document.getElementById("vp-subscribe-form").dataset.subId = subId;
+        document.getElementById("vp-subscribe-form").dataset.courseId = sub.course_id;
+
+    } else if (hash === "video-portal") {
+        if (!vpState.currentUser) {
+            document.getElementById("vp-auth-panel").classList.remove("hidden");
+            document.getElementById("vp-user-display").innerText = "";
+        } else {
+            document.getElementById("vp-user-display").innerText = `User: ${vpState.currentUser.email}`;
+            if (vpState.currentUser.role === "admin") {
+                document.getElementById("vp-admin-panel").classList.remove("hidden");
+                renderVpAdminPanel();
+            } else if (vpState.currentUser.role === "instructor" || vpState.currentUser.role === "assistant") {
+                document.getElementById("vp-instructor-workspace").classList.remove("hidden");
+                renderVpInstructorWorkspace();
+            } else if (vpState.currentUser.role === "student") {
+                document.getElementById("vp-student-workspace").classList.remove("hidden");
+                renderVpStudentWorkspace();
+            }
+        }
+    }
+};
+
+window.initVideoPortal = function() {
+    // 1. Exit Portal handler
+    document.getElementById("btn-vp-exit").onclick = () => {
+        // Log out portal user and redirect to landing page
+        vpState.currentUser = null;
+        vpState.activeCourse = null;
+        stopWatermark();
+        const player = document.getElementById("vp-main-video-player");
+        if (player) player.pause();
+
+        document.getElementById("video-portal-view").classList.add("hidden");
+        window.location.hash = "";
+        const selectorPage = document.getElementById("course-selector-page");
+        if (selectorPage) selectorPage.classList.remove("hidden");
+    };
+
+    // 2. Auth Flow handler
+    document.getElementById("btn-vp-login-submit").onclick = async () => {
+        const email = document.getElementById("vp-auth-email").value.trim().toLowerCase();
+        const password = document.getElementById("vp-auth-password").value;
+
+        if (!email || !password) {
+            showToast("Required Fields", "Please enter both email and password.", "warning");
+            return;
+        }
+
+        // A. Admin Check
+        const devEmails = ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"];
+        if (devEmails.includes(email) && password === "mustafa172004") {
+            vpState.currentUser = { email, role: "admin" };
+            showToast("Welcome Admin", "Logged in to Video Portal Administrator dashboard.", "success");
+            window.location.hash = "#video-portal";
+            window.handleVideoPortalRouting("video-portal");
+            return;
+        }
+
+        // B. Course Instructor / Assistant Check
+        const courses = await dbGet("hawari_video_courses");
+        const instCourse = courses.find(c => c.instructor_email === email && c.instructor_password === password);
+        if (instCourse) {
+            vpState.currentUser = { email, role: "instructor", course_id: instCourse.id };
+            vpState.activeCourse = instCourse;
+            showToast("Welcome Instructor", `Logged in to manage ${instCourse.name}.`, "success");
+            window.location.hash = "#video-portal";
+            window.handleVideoPortalRouting("video-portal");
+            return;
+        }
+
+        const asstCourse = courses.find(c => c.assistant_email === email && c.assistant_password === password);
+        if (asstCourse) {
+            vpState.currentUser = { email, role: "assistant", course_id: asstCourse.id };
+            vpState.activeCourse = asstCourse;
+            showToast("Welcome Assistant", `Logged in to assist in managing ${asstCourse.name}.`, "success");
+            window.location.hash = "#video-portal";
+            window.handleVideoPortalRouting("video-portal");
+            return;
+        }
+
+        // C. Student Request Check
+        const requests = await dbGet("hawari_video_requests", `email=eq.${email}`);
+        if (requests.length > 0) {
+            const req = requests[0];
+            if (req.password_hash === sha256Sync(password)) {
+                if (req.status === "blocked") {
+                    showToast("Blocked Account", "Your access to this course has been blocked.", "danger");
+                    return;
+                }
+                if (req.status !== "approved") {
+                    showToast("Pending Approval", "Your registration request is still waiting for approval.", "warning");
+                    return;
+                }
+
+                // Check Course Expiration date before device fingerprint logic
+                const targCourse = courses.find(c => c.id === req.course_id);
+                if (targCourse && new Date(targCourse.end_date).getTime() < Date.now()) {
+                    showToast("Course Expired", "The access period for this course has ended.", "danger");
+                    return;
+                }
+
+                // Single Device fingerprint check
+                let localToken = localStorage.getItem(`vp_device_${req.course_id}`);
+                if (!localToken) {
+                    localToken = "dev_" + Math.random().toString(36).substring(2) + Date.now();
+                }
+
+                if (req.device_token && req.device_token !== localToken) {
+                    showToast("Device Mismatch", "Only 1 device is allowed. This account is registered on another device.", "danger");
+                    return;
+                }
+
+                // If device_token was empty, update it in DB
+                if (!req.device_token) {
+                    req.device_token = localToken;
+                    await dbPost("hawari_video_requests", req);
+                }
+                localStorage.setItem(`vp_device_${req.course_id}`, localToken);
+
+                vpState.currentUser = { email, role: "student", course_id: req.course_id, name: req.name, student_code: req.student_code, phone: req.phone };
+                vpState.activeCourse = targCourse;
+
+                showToast("Welcome Student", `Logged in to ${targCourse.name}.`, "success");
+                window.location.hash = "#video-portal";
+                window.handleVideoPortalRouting("video-portal");
+                return;
+            }
+        }
+
+        showToast("Invalid Credentials", "Incorrect email or password.", "danger");
+    };
+
+    // 3. Subscription registration form submit handler
+    document.getElementById("vp-subscribe-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const name = document.getElementById("vp-sub-name").value.trim();
+        const email = document.getElementById("vp-sub-email").value.trim().toLowerCase();
+        const phone = document.getElementById("vp-sub-phone").value.trim();
+        const code = document.getElementById("vp-sub-code").value.trim();
+        const password = document.getElementById("vp-sub-password").value;
+
+        if (!email.endsWith("@gmail.com")) {
+            showToast("Gmail Only", "Registration is restricted to Gmail accounts only.", "warning");
+            return;
+        }
+
+        // Verify if they are already registered for this course
+        const existing = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${form.dataset.courseId}`);
+        if (existing.length > 0) {
+            showToast("Duplicate Request", "You have already registered for this course.", "warning");
+            return;
+        }
+
+        const payload = {
+            id: `req_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+            course_id: form.dataset.courseId,
+            name: name,
+            email: email,
+            phone: phone,
+            student_code: code,
+            password_hash: sha256Sync(password),
+            status: "pending",
+            device_token: "",
+            created_at: new Date().toLocaleDateString()
+        };
+
+        await dbPost("hawari_video_requests", payload);
+        showToast("Success", "Registration submitted. Waiting for admin approval.", "success");
+        form.reset();
+        window.location.hash = "#video-portal";
+    };
+
+    // 4. Admin Course Form submission handler
+    document.getElementById("vp-admin-course-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const name = document.getElementById("vp-course-name").value.trim();
+        const end = document.getElementById("vp-course-end-date").value;
+        const instEmail = document.getElementById("vp-course-instructor").value.trim().toLowerCase();
+        const instPass = document.getElementById("vp-course-password").value;
+
+        const payload = {
+            id: `c_${Date.now()}`,
+            name: name,
+            end_date: end,
+            instructor_email: instEmail,
+            instructor_password: instPass,
+            assistant_email: "",
+            assistant_password: ""
+        };
+
+        await dbPost("hawari_video_courses", payload);
+        showToast("Course Created", `Track "${name}" has been successfully added.`, "success");
+        e.target.reset();
+        document.getElementById("vp-admin-create-course-box").classList.add("hidden");
+        renderVpAdminPanel();
+    };
+
+    document.getElementById("btn-vp-show-add-course").onclick = () => {
+        document.getElementById("vp-admin-create-course-box").classList.toggle("hidden");
+    };
+    document.getElementById("btn-vp-cancel-add-course").onclick = () => {
+        document.getElementById("vp-admin-create-course-box").classList.add("hidden");
+    };
+
+    // 5. Workspace Sidebar view navigation
+    const wsNavs = ['videos', 'shorts', 'subs', 'settings'];
+    wsNavs.forEach(tab => {
+        const el = document.getElementById(`vp-nav-${tab}`);
+        if (el) {
+            el.onclick = (e) => {
+                e.preventDefault();
+                wsNavs.forEach(t => {
+                    const navLink = document.getElementById(`vp-nav-${t}`);
+                    if (navLink) navLink.classList.remove("active");
+                    const pane = document.getElementById(`vp-pane-${t}`);
+                    if (pane) pane.classList.add("hidden");
+                });
+                el.classList.add("active");
+                document.getElementById(`vp-pane-${tab}`).classList.remove("hidden");
+                vpState.activeTab = tab;
+            };
+        }
+    });
+
+    // 6. Subscriptions Tabs (Generate Link / Requests) navigation
+    document.getElementById("btn-vp-subtab-links").onclick = () => {
+        document.getElementById("btn-vp-subtab-links").classList.add("active");
+        document.getElementById("btn-vp-subtab-links").style.borderColor = "var(--primary-color)";
+        document.getElementById("btn-vp-subtab-requests").classList.remove("active");
+        document.getElementById("btn-vp-subtab-requests").style.borderColor = "transparent";
+        document.getElementById("vp-subpane-links").classList.remove("hidden");
+        document.getElementById("vp-subpane-requests").classList.add("hidden");
+        vpState.activeSubTab = "links";
+    };
+
+    document.getElementById("btn-vp-subtab-requests").onclick = () => {
+        document.getElementById("btn-vp-subtab-requests").classList.add("active");
+        document.getElementById("btn-vp-subtab-requests").style.borderColor = "var(--primary-color)";
+        document.getElementById("btn-vp-subtab-links").classList.remove("active");
+        document.getElementById("btn-vp-subtab-links").style.borderColor = "transparent";
+        document.getElementById("vp-subpane-requests").classList.remove("hidden");
+        document.getElementById("vp-subpane-links").classList.add("hidden");
+        vpState.activeSubTab = "requests";
+        renderVpRequestsTable();
+    };
+
+    // 7. Regular Video Link uploading
+    document.getElementById("vp-add-video-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const title = document.getElementById("vp-video-title").value.trim();
+        const url = document.getElementById("vp-video-url").value.trim();
+        const desc = document.getElementById("vp-video-desc").value.trim();
+
+        const payload = {
+            id: `v_${Date.now()}`,
+            course_id: vpState.activeCourse.id,
+            type: "regular",
+            title: title,
+            description: desc,
+            video_url: url,
+            created_at: new Date().toLocaleDateString()
+        };
+
+        await dbPost("hawari_video_content", payload);
+        showToast("Video Added", "Regular course video uploaded successfully.", "success");
+        e.target.reset();
+        document.getElementById("vp-add-video-box").classList.add("hidden");
+        loadWorkspaceContent();
+    };
+
+    // 8. Short Video Link uploading
+    document.getElementById("vp-add-short-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const title = document.getElementById("vp-short-title").value.trim();
+        const url = document.getElementById("vp-short-url").value.trim();
+
+        const payload = {
+            id: `s_${Date.now()}`,
+            course_id: vpState.activeCourse.id,
+            type: "short",
+            title: title,
+            description: "",
+            video_url: url,
+            created_at: new Date().toLocaleDateString()
+        };
+
+        await dbPost("hawari_video_content", payload);
+        showToast("Short Added", "Short video reel uploaded successfully.", "success");
+        e.target.reset();
+        document.getElementById("vp-add-short-box").classList.add("hidden");
+        loadWorkspaceContent();
+    };
+
+    // 9. Subscription Link Generator
+    document.getElementById("vp-generate-link-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const name = document.getElementById("vp-link-name").value.trim();
+        const price = document.getElementById("vp-link-price").value.trim();
+
+        const payload = {
+            id: `sub_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+            course_id: vpState.activeCourse.id,
+            name: name,
+            price: price
+        };
+
+        await dbPost("hawari_video_subscriptions", payload);
+        showToast("Link Generated", "Registration URL has been added to active list.", "success");
+        e.target.reset();
+        loadWorkspaceContent();
+    };
+
+    // 10. Assistant setup
+    document.getElementById("vp-invite-assistant-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const email = document.getElementById("vp-assistant-email").value.trim().toLowerCase();
+        const password = document.getElementById("vp-assistant-password").value;
+
+        vpState.activeCourse.assistant_email = email;
+        vpState.activeCourse.assistant_password = password;
+
+        await dbPost("hawari_video_courses", vpState.activeCourse);
+        showToast("Assistant Added", "Assistant login credentials successfully saved.", "success");
+        e.target.reset();
+        renderWorkspaceSettings();
+    };
+
+    // 11. Manual Student registration
+    document.getElementById("vp-manual-student-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const name = document.getElementById("vp-manual-name").value.trim();
+        const email = document.getElementById("vp-manual-email").value.trim().toLowerCase();
+        const phone = document.getElementById("vp-manual-phone").value.trim();
+        const code = document.getElementById("vp-manual-code").value.trim();
+        const password = document.getElementById("vp-manual-password").value;
+
+        // Check if student exists
+        const existing = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
+        if (existing.length > 0) {
+            showToast("Duplicate Student", "This student account is already registered for this course.", "warning");
+            return;
+        }
+
+        const payload = {
+            id: `req_${Date.now()}`,
+            course_id: vpState.activeCourse.id,
+            name: name,
+            email: email,
+            phone: phone,
+            student_code: code,
+            password_hash: sha256Sync(password),
+            status: "approved",
+            device_token: "",
+            created_at: new Date().toLocaleDateString()
+        };
+
+        await dbPost("hawari_video_requests", payload);
+        showToast("Student Activated", "Account registered and immediately approved.", "success");
+        e.target.reset();
+        
+        // Refresh requests table if in requests tab
+        if (vpState.activeSubTab === "requests") {
+            renderVpRequestsTable();
+        }
+    };
+
+    // 12. Requests table filters and search bindings
+    document.getElementById("vp-requests-search").oninput = renderVpRequestsTable;
+    document.getElementById("vp-requests-filter").onchange = renderVpRequestsTable;
+
+    // 13. Student workspace playlist tab toggling
+    document.getElementById("btn-vp-stud-tab-videos").onclick = () => {
+        document.getElementById("btn-vp-stud-tab-videos").className = "btn btn-primary";
+        document.getElementById("btn-vp-stud-tab-shorts").className = "btn btn-secondary";
+        vpState.studentPlaylistTab = "videos";
+        renderStudentPlaylist();
+    };
+    document.getElementById("btn-vp-stud-tab-shorts").onclick = () => {
+        document.getElementById("btn-vp-stud-tab-shorts").className = "btn btn-primary";
+        document.getElementById("btn-vp-stud-tab-videos").className = "btn btn-secondary";
+        vpState.studentPlaylistTab = "shorts";
+        renderStudentPlaylist();
+    };
+
+    // 14. Custom Video Player Controls
+    const video = document.getElementById("vp-main-video-player");
+    const playBtn = document.getElementById("btn-vp-play-pause");
+    const progressFill = document.getElementById("vp-progress-bar-fill");
+    const progressContainer = document.getElementById("vp-progress-bar-container");
+    const timeDisplay = document.getElementById("vp-player-time-display");
+
+    playBtn.onclick = () => {
+        if (video.paused) {
+            video.play();
+            playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`;
+        } else {
+            video.pause();
+            playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`;
+        }
+    };
+
+    video.addEventListener("timeupdate", () => {
+        if (!isNaN(video.duration)) {
+            const pct = (video.currentTime / video.duration) * 100;
+            progressFill.style.width = pct + "%";
+            
+            // Format time display
+            const formatTime = (time) => {
+                const mins = Math.floor(time / 60);
+                const secs = Math.floor(time % 60);
+                return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+            };
+            timeDisplay.innerText = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+        }
+    });
+
+    progressContainer.onclick = (e) => {
+        if (!isNaN(video.duration)) {
+            const rect = progressContainer.getBoundingClientRect();
+            const posPct = (e.clientX - rect.left) / rect.width;
+            video.currentTime = posPct * video.duration;
+        }
+    };
+
+    // Anti-Piracy: Disable context menu right clicks inside player wrapper completely
+    document.getElementById("vp-player-wrapper").addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        return false;
+    });
+};
+
+// --- VP Admin Dashboard Rendering ---
+async function renderVpAdminPanel() {
+    const grid = document.getElementById("vp-admin-courses-grid");
+    grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px;"><i class="fa-solid fa-spinner fa-spin" style="font-size: 2rem; color: var(--primary-color);"></i><p style="margin-top: 10px;">Loading courses...</p></div>`;
+
+    const courses = await dbGet("hawari_video_courses");
+    const requests = await dbGet("hawari_video_requests");
+    grid.innerHTML = "";
+
+    if (courses.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px; background: rgba(255,255,255,0.01); border-radius: 12px; border: 1px dashed var(--border-color);"><i class="fa-solid fa-folder-open" style="font-size: 2rem; color: var(--text-secondary); margin-bottom: 12px;"></i><h4 style="color: var(--text-secondary);">No Video Courses Found</h4><p style="font-size: 0.85rem; margin-top: 5px;">Create a new course using the creation form above.</p></div>`;
+        return;
+    }
+
+    courses.forEach(course => {
+        const approvedCount = requests.filter(r => r.course_id === course.id && r.status === "approved").length;
+        const pendingCount = requests.filter(r => r.course_id === course.id && r.status === "pending").length;
+
+        const card = document.createElement("div");
+        card.className = "vp-course-card";
+        card.innerHTML = `
+            <div>
+                <h3 style="font-size: 1.3rem; font-weight: 700; color: var(--text-primary); margin-bottom: 8px;">${sanitizeHTML(course.name)}</h3>
+                <span style="font-size: 0.8rem; background: var(--border-color); color: var(--text-secondary); padding: 3px 8px; border-radius: 4px; font-weight: 600;">ID: ${course.id}</span>
+                
+                <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem;">
+                    <div style="display: flex; justify-content: space-between;"><span class="text-muted">Instructor:</span> <strong style="color: var(--text-primary);">${sanitizeHTML(course.instructor_email)}</strong></div>
+                    <div style="display: flex; justify-content: space-between;"><span class="text-muted">Expiration:</span> <strong style="color: var(--text-primary);">${course.end_date}</strong></div>
+                    <div style="display: flex; justify-content: space-between;"><span class="text-muted">Active Users:</span> <strong style="color: var(--color-success);">${approvedCount} Approved</strong></div>
+                    ${pendingCount > 0 ? `<div style="display: flex; justify-content: space-between;"><span class="text-muted">Pending Requests:</span> <strong style="color: var(--color-warning);">${pendingCount} Pending</strong></div>` : ''}
+                </div>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+                <button class="btn btn-primary" style="flex: 2; font-size: 0.82rem; padding: 10px;" onclick="enterVpWorkspace('${course.id}')">
+                    <i class="fa-solid fa-arrow-right-to-bracket"></i> Enter Workspace
+                </button>
+                <button class="btn btn-danger" style="flex: 1; font-size: 0.82rem; padding: 10px;" onclick="deleteVpCourse('${course.id}')" title="Delete Course Completely">
+                    <i class="fa-solid fa-trash-can"></i> Delete
+                </button>
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
+
+window.enterVpWorkspace = async function(courseId) {
+    const courses = await dbGet("hawari_video_courses", `id=eq.${courseId}`);
+    if (courses.length > 0) {
+        vpState.activeCourse = courses[0];
+        
+        // Instructors and assistant sidebar setup
+        document.getElementById("vp-nav-admin-only-settings").classList.remove("hidden");
+        document.getElementById("vp-admin-panel").classList.add("hidden");
+        document.getElementById("vp-instructor-workspace").classList.remove("hidden");
+        
+        // Go to default tab
+        document.getElementById("vp-nav-videos").click();
+        loadWorkspaceContent();
+    }
+};
+
+window.deleteVpCourse = async function(courseId) {
+    if (!confirm("Caution: This will permanently delete this course, all its content videos, and all its active student registration records. Are you sure you want to continue?")) return;
+    
+    // Wipe course details
+    await dbDelete("hawari_video_courses", `id=eq.${courseId}`);
+    // Wipe course contents
+    await dbDelete("hawari_video_content", `course_id=eq.${courseId}`);
+    // Wipe course registration requests
+    await dbDelete("hawari_video_requests", `course_id=eq.${courseId}`);
+    // Wipe course subscriptions
+    await dbDelete("hawari_video_subscriptions", `course_id=eq.${courseId}`);
+
+    showToast("Course Deleted", "Course track and all nested records wiped.", "success");
+    renderVpAdminPanel();
+};
+
+// --- VP Instructor Workspace Rendering ---
+async function loadWorkspaceContent() {
+    const course = vpState.activeCourse;
+    document.getElementById("vp-active-course-name").innerText = course.name;
+    document.getElementById("vp-active-course-expiry").innerText = `Expiration Date: ${course.end_date}`;
+
+    // Hide Settings tab for assistant roles
+    if (vpState.currentUser.role === "assistant") {
+        document.getElementById("vp-nav-admin-only-settings").classList.add("hidden");
+    } else {
+        document.getElementById("vp-nav-admin-only-settings").classList.remove("hidden");
+    }
+
+    const content = await dbGet("hawari_video_content", `course_id=eq.${course.id}`);
+    vpState.videos = content.filter(i => i.type === "regular");
+    vpState.shorts = content.filter(i => i.type === "short");
+
+    renderInstructorVideos();
+    renderInstructorShorts();
+    renderWorkspaceSubscriptions();
+    renderWorkspaceSettings();
+}
+
+function renderInstructorVideos() {
+    const grid = document.getElementById("vp-instructor-videos-grid");
+    grid.innerHTML = "";
+
+    if (vpState.videos.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; background: rgba(255,255,255,0.01); border-radius: 10px; border: 1px dashed var(--border-color);"><p class="text-muted">No regular videos uploaded yet.</p></div>`;
+        return;
+    }
+
+    vpState.videos.forEach(vid => {
+        const item = document.createElement("div");
+        item.style.cssText = "background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; justify-content: space-between;";
+        item.innerHTML = `
+            <div>
+                <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">${sanitizeHTML(vid.title)}</h4>
+                <p class="text-muted" style="font-size: 0.8rem; line-height: 1.4; height: 60px; overflow: hidden; margin-bottom: 12px;">${sanitizeHTML(vid.description || "No description provided.")}</p>
+                <div style="font-size: 0.72rem; color: var(--primary-color); word-break: break-all; margin-bottom: 12px;"><i class="fa-solid fa-link"></i> ${sanitizeHTML(vid.video_url)}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 10px; margin-top: 5px;">
+                <span class="text-muted" style="font-size: 0.75rem;">Uploaded: ${vid.created_at}</span>
+                <button class="btn btn-danger btn-sm" onclick="deleteVideoContent('${vid.id}')" style="padding: 5px 10px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button>
+            </div>
+        `;
+        grid.appendChild(item);
+    });
+}
+
+function renderInstructorShorts() {
+    const grid = document.getElementById("vp-instructor-shorts-grid");
+    grid.innerHTML = "";
+
+    if (vpState.shorts.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; background: rgba(255,255,255,0.01); border-radius: 10px; border: 1px dashed var(--border-color);"><p class="text-muted">No short videos uploaded yet.</p></div>`;
+        return;
+    }
+
+    vpState.shorts.forEach(sh => {
+        const item = document.createElement("div");
+        item.style.cssText = "background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; justify-content: space-between;";
+        item.innerHTML = `
+            <div>
+                <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 12px;">${sanitizeHTML(sh.title)}</h4>
+                <div style="font-size: 0.72rem; color: var(--primary-color); word-break: break-all; margin-bottom: 15px;"><i class="fa-solid fa-link"></i> ${sanitizeHTML(sh.video_url)}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                <span class="text-muted" style="font-size: 0.75rem;">Uploaded: ${sh.created_at}</span>
+                <button class="btn btn-danger btn-sm" onclick="deleteVideoContent('${sh.id}')" style="padding: 5px 10px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button>
+            </div>
+        `;
+        grid.appendChild(item);
+    });
+}
+
+window.deleteVideoContent = async function(contentId) {
+    if (!confirm("Are you sure you want to delete this video link?")) return;
+    await dbDelete("hawari_video_content", `id=eq.${contentId}`);
+    showToast("Content Deleted", "Video link has been successfully removed.", "success");
+    loadWorkspaceContent();
+};
+
+async function renderWorkspaceSubscriptions() {
+    const list = await dbGet("hawari_video_subscriptions", `course_id=eq.${vpState.activeCourse.id}`);
+    vpState.subscriptions = list;
+
+    const tbody = document.getElementById("vp-links-table-body");
+    tbody.innerHTML = "";
+
+    if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 30px; color: var(--text-secondary);">No subscription registration links generated.</td></tr>`;
+        return;
+    }
+
+    const host = `${window.location.origin}${window.location.pathname}`;
+
+    list.forEach(sub => {
+        const regLink = `${host}#/video-subscribe?sub_id=${sub.id}`;
+        
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td><strong>${sanitizeHTML(sub.name)}</strong></td>
+            <td><span style="font-weight: 600; color: var(--primary-color);">${sanitizeHTML(sub.price)}</span></td>
+            <td>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="text" readonly value="${regLink}" style="padding: 6px; font-size: 0.78rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); width: 280px;">
+                    <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${regLink}'); showToast('Copied', 'Registration URL copied to clipboard.', 'success');"><i class="fa-solid fa-copy"></i> Copy</button>
+                </div>
+            </td>
+            <td class="text-right">
+                <button class="btn btn-danger btn-sm" onclick="deleteSubLink('${sub.id}')" style="padding: 6px 12px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash-can"></i> Delete</button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+window.deleteSubLink = async function(subId) {
+    if (!confirm("Are you sure you want to delete this registration link? Students will no longer be able to use it to sign up.")) return;
+    await dbDelete("hawari_video_subscriptions", `id=eq.${subId}`);
+    showToast("Link Deleted", "Subscription registration link removed.", "success");
+    loadWorkspaceContent();
+};
+
+async function renderVpRequestsTable() {
+    const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}`);
+    vpState.requests = list;
+
+    const tbody = document.getElementById("vp-requests-table-body");
+    tbody.innerHTML = "";
+
+    const searchVal = document.getElementById("vp-requests-search").value.trim().toLowerCase();
+    const filterVal = document.getElementById("vp-requests-filter").value;
+
+    let filtered = list;
+
+    // Filter by search matching Email or Phone
+    if (searchVal) {
+        filtered = filtered.filter(r => r.email.includes(searchVal) || r.phone.includes(searchVal) || r.name.toLowerCase().includes(searchVal));
+    }
+
+    // Filter by status dropdown selection
+    if (filterVal !== "all") {
+        filtered = filtered.filter(r => r.status === filterVal);
+    }
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="padding: 30px; color: var(--text-secondary);">No student requests match criteria.</td></tr>`;
+        return;
+    }
+
+    filtered.forEach(req => {
+        let statusBadgeClass = "badge-pending";
+        if (req.status === "approved") statusBadgeClass = "badge-active";
+        if (req.status === "blocked") statusBadgeClass = "badge-blocked";
+
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td><strong>${sanitizeHTML(req.name)}</strong></td>
+            <td>${sanitizeHTML(req.email)}</td>
+            <td>${sanitizeHTML(req.phone)}</td>
+            <td><code style="background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">${sanitizeHTML(req.student_code)}</code></td>
+            <td><span class="badge ${statusBadgeClass}">${req.status.toUpperCase()}</span></td>
+            <td>
+                ${req.device_token ? `
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-size:0.75rem; color:var(--color-success); font-weight:600;"><i class="fa-solid fa-mobile-screen"></i> Locked</span>
+                        <button class="btn btn-secondary btn-sm" onclick="resetDeviceFingerprint('${req.email}')" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px;">Reset</button>
+                    </div>
+                ` : '<span class="text-muted" style="font-size:0.75rem;">Not Activated</span>'}
+            </td>
+            <td class="text-right">
+                <div style="display:flex; justify-content:flex-end; gap:6px;">
+                    ${req.status !== "approved" ? `
+                        <button class="btn btn-success btn-sm" onclick="updateRequestStatus('${req.email}', 'approved')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
+                            <i class="fa-solid fa-check"></i> Approve
+                        </button>
+                    ` : ''}
+                    ${req.status !== "blocked" ? `
+                        <button class="btn btn-danger btn-sm" onclick="updateRequestStatus('${req.email}', 'blocked')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
+                            <i class="fa-solid fa-ban"></i> Block
+                        </button>
+                    ` : ''}
+                </div>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+window.updateRequestStatus = async function(email, newStatus) {
+    const requests = await dbGet("hawari_video_requests", `email=eq.${email}`);
+    if (requests.length > 0) {
+        const req = requests[0];
+        req.status = newStatus;
+        
+        // If blocked, also delete the device fingerprint to fully secure it
+        if (newStatus === "blocked") {
+            req.device_token = "";
+        }
+
+        await dbPost("hawari_video_requests", req);
+        showToast("Request Updated", `Student request status updated to ${newStatus.toUpperCase()}.`, "success");
+        renderVpRequestsTable();
+    }
+};
+
+window.resetDeviceFingerprint = async function(email) {
+    const requests = await dbGet("hawari_video_requests", `email=eq.${email}`);
+    if (requests.length > 0) {
+        const req = requests[0];
+        req.device_token = "";
+        await dbPost("hawari_video_requests", req);
+        showToast("Device Reset", "Student device lock has been cleared. Next login will register a new device.", "success");
+        renderVpRequestsTable();
+    }
+};
+
+function renderWorkspaceSettings() {
+    const course = vpState.activeCourse;
+    const box = document.getElementById("vp-assistant-status-box");
+    const label = document.getElementById("vp-assistant-email-lbl");
+
+    if (course.assistant_email) {
+        box.classList.remove("hidden");
+        label.innerText = course.assistant_email;
+    } else {
+        box.classList.add("hidden");
+        label.innerText = "";
+    }
+}
+
+// --- VP Student Workspace Rendering ---
+async function renderVpStudentWorkspace() {
+    document.getElementById("vp-active-course-name").innerText = vpState.activeCourse.name;
+    document.getElementById("vp-active-course-expiry").innerText = `Ends: ${vpState.activeCourse.end_date}`;
+    
+    // Hide administrative setting options for students
+    document.getElementById("vp-nav-admin-only-settings").classList.add("hidden");
+
+    // Load regular and shorts playlists
+    const content = await dbGet("hawari_video_content", `course_id=eq.${vpState.activeCourse.id}`);
+    vpState.videos = content.filter(i => i.type === "regular");
+    vpState.shorts = content.filter(i => i.type === "short");
+
+    // Select first tab
+    document.getElementById("btn-vp-stud-tab-videos").click();
+}
+
+function renderStudentPlaylist() {
+    const container = document.getElementById("vp-student-playlist");
+    container.innerHTML = "";
+
+    const playlist = vpState.studentPlaylistTab === "videos" ? vpState.videos : vpState.shorts;
+
+    if (playlist.length === 0) {
+        container.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">No videos available in this section.</div>`;
+        return;
+    }
+
+    playlist.forEach(vid => {
+        const item = document.createElement("div");
+        item.className = "vp-playlist-item";
+        item.innerHTML = `
+            <i class="fa-solid fa-play" style="font-size: 0.8rem; color: var(--text-secondary);"></i>
+            <div style="flex-grow: 1;">
+                <h4 style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); margin: 0; line-height: 1.3;">${sanitizeHTML(vid.title)}</h4>
+                ${vid.description ? `<p style="font-size: 0.72rem; color: var(--text-secondary); margin: 3px 0 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;">${sanitizeHTML(vid.description)}</p>` : ''}
+            </div>
+        `;
+        
+        item.onclick = () => {
+            const playlistItems = container.querySelectorAll(".vp-playlist-item");
+            playlistItems.forEach(i => i.classList.remove("active"));
+            item.classList.add("active");
+
+            playStudentVideo(vid);
+        };
+
+        container.appendChild(item);
+    });
+}
+
+function playStudentVideo(vid) {
+    const video = document.getElementById("vp-main-video-player");
+    video.src = vid.video_url;
+    video.load();
+
+    document.getElementById("vp-student-video-title").innerText = vid.title;
+    document.getElementById("vp-student-video-desc").innerText = vid.description || "No description provided.";
+
+    // Trigger Play
+    const playBtn = document.getElementById("btn-vp-play-pause");
+    video.play().then(() => {
+        playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`;
+    }).catch(err => {
+        console.warn("Autoplay block. Wait for user gesture.", err);
+        playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`;
+    });
+
+    // Start Dynamic Anti-Piracy Watermark
+    const stuCode = vpState.currentUser.student_code || "STUDENT";
+    const phone = vpState.currentUser.phone || "01000000000";
+    startWatermark(stuCode, phone);
+}
+
+let watermarkTimer = null;
+function startWatermark(studentCode, phone) {
+    const watermarkEl = document.getElementById("vp-moving-watermark");
+    if (!watermarkEl) return;
+    watermarkEl.innerText = `${studentCode} | ${phone}`;
+    watermarkEl.classList.add("vp-watermark-active");
+    
+    if (watermarkTimer) clearInterval(watermarkTimer);
+    watermarkTimer = setInterval(() => {
+        const x = Math.floor(Math.random() * 70) + 5; // 5% to 75%
+        const y = Math.floor(Math.random() * 70) + 5; // 5% to 75%
+        watermarkEl.style.top = y + "%";
+        watermarkEl.style.left = x + "%";
+    }, 4000);
+}
+
+function stopWatermark() {
+    if (watermarkTimer) {
+        clearInterval(watermarkTimer);
+        watermarkTimer = null;
+    }
+}
+

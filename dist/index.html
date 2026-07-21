@@ -17,8 +17,8 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-90eb53c3.js"></script>
-  <link rel="stylesheet" href="/assets/index-0cb6cc25.css">
+  <script type="module" crossorigin src="/assets/index-eb6c8443.js"></script>
+  <link rel="stylesheet" href="/assets/index-c33eb33b.css">
 </head>
 <body class="light-theme">
     
@@ -74,6 +74,12 @@
                 <button id="btn-landing-login" class="btn btn-primary btn-lg"><i class="fa-solid fa-right-to-bracket"></i> Get Started / Log In</button>
                 <button id="btn-landing-register" class="btn btn-secondary btn-lg"><i class="fa-solid fa-user-plus"></i> Create Account / Register</button>
                 <button id="btn-landing-back-selector" class="btn btn-secondary btn-outline btn-lg" style="margin-top: 10px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;"><i class="fa-solid fa-house"></i> Back to Main Portal</button>
+            </div>
+            
+            <div style="margin-top: 20px; text-align: center;">
+                <a href="#video-portal" style="color: var(--primary-color); font-weight: 600; font-size: 0.95rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; transition: all 0.2s ease;">
+                    <i class="fa-solid fa-circle-play"></i> Access Videos Portal
+                </a>
             </div>
         </div>
 
@@ -1391,6 +1397,469 @@
                 </div>
             </aside>
         </div>
+    </div>
+
+    <!-- ================= VIDEO PORTAL SYSTEM ================= -->
+    <div id="video-portal-view" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-primary); z-index: 3000; overflow-y: auto; font-family: 'Inter', sans-serif;">
+        
+        <!-- VP Header / Navbar -->
+        <header class="test-header" style="height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 2px solid var(--border-color); background-color: var(--bg-sidebar); position: sticky; top: 0; z-index: 10;">
+            <div class="test-title-section">
+                <i class="fa-solid fa-play logo-icon" style="color: var(--primary-color); font-size: 1.4rem;"></i>
+                <div>
+                    <h2 id="vp-header-title" style="font-size: 1.2rem; font-weight: 700; margin: 0;">Hawari Video Engine</h2>
+                    <span class="test-mode-badge" id="vp-header-badge" style="background-color: var(--primary-color-soft); color: var(--primary-color); font-size: 0.7rem; font-weight: 600; padding: 2px 6px; border-radius: 4px; text-transform: uppercase;">Portal</span>
+                </div>
+            </div>
+            <div id="vp-header-actions" style="display: flex; align-items: center; gap: 15px;">
+                <span id="vp-user-display" class="text-muted" style="font-size: 0.9rem; font-weight: 500;"></span>
+                <button class="btn btn-secondary" id="btn-vp-exit" style="padding: 8px 16px; border-radius: 8px;">
+                    <i class="fa-solid fa-right-from-bracket"></i> Exit Portal
+                </button>
+            </div>
+        </header>
+
+        <!-- 1. VP Login / Auth Panel -->
+        <div id="vp-auth-panel" class="hidden" style="max-width: 480px; margin: 80px auto; padding: 30px; background: rgba(30, 41, 59, 0.45); border: 1px solid var(--border-color); border-radius: 20px; box-shadow: var(--shadow-lg); backdrop-filter: blur(10px);">
+            <div style="text-align: center; margin-bottom: 30px;">
+                <div style="width: 60px; height: 60px; border-radius: 50%; background: var(--primary-color-soft); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+                    <i class="fa-solid fa-lock" style="font-size: 1.8rem; color: var(--primary-color);"></i>
+                </div>
+                <h3 style="font-size: 1.6rem; font-weight: 700; color: var(--text-primary);">Video Portal Login</h3>
+                <p class="text-muted" style="font-size: 0.9rem; margin-top: 5px;">Access custom video courses and active subscriptions</p>
+            </div>
+            
+            <div class="input-group" style="margin-bottom: 20px;">
+                <label for="vp-auth-email" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Email Address</label>
+                <input type="email" id="vp-auth-email" placeholder="example@gmail.com" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+            </div>
+
+            <div class="input-group" style="margin-bottom: 25px;">
+                <label for="vp-auth-password" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Password</label>
+                <input type="password" id="vp-auth-password" placeholder="••••••••" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+            </div>
+
+            <button class="btn btn-primary btn-block" id="btn-vp-login-submit" style="padding: 12px; font-weight: 600; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                Log In <i class="fa-solid fa-arrow-right"></i>
+            </button>
+        </div>
+
+        <!-- 2. VP Subscription Form Panel -->
+        <div id="vp-subscribe-panel" class="hidden" style="max-width: 520px; margin: 60px auto; padding: 30px; background: rgba(30, 41, 59, 0.45); border: 1px solid var(--border-color); border-radius: 20px; box-shadow: var(--shadow-lg); backdrop-filter: blur(10px);">
+            <div style="text-align: center; margin-bottom: 25px;">
+                <div style="width: 60px; height: 60px; border-radius: 50%; background: var(--color-success-soft); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+                    <i class="fa-solid fa-signature" style="font-size: 1.8rem; color: var(--color-success);"></i>
+                </div>
+                <h3 style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary);" id="vp-sub-course-title">Course Registration</h3>
+                <p id="vp-sub-price-tag" style="font-weight: 600; color: var(--primary-color); margin-top: 5px;"></p>
+            </div>
+
+            <form id="vp-subscribe-form" onsubmit="event.preventDefault();">
+                <div class="input-group" style="margin-bottom: 16px;">
+                    <label for="vp-sub-name" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Full Name</label>
+                    <input type="text" id="vp-sub-name" placeholder="John Doe" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
+
+                <div class="input-group" style="margin-bottom: 16px;">
+                    <label for="vp-sub-email" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Email Address (Gmail)</label>
+                    <input type="email" id="vp-sub-email" placeholder="example@gmail.com" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
+
+                <div class="input-group" style="margin-bottom: 16px;">
+                    <label for="vp-sub-phone" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Phone Number (WhatsApp)</label>
+                    <input type="tel" id="vp-sub-phone" placeholder="e.g. 0123456789" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
+
+                <div class="input-group" style="margin-bottom: 16px;">
+                    <label for="vp-sub-code" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Student Code / ID</label>
+                    <input type="text" id="vp-sub-code" placeholder="e.g. STU123" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
+
+                <div class="input-group" style="margin-bottom: 20px;">
+                    <label for="vp-sub-password" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Password (To Login Later)</label>
+                    <input type="password" id="vp-sub-password" placeholder="••••••••" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
+
+                <button type="submit" class="btn btn-success btn-block" id="btn-vp-sub-submit" style="padding: 12px; font-weight: 600; border-radius: 8px;">
+                    Submit Registration Request <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </form>
+        </div>
+
+        <!-- 3. VP Admin Dashboard View -->
+        <div id="vp-admin-panel" class="hidden" style="max-width: 1100px; margin: 40px auto; padding: 0 20px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px;">
+                <div>
+                    <h2 style="font-size: 1.8rem; font-weight: 800; color: var(--text-primary);">Video Courses Administration</h2>
+                    <p class="text-muted" style="margin-top: 5px;">Manage global courses, set durations, assign instructors, and review global activations</p>
+                </div>
+                <button class="btn btn-primary" id="btn-vp-show-add-course" style="border-radius: 8px;">
+                    <i class="fa-solid fa-circle-plus"></i> Add New Course
+                </button>
+            </div>
+
+            <!-- Course Creation Box (Collapsible) -->
+            <div id="vp-admin-create-course-box" class="hidden" style="background: rgba(30, 41, 59, 0.35); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px; margin-bottom: 30px;">
+                <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-plus" style="color: var(--primary-color);"></i> Create Video Course Track
+                </h3>
+                <form id="vp-admin-course-form" onsubmit="event.preventDefault();" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; align-items: flex-end;">
+                    <div class="input-group">
+                        <label for="vp-course-name" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Course Title</label>
+                        <input type="text" id="vp-course-name" required placeholder="e.g. Infection Control Course" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+                    <div class="input-group">
+                        <label for="vp-course-end-date" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">End Date (Expiration)</label>
+                        <input type="date" id="vp-course-end-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+                    <div class="input-group">
+                        <label for="vp-course-instructor" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Instructor Email</label>
+                        <input type="email" id="vp-course-instructor" required placeholder="instructor@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+                    <div class="input-group">
+                        <label for="vp-course-password" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Instructor Password</label>
+                        <input type="password" id="vp-course-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button type="submit" class="btn btn-primary" style="flex: 1; padding: 10px; border-radius: 8px;">Create</button>
+                        <button type="button" class="btn btn-secondary" id="btn-vp-cancel-add-course" style="padding: 10px; border-radius: 8px;">Cancel</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Active Course List (Admin Dashboard Grid) -->
+            <div id="vp-admin-courses-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px;">
+                <!-- Dynamically populated vertical rectangular course cards -->
+            </div>
+        </div>
+
+        <!-- 4. VP Instructor Workspace Layout -->
+        <div id="vp-instructor-workspace" class="hidden" style="display: flex; min-height: calc(100vh - 70px);">
+            
+            <!-- Workspace Sidebar -->
+            <aside class="sidebar" style="width: 250px; background-color: var(--bg-sidebar); border-right: 1px solid var(--border-color); flex-shrink: 0;">
+                <div style="padding: 20px; border-bottom: 1px solid var(--border-color);">
+                    <h3 id="vp-active-course-name" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); line-height: 1.4;">Active Course</h3>
+                    <p id="vp-active-course-expiry" class="text-muted" style="font-size: 0.78rem; margin-top: 5px;"></p>
+                </div>
+                <ul class="sidebar-nav" style="padding: 15px; list-style: none;">
+                    <li>
+                        <a href="#" class="nav-item active" id="vp-nav-videos" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
+                            <i class="fa-solid fa-video" style="width: 20px;"></i> Regular Videos
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" class="nav-item" id="vp-nav-shorts" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
+                            <i class="fa-solid fa-clapperboard" style="width: 20px;"></i> Short Videos
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" class="nav-item" id="vp-nav-subs" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
+                            <i class="fa-solid fa-users" style="width: 20px;"></i> Subscriptions
+                        </a>
+                    </li>
+                    <li id="vp-nav-admin-only-settings">
+                        <a href="#" class="nav-item" id="vp-nav-settings" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
+                            <i class="fa-solid fa-user-gear" style="width: 20px;"></i> Team & Manual Add
+                        </a>
+                    </li>
+                </ul>
+            </aside>
+
+            <!-- Workspace Main Content Panel -->
+            <main class="content-area" style="flex-grow: 1; padding: 30px; background-color: var(--bg-primary); overflow-y: auto;">
+                
+                <!-- Tab Pane A: Regular Videos -->
+                <div id="vp-pane-videos" class="vp-tab-pane">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px;">
+                        <div>
+                            <h2 style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">Regular Video Lessons</h2>
+                            <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Upload standard length course modules and lecture videos</p>
+                        </div>
+                        <button class="btn btn-primary" onclick="document.getElementById('vp-add-video-box').classList.toggle('hidden')" style="border-radius: 8px;">
+                            <i class="fa-solid fa-plus"></i> Add Video Link
+                        </button>
+                    </div>
+
+                    <!-- Add Video Box -->
+                    <div id="vp-add-video-box" class="hidden" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 25px;">
+                        <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 15px;">Add New Regular Video Link</h3>
+                        <form id="vp-add-video-form" onsubmit="event.preventDefault();" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div class="input-group">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video Title</label>
+                                <input type="text" id="vp-video-title" required placeholder="e.g. Introduction to Virology" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                            </div>
+                            <div class="input-group">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video URL (Direct MP4, YouTube Embed, or Vimeo Link)</label>
+                                <input type="url" id="vp-video-url" required placeholder="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                            </div>
+                            <div class="input-group" style="grid-column: span 2;">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video Description</label>
+                                <textarea id="vp-video-desc" rows="2" placeholder="Provide a brief summary of the contents covered in this video lesson..." style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none; font-family: inherit; resize: vertical;"></textarea>
+                            </div>
+                            <div style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px;">
+                                <button type="button" class="btn btn-secondary" onclick="document.getElementById('vp-add-video-box').classList.add('hidden')" style="border-radius: 8px;">Cancel</button>
+                                <button type="submit" class="btn btn-primary" style="border-radius: 8px; padding: 10px 24px;">Upload Link</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div id="vp-instructor-videos-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">
+                        <!-- Regular videos list -->
+                    </div>
+                </div>
+
+                <!-- Tab Pane B: Short Videos -->
+                <div id="vp-pane-shorts" class="vp-tab-pane hidden">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px;">
+                        <div>
+                            <h2 style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">Short Reels & Summaries</h2>
+                            <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Upload short clips, tips, and key exam point breakdowns</p>
+                        </div>
+                        <button class="btn btn-primary" onclick="document.getElementById('vp-add-short-box').classList.toggle('hidden')" style="border-radius: 8px;">
+                            <i class="fa-solid fa-plus"></i> Add Short Link
+                        </button>
+                    </div>
+
+                    <!-- Add Short Video Box -->
+                    <div id="vp-add-short-box" class="hidden" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 25px;">
+                        <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 15px;">Add New Short Video</h3>
+                        <form id="vp-add-short-form" onsubmit="event.preventDefault();" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div class="input-group">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Short Title</label>
+                                <input type="text" id="vp-short-title" required placeholder="e.g. Tip: Meningitis Diagnostics" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                            </div>
+                            <div class="input-group">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video URL</label>
+                                <input type="url" id="vp-short-url" required placeholder="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                            </div>
+                            <div style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px;">
+                                <button type="button" class="btn btn-secondary" onclick="document.getElementById('vp-add-short-box').classList.add('hidden')" style="border-radius: 8px;">Cancel</button>
+                                <button type="submit" class="btn btn-primary" style="border-radius: 8px; padding: 10px 24px;">Upload Short</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div id="vp-instructor-shorts-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">
+                        <!-- Short videos list -->
+                    </div>
+                </div>
+
+                <!-- Tab Pane C: Subscriptions (Generate Link & Requests) -->
+                <div id="vp-pane-subs" class="vp-tab-pane hidden">
+                    
+                    <!-- Sub-tabs navigation headers -->
+                    <div style="display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 25px; gap: 24px;">
+                        <button class="btn btn-link nav-link active" id="btn-vp-subtab-links" style="font-size: 1.05rem; font-weight: 600; padding: 12px 0; color: var(--text-primary); border-bottom: 3px solid var(--primary-color); border-radius: 0;">
+                            <i class="fa-solid fa-link"></i> Generate Subscription Link
+                        </button>
+                        <button class="btn btn-link nav-link" id="btn-vp-subtab-requests" style="font-size: 1.05rem; font-weight: 600; padding: 12px 0; color: var(--text-secondary); border-bottom: 3px solid transparent; border-radius: 0;">
+                            <i class="fa-solid fa-envelope-open-text"></i> Registrations & Requests
+                        </button>
+                    </div>
+
+                    <!-- Sub-tab 1: Generate Link Pane -->
+                    <div id="vp-subpane-links">
+                        <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 30px;">
+                            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 15px;">Create Course Subscription Link</h3>
+                            <form id="vp-generate-link-form" onsubmit="event.preventDefault();" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end;">
+                                <div class="input-group" style="flex: 2; min-width: 200px;">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Link Label / Name</label>
+                                    <input type="text" id="vp-link-name" required placeholder="e.g. Basic Subscription / Limited Promo" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group" style="flex: 1; min-width: 100px;">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Subscription Price (EGP/USD)</label>
+                                    <input type="text" id="vp-link-price" required placeholder="e.g. 350 EGP" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <button type="submit" class="btn btn-primary" style="padding: 10px 24px; border-radius: 8px; font-weight: 600;">
+                                    <i class="fa-solid fa-share-nodes"></i> Generate URL
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Active Generated Links table -->
+                        <div class="grid-card">
+                            <h3 style="margin-bottom: 15px;">Active Generated Links</h3>
+                            <div class="table-responsive">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Link Name / Label</th>
+                                            <th>Price</th>
+                                            <th>Registration URL</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="vp-links-table-body">
+                                        <!-- Active registration links rows dynamically generated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-tab 2: Requests / Approvals Pane -->
+                    <div id="vp-subpane-requests" class="hidden">
+                        <div style="display: flex; flex-wrap: wrap; gap: 15px; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <!-- Filters and Search -->
+                            <div style="display: flex; gap: 12px; flex: 1; min-width: 280px;">
+                                <div class="search-input-wrapper" style="flex: 2;">
+                                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                    <input type="text" id="vp-requests-search" placeholder="Search by email or phone...">
+                                </div>
+                                <div class="select-wrapper" style="flex: 1; min-width: 130px;">
+                                    <select id="vp-requests-filter" style="width: 100%; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                        <option value="all">All Requests</option>
+                                        <option value="pending">Pending</option>
+                                        <option value="approved">Approved</option>
+                                        <option value="blocked">Blocked</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid-card">
+                            <div class="table-responsive">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Student Name</th>
+                                            <th>Email Address</th>
+                                            <th>Phone Number</th>
+                                            <th>Student Code</th>
+                                            <th>Status</th>
+                                            <th>Device Lock</th>
+                                            <th class="text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="vp-requests-table-body">
+                                        <!-- Dynamic student request rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Pane D: Team Settings & Manual Add (Admin / Instructor view) -->
+                <div id="vp-pane-settings" class="vp-tab-pane hidden">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;">
+                        
+                        <!-- Block 1: Invite Assistant User -->
+                        <div class="grid-card">
+                            <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                                <i class="fa-solid fa-user-plus" style="color: var(--primary-color);"></i> Invite assistant User
+                            </h3>
+                            <p class="text-muted" style="font-size: 0.85rem; margin-bottom: 20px;">Authorize exactly 1 additional user (assistant) who can manage course uploads, generate URLs, and approve students.</p>
+                            <form id="vp-invite-assistant-form" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; gap: 12px;">
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Email</label>
+                                    <input type="email" id="vp-assistant-email" required placeholder="assistant@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Password</label>
+                                    <input type="password" id="vp-assistant-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <button type="submit" class="btn btn-primary" style="margin-top: 10px; padding: 10px; border-radius: 8px;">
+                                    Save Assistant Credentials
+                                </button>
+                            </form>
+                            <div id="vp-assistant-status-box" style="margin-top: 20px; padding: 12px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px dashed var(--border-color);" class="hidden">
+                                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);">Active Assistant:</span>
+                                <span id="vp-assistant-email-lbl" style="font-size: 0.85rem; color: var(--primary-color); font-weight: 600; float: right;"></span>
+                            </div>
+                        </div>
+
+                        <!-- Block 2: Manually Add Student -->
+                        <div class="grid-card">
+                            <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                                <i class="fa-solid fa-user-check" style="color: var(--color-success);"></i> Manually Add Student
+                            </h3>
+                            <p class="text-muted" style="font-size: 0.85rem; margin-bottom: 20px;">Bypass link registration. Manually register and immediately approve a student inside this course.</p>
+                            <form id="vp-manual-student-form" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; gap: 12px;">
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Name</label>
+                                    <input type="text" id="vp-manual-name" required placeholder="Student Full Name" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Email</label>
+                                    <input type="email" id="vp-manual-email" required placeholder="student@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Phone Number</label>
+                                    <input type="tel" id="vp-manual-phone" required placeholder="01012345678" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Code</label>
+                                    <input type="text" id="vp-manual-code" required placeholder="e.g. STU444" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Initial Password</label>
+                                    <input type="password" id="vp-manual-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <button type="submit" class="btn btn-success" style="margin-top: 10px; padding: 10px; border-radius: 8px;">
+                                    Add & Activate Student
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- 5. VP Student Workspace Layout -->
+        <div id="vp-student-workspace" class="hidden" style="display: flex; min-height: calc(100vh - 70px);">
+            <!-- Sidebar: Videos list -->
+            <aside class="sidebar" style="width: 280px; background-color: var(--bg-sidebar); border-right: 1px solid var(--border-color); flex-shrink: 0; display: flex; flex-direction: column;">
+                <div style="padding: 15px; border-bottom: 1px solid var(--border-color); display: flex; gap: 8px; background: rgba(0,0,0,0.05);">
+                    <button class="btn btn-primary" id="btn-vp-stud-tab-videos" style="flex: 1; padding: 8px; border-radius: 6px; font-size: 0.82rem;">Regular (Vids)</button>
+                    <button class="btn btn-secondary" id="btn-vp-stud-tab-shorts" style="flex: 1; padding: 8px; border-radius: 6px; font-size: 0.82rem;">Shorts (Clips)</button>
+                </div>
+                <!-- Videos Playlist Dynamic container -->
+                <div id="vp-student-playlist" style="flex-grow: 1; overflow-y: auto; padding: 10px;">
+                    <!-- List of clickable video items -->
+                </div>
+            </aside>
+
+            <!-- Video Player Workspace Area -->
+            <main style="flex-grow: 1; background: #070b13; padding: 30px; display: flex; flex-direction: column; justify-content: center; align-items: center; position: relative;">
+                
+                <!-- Main video player widget container -->
+                <div id="vp-player-wrapper" style="width: 100%; max-width: 860px; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid var(--border-color); position: relative; box-shadow: 0 10px 40px rgba(0,0,0,0.5);">
+                    
+                    <!-- Secured Custom Watermarked Video Player -->
+                    <video id="vp-main-video-player" style="width: 100%; height: 100%;" preload="auto">
+                        <!-- Video src set dynamically -->
+                    </video>
+
+                    <!-- Overlay invisible cover to block right-clicks / cursor saving -->
+                    <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 2; pointer-events: auto; background: transparent;" id="vp-video-overlay-cover"></div>
+
+                    <!-- Custom Floating Moving Anti-Piracy Watermark -->
+                    <div id="vp-moving-watermark" style="position: absolute; top: 20px; left: 20px; z-index: 3; color: rgba(255, 255, 255, 0.15); font-family: 'Inter', sans-serif; font-size: 1.1rem; font-weight: 700; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); pointer-events: none; transition: all 1s ease-in-out; white-space: nowrap; user-select: none;">
+                        STU-CODE / PHONE
+                    </div>
+
+                    <!-- Custom Player Controls (Hides standard browser controls to block raw downloads) -->
+                    <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 50px; background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.85) 100%); z-index: 4; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; pointer-events: auto;" id="vp-player-controls-container">
+                        <div style="display: flex; align-items: center; gap: 15px; width: 100%;">
+                            <button id="btn-vp-play-pause" style="background: none; border: none; color: #fff; cursor: pointer; font-size: 1.1rem;"><i class="fa-solid fa-play"></i></button>
+                            <span style="color: #fff; font-size: 0.78rem;" id="vp-player-time-display">0:00 / 0:00</span>
+                            <!-- Progress Bar -->
+                            <div style="flex-grow: 1; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; position: relative; cursor: pointer;" id="vp-progress-bar-container">
+                                <div style="position: absolute; left: 0; top: 0; height: 100%; background: var(--primary-color); width: 0%; border-radius: 3px;" id="vp-progress-bar-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="vp-student-video-details" style="width: 100%; max-width: 860px; margin-top: 20px; color: var(--text-primary);">
+                    <h2 id="vp-student-video-title" style="font-size: 1.35rem; font-weight: 700;">No video selected</h2>
+                    <p id="vp-student-video-desc" class="text-muted" style="margin-top: 8px; font-size: 0.92rem; line-height: 1.5;"></p>
+                </div>
+            </main>
+        </div>
+
     </div>
 
     <!-- Main javascript file -->

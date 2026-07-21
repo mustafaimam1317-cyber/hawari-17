@@ -25963,9 +25963,15 @@ window.initVideoPortal = function() {
                 }
 
                 // Single Device fingerprint check
-                let localToken = localStorage.getItem(`vp_device_${req.course_id}`);
-                if (!localToken) {
-                    localToken = "dev_" + Math.random().toString(36).substring(2) + Date.now();
+                let localToken = "";
+                if (window.AndroidBridge && typeof window.AndroidBridge.getDeviceToken === "function") {
+                    localToken = window.AndroidBridge.getDeviceToken();
+                } else {
+                    localToken = localStorage.getItem(`vp_device_${req.course_id}`);
+                    if (!localToken) {
+                        localToken = "dev_" + Math.random().toString(36).substring(2) + Date.now();
+                        localStorage.setItem(`vp_device_${req.course_id}`, localToken);
+                    }
                 }
 
                 if (req.device_token && req.device_token !== localToken) {
@@ -25978,7 +25984,10 @@ window.initVideoPortal = function() {
                     req.device_token = localToken;
                     await dbPost("hawari_video_requests", req);
                 }
-                localStorage.setItem(`vp_device_${req.course_id}`, localToken);
+                if (localToken && !localToken.startsWith("dev_")) {
+                    // Cache the local token
+                    localStorage.setItem(`vp_device_${req.course_id}`, localToken);
+                }
 
                 vpState.currentUser = { email, role: "student", course_id: req.course_id, name: req.name, student_code: req.student_code, phone: req.phone };
                 vpState.activeCourse = targCourse;

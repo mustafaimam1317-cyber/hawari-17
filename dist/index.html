@@ -17,7 +17,7 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-bcc0146e.js"></script>
+  <script type="module" crossorigin src="/assets/index-fd4224f1.js"></script>
   <link rel="stylesheet" href="/assets/index-84fd4988.css">
 </head>
 <body class="light-theme">
@@ -1853,26 +1853,39 @@
                             </form>
                         </div>
 
-                        <!-- Col 2: Active student users management -->
+                        <!-- Col 2: Course Users management -->
                         <div class="grid-card" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px;">
                             <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-                                <i class="fa-solid fa-users-gear" style="color: var(--color-success);"></i> Registered Students
+                                <i class="fa-solid fa-users-gear" style="color: var(--color-success);"></i> Manage Course Users (Credentials)
                             </h3>
-                            <div style="overflow-x: auto; max-height: 400px;">
-                                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;">
-                                    <thead>
-                                        <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-secondary);">
-                                            <th style="padding: 10px 8px;">Name</th>
-                                            <th style="padding: 10px 8px;">Email</th>
-                                            <th style="padding: 10px 8px;">Code/Phone</th>
-                                            <th style="padding: 10px 8px; text-align: center;">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="vp-admin-students-table-body">
-                                        <!-- Dynamic student rows -->
-                                    </tbody>
-                                </table>
-                            </div>
+                            <form id="vp-course-users-form" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; gap: 12px;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div class="input-group">
+                                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Instructor Email</label>
+                                        <input type="email" id="vp-edit-inst-email" required placeholder="instructor@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                    <div class="input-group">
+                                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Instructor Password</label>
+                                        <input type="password" id="vp-edit-inst-pass" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                </div>
+
+                                <div style="border-top: 1px dashed var(--border-color); margin: 10px 0; padding-top: 10px;"></div>
+
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div class="input-group">
+                                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Email (Optional)</label>
+                                        <input type="email" id="vp-edit-asst-email" placeholder="assistant@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                    <div class="input-group">
+                                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Password (Optional)</label>
+                                        <input type="password" id="vp-edit-asst-pass" placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                </div>
+                                <button type="submit" class="btn btn-success" style="margin-top: 10px; padding: 11px; border-radius: 8px;">
+                                    Update Course Users Credentials
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>

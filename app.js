@@ -26136,6 +26136,30 @@ window.initVideoPortal = function() {
         renderVpAdminControlPanel();
     };
 
+    // Admin Control Course Users Credentials Form
+    document.getElementById("vp-course-users-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const instEmail = document.getElementById("vp-edit-inst-email").value.trim().toLowerCase();
+        const instPass = document.getElementById("vp-edit-inst-pass").value;
+        const asstEmail = document.getElementById("vp-edit-asst-email").value.trim().toLowerCase();
+        const asstPass = document.getElementById("vp-edit-asst-pass").value;
+
+        if (!vpState.activeCourse) return;
+
+        const payload = {
+            ...vpState.activeCourse,
+            instructor_email: instEmail,
+            instructor_password: instPass,
+            assistant_email: asstEmail,
+            assistant_password: asstPass
+        };
+
+        await dbPost("hawari_video_courses", payload);
+        vpState.activeCourse = payload;
+        showToast("Credentials Updated", "Course manager (instructor & assistant) accounts updated.", "success");
+        renderVpAdminControlPanel();
+    };
+
     // 6. Subscriptions Tabs (Generate Link / Requests) navigation
     document.getElementById("btn-vp-subtab-links").onclick = () => {
         document.getElementById("btn-vp-subtab-links").classList.add("active");
@@ -26787,41 +26811,12 @@ async function renderVpAdminControlPanel() {
     document.getElementById("vp-edit-start-date").value = vpState.activeCourse.start_date || "";
     document.getElementById("vp-edit-end-date").value = vpState.activeCourse.end_date || "";
 
-    // Fetch approved requests (active student users)
-    const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}&status=eq.approved`);
-    const tbody = document.getElementById("vp-admin-students-table-body");
-    tbody.innerHTML = "";
-
-    if (list.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 20px; color: var(--text-secondary);">No active students registered.</td></tr>`;
-        return;
-    }
-
-    list.forEach(stu => {
-        const row = document.createElement("tr");
-        row.innerHTML = `
-            <td style="padding: 10px 8px;"><strong>${sanitizeHTML(stu.name)}</strong></td>
-            <td style="padding: 10px 8px;">${sanitizeHTML(stu.email)}</td>
-            <td style="padding: 10px 8px;">
-                <span style="display:block; font-size: 0.72rem; color: var(--text-secondary);">${sanitizeHTML(stu.phone)}</span>
-                <span style="font-size: 0.72rem; font-family: monospace; color: var(--primary-color);">${sanitizeHTML(stu.student_code || "N/A")}</span>
-            </td>
-            <td style="padding: 10px 8px; text-align: center;">
-                <button class="btn btn-danger btn-xs" onclick="revokeVpStudent('${stu.id}', '${stu.name.replace(/'/g, "\\'")}')">
-                    <i class="fa-solid fa-user-minus"></i> Revoke / Delete
-                </button>
-            </td>
-        `;
-        tbody.appendChild(row);
-    });
+    // Fill credentials form values
+    document.getElementById("vp-edit-inst-email").value = vpState.activeCourse.instructor_email || "";
+    document.getElementById("vp-edit-inst-pass").value = vpState.activeCourse.instructor_password || "";
+    document.getElementById("vp-edit-asst-email").value = vpState.activeCourse.assistant_email || "";
+    document.getElementById("vp-edit-asst-pass").value = vpState.activeCourse.assistant_password || "";
 }
-
-window.revokeVpStudent = async function(id, name) {
-    if (!confirm(`Are you sure you want to revoke and delete access for student: ${name}?`)) return;
-    await dbDelete("hawari_video_requests", `id=eq.${id}`);
-    showToast("Access Revoked", `Deleted student: ${name}`, "info");
-    renderVpAdminControlPanel();
-};
 
 async function renderVpRequestsTable() {
     const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}`);

@@ -25807,39 +25807,56 @@ window.handleVideoPortalRouting = async function(hash) {
     document.getElementById("vp-student-workspace").classList.add("hidden");
 
     if (hash.startsWith("video-subscribe")) {
-        // Parse subscription link ID
-        const subId = hash.includes("sub_id=") ? hash.split("sub_id=")[1] : "";
-        if (!subId) {
-            showToast("Invalid URL", "Subscription ID is missing.", "danger");
+        const courseId = hash.includes("course_id=") ? hash.split("course_id=")[1] : "";
+        if (!courseId) {
+            showToast("Invalid URL", "Course ID is missing.", "danger");
             window.location.hash = "#video-portal";
             return;
         }
 
-        const subscriptions = await dbGet("hawari_video_subscriptions", `id=eq.${subId}`);
-        if (subscriptions.length === 0) {
-            showToast("Link Expired", "This subscription link is invalid or has been deleted.", "warning");
-            window.location.hash = "#video-portal";
+        // Check if student is blocked locally on this browser
+        if (localStorage.getItem(`vp_registered_${courseId}`) === "true") {
+            document.getElementById("vp-subscribe-panel").innerHTML = `
+                <div style="text-align: center; padding: 40px 20px;">
+                    <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(239, 68, 68, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+                        <i class="fa-solid fa-ban" style="font-size: 2.2rem; color: var(--color-danger);"></i>
+                    </div>
+                    <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--color-danger);">Access Blocked</h3>
+                    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5;">
+                        You have already submitted a registration request for this course. Access to this page is permanently deactivated.
+                    </p>
+                </div>
+            `;
+            document.getElementById("vp-subscribe-panel").classList.remove("hidden");
+            const header = document.getElementById("vp-header");
+            if (header) header.classList.add("hidden");
             return;
         }
 
-        const sub = subscriptions[0];
-        const courses = await dbGet("hawari_video_courses", `id=eq.${sub.course_id}`);
+        const courses = await dbGet("hawari_video_courses", `id=eq.${courseId}`);
         if (courses.length === 0) {
-            showToast("Course Deleted", "The course associated with this subscription link is deleted.", "danger");
+            showToast("Course Deleted", "The course associated with this link is deleted.", "danger");
             window.location.hash = "#video-portal";
             return;
         }
+
+        // Hide main header to keep registration link isolated
+        const header = document.getElementById("vp-header");
+        if (header) header.classList.add("hidden");
 
         // Show subscription registration form
         document.getElementById("vp-sub-course-title").innerText = `Subscribe to: ${courses[0].name}`;
-        document.getElementById("vp-sub-price-tag").innerText = `Subscription Price: ${sub.price}`;
+        document.getElementById("vp-sub-price-tag").innerText = "Fill out details to request subscription access";
         document.getElementById("vp-subscribe-panel").classList.remove("hidden");
         
-        // Save targeted sub parameters in registration dataset
-        document.getElementById("vp-subscribe-form").dataset.subId = subId;
-        document.getElementById("vp-subscribe-form").dataset.courseId = sub.course_id;
+        // Save targeted parameter in registration dataset
+        document.getElementById("vp-subscribe-form").dataset.courseId = courseId;
 
     } else if (hash === "video-portal") {
+        // Restore header visibility
+        const header = document.getElementById("vp-header");
+        if (header) header.classList.remove("hidden");
+
         if (!vpState.currentUser) {
             document.getElementById("vp-auth-panel").classList.remove("hidden");
             document.getElementById("vp-user-display").innerText = "";
@@ -25994,7 +26011,11 @@ window.initVideoPortal = function() {
         // Verify if they are already registered for this course
         const existing = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${form.dataset.courseId}`);
         if (existing.length > 0) {
+            localStorage.setItem(`vp_registered_${form.dataset.courseId}`, "true");
             showToast("Duplicate Request", "You have already registered for this course.", "warning");
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
             return;
         }
 
@@ -26004,7 +26025,7 @@ window.initVideoPortal = function() {
             name: name,
             email: email,
             phone: phone,
-            student_code: code,
+            student_code: code || "", // Optional!
             password_hash: sha256Sync(password),
             status: "pending",
             device_token: "",
@@ -26012,9 +26033,21 @@ window.initVideoPortal = function() {
         };
 
         await dbPost("hawari_video_requests", payload);
+        localStorage.setItem(`vp_registered_${form.dataset.courseId}`, "true");
         showToast("Success", "Registration submitted. Waiting for admin approval.", "success");
-        form.reset();
-        window.location.hash = "#video-portal";
+        
+        // Deactivate page immediately by showing success block screen
+        document.getElementById("vp-subscribe-panel").innerHTML = `
+            <div style="text-align: center; padding: 40px 20px;">
+                <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(16, 185, 129, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+                    <i class="fa-solid fa-circle-check" style="font-size: 2.2rem; color: var(--color-success);"></i>
+                </div>
+                <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--color-success);">Submission Successful</h3>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5;">
+                    Your subscription request has been received. This page is now deactivated. If you attempt to access it again, you will be blocked.
+                </p>
+            </div>
+        `;
     };
 
     // 4. Admin Course Form submission handler
@@ -26052,7 +26085,7 @@ window.initVideoPortal = function() {
     };
 
     // 5. Workspace Sidebar view navigation
-    const wsNavs = ['videos', 'shorts', 'subs', 'settings'];
+    const wsNavs = ['videos', 'shorts', 'subs', 'settings', 'admin'];
     wsNavs.forEach(tab => {
         const el = document.getElementById(`vp-nav-${tab}`);
         if (el) {
@@ -26067,9 +26100,41 @@ window.initVideoPortal = function() {
                 el.classList.add("active");
                 document.getElementById(`vp-pane-${tab}`).classList.remove("hidden");
                 vpState.activeTab = tab;
+                if (tab === "admin") {
+                    renderVpAdminControlPanel();
+                }
             };
         }
     });
+
+    // Copy Registration Link button
+    document.getElementById("btn-copy-course-reg-url").onclick = () => {
+        const urlInput = document.getElementById("vp-course-reg-url-display");
+        urlInput.select();
+        urlInput.setSelectionRange(0, 99999);
+        navigator.clipboard.writeText(urlInput.value);
+        showToast("Copied!", "Registration link copied to clipboard.", "success");
+    };
+
+    // Admin Control Expiration Bounds Form
+    document.getElementById("vp-course-bounds-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const start = document.getElementById("vp-edit-start-date").value;
+        const end = document.getElementById("vp-edit-end-date").value;
+
+        if (!vpState.activeCourse) return;
+
+        const payload = {
+            ...vpState.activeCourse,
+            start_date: start,
+            end_date: end
+        };
+
+        await dbPost("hawari_video_courses", payload);
+        vpState.activeCourse = payload;
+        showToast("Boundaries Updated", "Course start and expiration dates saved successfully.", "success");
+        renderVpAdminControlPanel();
+    };
 
     // 6. Subscriptions Tabs (Generate Link / Requests) navigation
     document.getElementById("btn-vp-subtab-links").onclick = () => {
@@ -26406,6 +26471,17 @@ window.enterVpWorkspace = async function(courseId) {
     if (courses.length > 0) {
         vpState.activeCourse = courses[0];
         
+        // Show superadmin tab if current user role is 'admin'
+        if (vpState.currentUser.role === "admin") {
+            document.getElementById("vp-nav-superadmin-control").classList.remove("hidden");
+        } else {
+            document.getElementById("vp-nav-superadmin-control").classList.add("hidden");
+        }
+
+        // Set course registration URL
+        const regUrl = `${window.location.origin}${window.location.pathname}#/video-subscribe?course_id=${courseId}`;
+        document.getElementById("vp-course-reg-url-display").value = regUrl;
+
         // Instructors and assistant sidebar setup
         document.getElementById("vp-nav-admin-only-settings").classList.remove("hidden");
         document.getElementById("vp-admin-panel").classList.add("hidden");
@@ -26702,6 +26778,49 @@ window.deleteSubLink = async function(subId) {
     await dbDelete("hawari_video_subscriptions", `id=eq.${subId}`);
     showToast("Link Deleted", "Subscription registration link removed.", "success");
     loadWorkspaceContent();
+};
+
+async function renderVpAdminControlPanel() {
+    if (!vpState.activeCourse) return;
+
+    // Fill form dates
+    document.getElementById("vp-edit-start-date").value = vpState.activeCourse.start_date || "";
+    document.getElementById("vp-edit-end-date").value = vpState.activeCourse.end_date || "";
+
+    // Fetch approved requests (active student users)
+    const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}&status=eq.approved`);
+    const tbody = document.getElementById("vp-admin-students-table-body");
+    tbody.innerHTML = "";
+
+    if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="padding: 20px; color: var(--text-secondary);">No active students registered.</td></tr>`;
+        return;
+    }
+
+    list.forEach(stu => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td style="padding: 10px 8px;"><strong>${sanitizeHTML(stu.name)}</strong></td>
+            <td style="padding: 10px 8px;">${sanitizeHTML(stu.email)}</td>
+            <td style="padding: 10px 8px;">
+                <span style="display:block; font-size: 0.72rem; color: var(--text-secondary);">${sanitizeHTML(stu.phone)}</span>
+                <span style="font-size: 0.72rem; font-family: monospace; color: var(--primary-color);">${sanitizeHTML(stu.student_code || "N/A")}</span>
+            </td>
+            <td style="padding: 10px 8px; text-align: center;">
+                <button class="btn btn-danger btn-xs" onclick="revokeVpStudent('${stu.id}', '${stu.name.replace(/'/g, "\\'")}')">
+                    <i class="fa-solid fa-user-minus"></i> Revoke / Delete
+                </button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+window.revokeVpStudent = async function(id, name) {
+    if (!confirm(`Are you sure you want to revoke and delete access for student: ${name}?`)) return;
+    await dbDelete("hawari_video_requests", `id=eq.${id}`);
+    showToast("Access Revoked", `Deleted student: ${name}`, "info");
+    renderVpAdminControlPanel();
 };
 
 async function renderVpRequestsTable() {

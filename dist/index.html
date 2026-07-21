@@ -17,7 +17,7 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-696da838.js"></script>
+  <script type="module" crossorigin src="/assets/index-bcc0146e.js"></script>
   <link rel="stylesheet" href="/assets/index-84fd4988.css">
 </head>
 <body class="light-theme">
@@ -1477,8 +1477,8 @@
                 </div>
 
                 <div class="input-group" style="margin-bottom: 16px;">
-                    <label for="vp-sub-code" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Student Code / ID</label>
-                    <input type="text" id="vp-sub-code" placeholder="e.g. STU123" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    <label for="vp-sub-code" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Student Code / ID (Optional)</label>
+                    <input type="text" id="vp-sub-code" placeholder="e.g. STU123" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                 </div>
 
                 <div class="input-group" style="margin-bottom: 20px;">
@@ -1571,6 +1571,11 @@
                     <li id="vp-nav-admin-only-settings">
                         <a href="#" class="nav-item" id="vp-nav-settings" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
                             <i class="fa-solid fa-user-gear" style="width: 20px;"></i> Team & Manual Add
+                        </a>
+                    </li>
+                    <li id="vp-nav-superadmin-control" class="hidden">
+                        <a href="#" class="nav-item" id="vp-nav-admin" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
+                            <i class="fa-solid fa-screwdriver-wrench" style="width: 20px;"></i> Admin Control
                         </a>
                     </li>
                 </ul>
@@ -1690,42 +1695,23 @@
                         </button>
                     </div>
 
-                    <!-- Sub-tab 1: Generate Link Pane -->
+                    <!-- Sub-tab 1: Copy Registration Link -->
                     <div id="vp-subpane-links">
-                        <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 30px;">
-                            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 15px;">Create Course Subscription Link</h3>
-                            <form id="vp-generate-link-form" onsubmit="event.preventDefault();" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end;">
-                                <div class="input-group" style="flex: 2; min-width: 200px;">
-                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Link Label / Name</label>
-                                    <input type="text" id="vp-link-name" required placeholder="e.g. Basic Subscription / Limited Promo" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                <div class="input-group" style="flex: 1; min-width: 100px;">
-                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Subscription Price (EGP/USD)</label>
-                                    <input type="text" id="vp-link-price" required placeholder="e.g. 350 EGP" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                <button type="submit" class="btn btn-primary" style="padding: 10px 24px; border-radius: 8px; font-weight: 600;">
-                                    <i class="fa-solid fa-share-nodes"></i> Generate URL
+                        <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 16px; padding: 30px; margin-bottom: 30px; text-align: center;">
+                            <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+                                <i class="fa-solid fa-share-nodes" style="font-size: 1.6rem; color: var(--primary-color);"></i>
+                            </div>
+                            <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">Course Invitation Link</h3>
+                            <p class="text-muted" style="font-size: 0.88rem; max-width: 500px; margin: 0 auto 20px auto; line-height: 1.5;">
+                                Share this link with students to allow them to register for this course. Once they submit the form, their request will appear in the requests tab for your approval.
+                            </p>
+                            
+                            <div style="display: flex; gap: 10px; max-width: 600px; margin: 0 auto; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px; align-items: center;">
+                                <i class="fa-solid fa-link" style="color: var(--text-muted); font-size: 0.95rem;"></i>
+                                <input type="text" id="vp-course-reg-url-display" readonly style="flex-grow: 1; background: transparent; border: none; color: var(--text-primary); outline: none; font-size: 0.88rem; font-family: monospace;" value="">
+                                <button class="btn btn-primary" id="btn-copy-course-reg-url" style="padding: 6px 16px; border-radius: 6px; font-size: 0.85rem; font-weight: 600;">
+                                    <i class="fa-solid fa-copy"></i> Copy Link
                                 </button>
-                            </form>
-                        </div>
-
-                        <!-- Active Generated Links table -->
-                        <div class="grid-card">
-                            <h3 style="margin-bottom: 15px;">Active Generated Links</h3>
-                            <div class="table-responsive">
-                                <table class="data-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Link Name / Label</th>
-                                            <th>Price</th>
-                                            <th>Registration URL</th>
-                                            <th class="text-right">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="vp-links-table-body">
-                                        <!-- Active registration links rows dynamically generated -->
-                                    </tbody>
-                                </table>
                             </div>
                         </div>
                     </div>
@@ -1833,6 +1819,60 @@
                                     Add & Activate Student
                                 </button>
                             </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Pane E: Admin Control (Superadmin only) -->
+                <div id="vp-pane-admin" class="vp-tab-pane hidden">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                        <div>
+                            <h2 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary);">Course Administration Control</h2>
+                            <p class="text-muted" style="font-size: 0.88rem; margin-top: 4px;">Update active course boundaries and manage registered student accounts</p>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 30px; align-items: start;">
+                        <!-- Col 1: Course boundaries edit -->
+                        <div class="grid-card" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px;">
+                            <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                                <i class="fa-solid fa-calendar-days" style="color: var(--primary-color);"></i> Change Expiration bounds
+                            </h3>
+                            <form id="vp-course-bounds-form" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; gap: 15px;">
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Start Date</label>
+                                    <input type="date" id="vp-edit-start-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <div class="input-group">
+                                    <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">End Date (Expiration)</label>
+                                    <input type="date" id="vp-edit-end-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                </div>
+                                <button type="submit" class="btn btn-primary" style="padding: 11px; border-radius: 8px;">
+                                    Save Boundaries
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Col 2: Active student users management -->
+                        <div class="grid-card" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px;">
+                            <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                                <i class="fa-solid fa-users-gear" style="color: var(--color-success);"></i> Registered Students
+                            </h3>
+                            <div style="overflow-x: auto; max-height: 400px;">
+                                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;">
+                                    <thead>
+                                        <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-secondary);">
+                                            <th style="padding: 10px 8px;">Name</th>
+                                            <th style="padding: 10px 8px;">Email</th>
+                                            <th style="padding: 10px 8px;">Code/Phone</th>
+                                            <th style="padding: 10px 8px; text-align: center;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="vp-admin-students-table-body">
+                                        <!-- Dynamic student rows -->
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>

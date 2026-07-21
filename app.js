@@ -20565,7 +20565,7 @@ function initAppTheme() {
 
 // Single Page Application Routing
 function initRouter() {
-    window.addEventListener("hashchange", () => {
+    const handleRoute = () => {
         let hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";
         
         // Intercept video portal hashes
@@ -20610,7 +20610,9 @@ function initRouter() {
         }
 
         switchView(hash);
-    });
+    };
+
+    window.addEventListener("hashchange", handleRoute);
 
     // Navigation item clicks
     const navItems = document.querySelectorAll(".sidebar-nav .nav-item");
@@ -20629,6 +20631,9 @@ function initRouter() {
             return msg;
         }
     });
+
+    // Run router on startup
+    handleRoute();
 
     // Bind click listener for Videos Portal selector card
     const btnSelectVideos = document.getElementById("card-select-videos");

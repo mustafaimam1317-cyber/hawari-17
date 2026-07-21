@@ -20566,7 +20566,7 @@ function initAppTheme() {
 // Single Page Application Routing
 function initRouter() {
     window.addEventListener("hashchange", () => {
-        let hash = window.location.hash.substring(1) || "dashboard";
+        let hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";
         
         // Intercept video portal hashes
         if (hash.startsWith("video-portal") || hash.startsWith("video-subscribe")) {
@@ -20601,7 +20601,7 @@ function initRouter() {
             return;
         }
         
-        hash = window.location.hash.substring(1) || "dashboard";
+        hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";
         
         // Prevent accessing admin panel if not admin
         if (hash === "admin-panel" && state.currentUser.role !== "admin") {
@@ -20629,6 +20629,14 @@ function initRouter() {
             return msg;
         }
     });
+
+    // Bind click listener for Videos Portal selector card
+    const btnSelectVideos = document.getElementById("card-select-videos");
+    if (btnSelectVideos) {
+        btnSelectVideos.addEventListener("click", () => {
+            window.location.hash = "#video-portal";
+        });
+    }
 }
 
 function switchView(viewName) {
@@ -25675,7 +25683,8 @@ const DB_LOCAL_KEYS = {
     COURSES: 'hawari_vp_courses',
     CONTENT: 'hawari_vp_content',
     SUBSCRIPTIONS: 'hawari_vp_subscriptions',
-    REQUESTS: 'hawari_vp_requests'
+    REQUESTS: 'hawari_vp_requests',
+    SECTIONS: 'hawari_vp_sections'
 };
 
 function getLocalData(key) {
@@ -25691,6 +25700,7 @@ function getVpLocalKey(table) {
     if (table.includes("courses")) return DB_LOCAL_KEYS.COURSES;
     if (table.includes("content")) return DB_LOCAL_KEYS.CONTENT;
     if (table.includes("subscriptions")) return DB_LOCAL_KEYS.SUBSCRIPTIONS;
+    if (table.includes("sections")) return DB_LOCAL_KEYS.SECTIONS;
     return DB_LOCAL_KEYS.REQUESTS;
 }
 
@@ -25916,11 +25926,18 @@ window.initVideoPortal = function() {
                     return;
                 }
 
-                // Check Course Expiration date before device fingerprint logic
+                // Check Course dates before device fingerprint logic
                 const targCourse = courses.find(c => c.id === req.course_id);
-                if (targCourse && new Date(targCourse.end_date).getTime() < Date.now()) {
-                    showToast("Course Expired", "The access period for this course has ended.", "danger");
-                    return;
+                if (targCourse) {
+                    const now = Date.now();
+                    if (targCourse.start_date && new Date(targCourse.start_date).getTime() > now) {
+                        showToast("Course Not Started", `This course begins on: ${targCourse.start_date}.`, "warning");
+                        return;
+                    }
+                    if (targCourse.end_date && new Date(targCourse.end_date).getTime() < now) {
+                        showToast("Course Expired", "The access period for this course has ended.", "danger");
+                        return;
+                    }
                 }
 
                 // Single Device fingerprint check
@@ -25999,6 +26016,7 @@ window.initVideoPortal = function() {
     document.getElementById("vp-admin-course-form").onsubmit = async (e) => {
         e.preventDefault();
         const name = document.getElementById("vp-course-name").value.trim();
+        const start = document.getElementById("vp-course-start-date").value;
         const end = document.getElementById("vp-course-end-date").value;
         const instEmail = document.getElementById("vp-course-instructor").value.trim().toLowerCase();
         const instPass = document.getElementById("vp-course-password").value;
@@ -26006,6 +26024,7 @@ window.initVideoPortal = function() {
         const payload = {
             id: `c_${Date.now()}`,
             name: name,
+            start_date: start,
             end_date: end,
             instructor_email: instEmail,
             instructor_password: instPass,
@@ -26069,48 +26088,125 @@ window.initVideoPortal = function() {
         renderVpRequestsTable();
     };
 
-    // 7. Regular Video Link uploading
+    // Bind Add Section buttons
+    document.getElementById("btn-vp-add-section-videos").onclick = () => {
+        const name = prompt("Enter Section Name:");
+        if (name && name.trim()) {
+            addVpSection(name.trim(), "regular");
+        }
+    };
+
+    document.getElementById("btn-vp-add-section-shorts").onclick = () => {
+        const name = prompt("Enter Section Name:");
+        if (name && name.trim()) {
+            addVpSection(name.trim(), "short");
+        }
+    };
+
+    // 7. Regular Video File uploading
     document.getElementById("vp-add-video-form").onsubmit = async (e) => {
         e.preventDefault();
+        const sectionId = document.getElementById("vp-video-section-id").value;
         const title = document.getElementById("vp-video-title").value.trim();
-        const url = document.getElementById("vp-video-url").value.trim();
         const desc = document.getElementById("vp-video-desc").value.trim();
+        const fileInput = document.getElementById("vp-video-file");
+        const file = fileInput.files[0];
+
+        if (!file) {
+            showToast("Required File", "Please select a video file to upload.", "warning");
+            return;
+        }
+
+        const contentId = `v_${Date.now()}`;
+        const progressContainer = document.getElementById("vp-video-progress-container");
+        const progressBar = document.getElementById("vp-video-progress-bar");
+        const progressText = document.getElementById("vp-video-progress-text");
+        
+        progressContainer.classList.remove("hidden");
+        progressBar.style.width = "0%";
+        progressText.innerText = "0%";
+
+        let uploadUrl = "";
+        try {
+            uploadUrl = await uploadFileToSupabase(file, vpState.activeCourse.id, contentId, (pct) => {
+                progressBar.style.width = pct + "%";
+                progressText.innerText = pct + "%";
+            });
+        } catch (err) {
+            console.warn("Supabase Storage upload failed, falling back to local IndexedDB:", err);
+            await saveVideoBlob(contentId, file);
+            uploadUrl = `indexeddb://${contentId}`;
+        }
 
         const payload = {
-            id: `v_${Date.now()}`,
+            id: contentId,
             course_id: vpState.activeCourse.id,
+            section_id: sectionId,
             type: "regular",
             title: title,
             description: desc,
-            video_url: url,
+            video_url: uploadUrl,
             created_at: new Date().toLocaleDateString()
         };
 
         await dbPost("hawari_video_content", payload);
         showToast("Video Added", "Regular course video uploaded successfully.", "success");
+        
+        progressContainer.classList.add("hidden");
         e.target.reset();
         document.getElementById("vp-add-video-box").classList.add("hidden");
         loadWorkspaceContent();
     };
 
-    // 8. Short Video Link uploading
+    // 8. Short Video File uploading
     document.getElementById("vp-add-short-form").onsubmit = async (e) => {
         e.preventDefault();
+        const sectionId = document.getElementById("vp-short-section-id").value;
         const title = document.getElementById("vp-short-title").value.trim();
-        const url = document.getElementById("vp-short-url").value.trim();
+        const fileInput = document.getElementById("vp-short-file");
+        const file = fileInput.files[0];
+
+        if (!file) {
+            showToast("Required File", "Please select a short video file to upload.", "warning");
+            return;
+        }
+
+        const contentId = `s_${Date.now()}`;
+        const progressContainer = document.getElementById("vp-short-progress-container");
+        const progressBar = document.getElementById("vp-short-progress-bar");
+        const progressText = document.getElementById("vp-short-progress-text");
+        
+        progressContainer.classList.remove("hidden");
+        progressBar.style.width = "0%";
+        progressText.innerText = "0%";
+
+        let uploadUrl = "";
+        try {
+            uploadUrl = await uploadFileToSupabase(file, vpState.activeCourse.id, contentId, (pct) => {
+                progressBar.style.width = pct + "%";
+                progressText.innerText = pct + "%";
+            });
+        } catch (err) {
+            console.warn("Supabase Storage upload failed, falling back to local IndexedDB:", err);
+            await saveVideoBlob(contentId, file);
+            uploadUrl = `indexeddb://${contentId}`;
+        }
 
         const payload = {
-            id: `s_${Date.now()}`,
+            id: contentId,
             course_id: vpState.activeCourse.id,
+            section_id: sectionId,
             type: "short",
             title: title,
             description: "",
-            video_url: url,
+            video_url: uploadUrl,
             created_at: new Date().toLocaleDateString()
         };
 
         await dbPost("hawari_video_content", payload);
-        showToast("Short Added", "Short video reel uploaded successfully.", "success");
+        showToast("Short Added", "Short video uploaded successfully.", "success");
+        
+        progressContainer.classList.add("hidden");
         e.target.reset();
         document.getElementById("vp-add-short-box").classList.add("hidden");
         loadWorkspaceContent();
@@ -26355,64 +26451,210 @@ async function loadWorkspaceContent() {
     renderWorkspaceSettings();
 }
 
-function renderInstructorVideos() {
-    const grid = document.getElementById("vp-instructor-videos-grid");
-    grid.innerHTML = "";
+async function addVpSection(name, type) {
+    const payload = {
+        id: `sec_${Date.now()}`,
+        course_id: vpState.activeCourse.id,
+        name: name,
+        type: type
+    };
+    await dbPost("hawari_video_sections", payload);
+    showToast("Section Added", `Section "${name}" created successfully.`, "success");
+    loadWorkspaceContent();
+}
 
-    if (vpState.videos.length === 0) {
-        grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; background: rgba(255,255,255,0.01); border-radius: 10px; border: 1px dashed var(--border-color);"><p class="text-muted">No regular videos uploaded yet.</p></div>`;
+async function renderInstructorVideos() {
+    const container = document.getElementById("vp-instructor-sections-videos-container");
+    container.innerHTML = "";
+
+    const sections = await dbGet("hawari_video_sections", `course_id=eq.${vpState.activeCourse.id}&type=eq.regular`);
+    
+    if (sections.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 40px; background: rgba(255,255,255,0.01); border-radius: 12px; border: 1px dashed var(--border-color);"><i class="fa-solid fa-folder-open" style="font-size: 2rem; color: var(--text-secondary); margin-bottom: 12px;"></i><h4 style="color: var(--text-secondary);">No Sections Found</h4><p style="font-size: 0.85rem; margin-top: 5px;">Add a section first to start uploading regular videos.</p></div>`;
         return;
     }
 
-    vpState.videos.forEach(vid => {
-        const item = document.createElement("div");
-        item.style.cssText = "background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; justify-content: space-between;";
-        item.innerHTML = `
-            <div>
-                <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">${sanitizeHTML(vid.title)}</h4>
-                <p class="text-muted" style="font-size: 0.8rem; line-height: 1.4; height: 60px; overflow: hidden; margin-bottom: 12px;">${sanitizeHTML(vid.description || "No description provided.")}</p>
-                <div style="font-size: 0.72rem; color: var(--primary-color); word-break: break-all; margin-bottom: 12px;"><i class="fa-solid fa-link"></i> ${sanitizeHTML(vid.video_url)}</div>
+    sections.forEach(sec => {
+        const sectionVideos = vpState.videos.filter(v => v.section_id === sec.id);
+        
+        const secDiv = document.createElement("div");
+        secDiv.style.cssText = "background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 16px; padding: 20px; margin-bottom: 20px;";
+        
+        let videosHtml = "";
+        if (sectionVideos.length === 0) {
+            videosHtml = `<div style="padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; border: 1px dashed rgba(255,255,255,0.05); border-radius: 8px;">No videos uploaded in this section yet.</div>`;
+        } else {
+            videosHtml = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">`;
+            sectionVideos.forEach(vid => {
+                const isLocal = vid.video_url.startsWith("indexeddb://");
+                videosHtml += `
+                    <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 6px;">${sanitizeHTML(vid.title)}</h4>
+                            <p class="text-muted" style="font-size: 0.8rem; line-height: 1.4; height: 60px; overflow: hidden; margin-bottom: 12px;">${sanitizeHTML(vid.description || "No description provided.")}</p>
+                            <div style="font-size: 0.72rem; color: var(--primary-color); word-break: break-all; margin-bottom: 12px;">
+                                <i class="fa-solid ${isLocal ? 'fa-mobile-screen' : 'fa-cloud'}"></i> ${isLocal ? 'Offline Local Storage' : 'Cloud Remote URL'}
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 10px; margin-top: 5px;">
+                            <span class="text-muted" style="font-size: 0.75rem;">Uploaded: ${vid.created_at}</span>
+                            <button class="btn btn-danger btn-sm" onclick="deleteVideoContent('${vid.id}')" style="padding: 5px 10px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button>
+                        </div>
+                    </div>
+                `;
+            });
+            videosHtml += `</div>`;
+        }
+
+        secDiv.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                <h3 style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; margin: 0;">
+                    <i class="fa-solid fa-folder-open" style="color: var(--primary-color);"></i>
+                    <span>${sanitizeHTML(sec.name)}</span>
+                </h3>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-secondary btn-sm" onclick="renameVpSection('${sec.id}', '${sec.name.replace(/'/g, "\\'")}')" style="padding: 4px 8px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-pencil"></i> Rename
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteVpSection('${sec.id}')" style="padding: 4px 8px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-trash"></i> Delete Section
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="showAddVideoForm('${sec.id}', '${sec.name.replace(/'/g, "\\'")}')" style="padding: 4px 8px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-plus"></i> Add Video File
+                    </button>
+                </div>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 10px; margin-top: 5px;">
-                <span class="text-muted" style="font-size: 0.75rem;">Uploaded: ${vid.created_at}</span>
-                <button class="btn btn-danger btn-sm" onclick="deleteVideoContent('${vid.id}')" style="padding: 5px 10px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button>
-            </div>
+            ${videosHtml}
         `;
-        grid.appendChild(item);
+        container.appendChild(secDiv);
     });
 }
 
-function renderInstructorShorts() {
-    const grid = document.getElementById("vp-instructor-shorts-grid");
-    grid.innerHTML = "";
+async function renderInstructorShorts() {
+    const container = document.getElementById("vp-instructor-sections-shorts-container");
+    container.innerHTML = "";
 
-    if (vpState.shorts.length === 0) {
-        grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; background: rgba(255,255,255,0.01); border-radius: 10px; border: 1px dashed var(--border-color);"><p class="text-muted">No short videos uploaded yet.</p></div>`;
+    const sections = await dbGet("hawari_video_sections", `course_id=eq.${vpState.activeCourse.id}&type=eq.short`);
+    
+    if (sections.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 40px; background: rgba(255,255,255,0.01); border-radius: 12px; border: 1px dashed var(--border-color);"><i class="fa-solid fa-folder-open" style="font-size: 2rem; color: var(--text-secondary); margin-bottom: 12px;"></i><h4 style="color: var(--text-secondary);">No Sections Found</h4><p style="font-size: 0.85rem; margin-top: 5px;">Add a section first to start uploading short videos.</p></div>`;
         return;
     }
 
-    vpState.shorts.forEach(sh => {
-        const item = document.createElement("div");
-        item.style.cssText = "background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; justify-content: space-between;";
-        item.innerHTML = `
-            <div>
-                <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 12px;">${sanitizeHTML(sh.title)}</h4>
-                <div style="font-size: 0.72rem; color: var(--primary-color); word-break: break-all; margin-bottom: 15px;"><i class="fa-solid fa-link"></i> ${sanitizeHTML(sh.video_url)}</div>
+    sections.forEach(sec => {
+        const sectionShorts = vpState.shorts.filter(v => v.section_id === sec.id);
+        
+        const secDiv = document.createElement("div");
+        secDiv.style.cssText = "background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 16px; padding: 20px; margin-bottom: 20px;";
+        
+        let shortsHtml = "";
+        if (sectionShorts.length === 0) {
+            shortsHtml = `<div style="padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; border: 1px dashed rgba(255,255,255,0.05); border-radius: 8px;">No short videos uploaded in this section yet.</div>`;
+        } else {
+            shortsHtml = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">`;
+            sectionShorts.forEach(sh => {
+                const isLocal = sh.video_url.startsWith("indexeddb://");
+                shortsHtml += `
+                    <div style="background: rgba(30, 41, 59, 0.25); border: 1px solid var(--border-color); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <h4 style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 12px;">${sanitizeHTML(sh.title)}</h4>
+                            <div style="font-size: 0.72rem; color: var(--primary-color); word-break: break-all; margin-bottom: 15px;">
+                                <i class="fa-solid ${isLocal ? 'fa-mobile-screen' : 'fa-cloud'}"></i> ${isLocal ? 'Offline Local Storage' : 'Cloud Remote URL'}
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                            <span class="text-muted" style="font-size: 0.75rem;">Uploaded: ${sh.created_at}</span>
+                            <button class="btn btn-danger btn-sm" onclick="deleteVideoContent('${sh.id}')" style="padding: 5px 10px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button>
+                        </div>
+                    </div>
+                `;
+            });
+            shortsHtml += `</div>`;
+        }
+
+        secDiv.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                <h3 style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; margin: 0;">
+                    <i class="fa-solid fa-folder-open" style="color: var(--primary-color);"></i>
+                    <span>${sanitizeHTML(sec.name)}</span>
+                </h3>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-secondary btn-sm" onclick="renameVpSection('${sec.id}', '${sec.name.replace(/'/g, "\\'")}')" style="padding: 4px 8px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-pencil"></i> Rename
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteVpSection('${sec.id}')" style="padding: 4px 8px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-trash"></i> Delete Section
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="showAddShortForm('${sec.id}', '${sec.name.replace(/'/g, "\\'")}')" style="padding: 4px 8px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-plus"></i> Add Short File
+                    </button>
+                </div>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 10px;">
-                <span class="text-muted" style="font-size: 0.75rem;">Uploaded: ${sh.created_at}</span>
-                <button class="btn btn-danger btn-sm" onclick="deleteVideoContent('${sh.id}')" style="padding: 5px 10px; border-radius: 6px; font-size: 0.75rem;"><i class="fa-solid fa-trash"></i> Delete</button>
-            </div>
+            ${shortsHtml}
         `;
-        grid.appendChild(item);
+        container.appendChild(secDiv);
     });
 }
+
+window.renameVpSection = async function(sectionId, currentName) {
+    const newName = prompt("Rename Section:", currentName);
+    if (newName && newName.trim()) {
+        const sections = await dbGet("hawari_video_sections", `id=eq.${sectionId}`);
+        if (sections.length > 0) {
+            const sec = sections[0];
+            sec.name = newName.trim();
+            await dbPost("hawari_video_sections", sec);
+            showToast("Section Renamed", "Section name updated successfully.", "success");
+            loadWorkspaceContent();
+        }
+    }
+};
+
+window.deleteVpSection = async function(sectionId) {
+    if (!confirm("Are you sure you want to delete this section? All videos inside it will be permanently deleted.")) return;
+    
+    await dbDelete("hawari_video_sections", `id=eq.${sectionId}`);
+    const vids = await dbGet("hawari_video_content", `section_id=eq.${sectionId}`);
+    for (const vid of vids) {
+        await dbDelete("hawari_video_content", `id=eq.${vid.id}`);
+        if (vid.video_url.startsWith("indexeddb://")) {
+            const blobId = vid.video_url.split("indexeddb://")[1];
+            await deleteVideoBlob(blobId);
+        }
+    }
+    
+    showToast("Section Deleted", "Section and all nested videos deleted.", "success");
+    loadWorkspaceContent();
+};
+
+window.showAddVideoForm = function(sectionId, sectionName) {
+    document.getElementById("vp-video-section-id").value = sectionId;
+    document.getElementById("vp-add-video-title-lbl").innerText = `Add Video to Section: ${sectionName}`;
+    document.getElementById("vp-add-video-box").classList.remove("hidden");
+    document.getElementById("vp-add-video-box").scrollIntoView({ behavior: 'smooth' });
+};
+
+window.showAddShortForm = function(sectionId, sectionName) {
+    document.getElementById("vp-short-section-id").value = sectionId;
+    document.getElementById("vp-add-short-title-lbl").innerText = `Add Short to Section: ${sectionName}`;
+    document.getElementById("vp-add-short-box").classList.remove("hidden");
+    document.getElementById("vp-add-short-box").scrollIntoView({ behavior: 'smooth' });
+};
 
 window.deleteVideoContent = async function(contentId) {
-    if (!confirm("Are you sure you want to delete this video link?")) return;
-    await dbDelete("hawari_video_content", `id=eq.${contentId}`);
-    showToast("Content Deleted", "Video link has been successfully removed.", "success");
-    loadWorkspaceContent();
+    if (!confirm("Are you sure you want to delete this video file?")) return;
+    
+    const items = await dbGet("hawari_video_content", `id=eq.${contentId}`);
+    if (items.length > 0) {
+        const item = items[0];
+        await dbDelete("hawari_video_content", `id=eq.${contentId}`);
+        if (item.video_url.startsWith("indexeddb://")) {
+            const blobId = item.video_url.split("indexeddb://")[1];
+            await deleteVideoBlob(blobId);
+        }
+        showToast("Content Deleted", "Video file has been successfully removed.", "success");
+        loadWorkspaceContent();
+    }
 };
 
 async function renderWorkspaceSubscriptions() {
@@ -26582,61 +26824,108 @@ async function renderVpStudentWorkspace() {
     document.getElementById("btn-vp-stud-tab-videos").click();
 }
 
-function renderStudentPlaylist() {
+async function renderStudentPlaylist() {
     const container = document.getElementById("vp-student-playlist");
     container.innerHTML = "";
 
-    const playlist = vpState.studentPlaylistTab === "videos" ? vpState.videos : vpState.shorts;
+    const isRegular = vpState.studentPlaylistTab === "videos";
+    const type = isRegular ? "regular" : "short";
 
-    if (playlist.length === 0) {
-        container.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">No videos available in this section.</div>`;
+    const sections = await dbGet("hawari_video_sections", `course_id=eq.${vpState.activeCourse.id}&type=eq.${type}`);
+    const playlist = isRegular ? vpState.videos : vpState.shorts;
+
+    if (sections.length === 0) {
+        container.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">No sections available.</div>`;
         return;
     }
 
-    playlist.forEach(vid => {
-        const item = document.createElement("div");
-        item.className = "vp-playlist-item";
-        item.innerHTML = `
-            <i class="fa-solid fa-play" style="font-size: 0.8rem; color: var(--text-secondary);"></i>
-            <div style="flex-grow: 1;">
-                <h4 style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); margin: 0; line-height: 1.3;">${sanitizeHTML(vid.title)}</h4>
-                ${vid.description ? `<p style="font-size: 0.72rem; color: var(--text-secondary); margin: 3px 0 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;">${sanitizeHTML(vid.description)}</p>` : ''}
-            </div>
-        `;
-        
-        item.onclick = () => {
-            const playlistItems = container.querySelectorAll(".vp-playlist-item");
-            playlistItems.forEach(i => i.classList.remove("active"));
-            item.classList.add("active");
+    sections.forEach(sec => {
+        const secVideos = playlist.filter(v => v.section_id === sec.id);
+        if (secVideos.length === 0) return; // Skip empty sections
 
-            playStudentVideo(vid);
-        };
+        const secHeader = document.createElement("div");
+        secHeader.style.cssText = "font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin: 15px 10px 8px 10px; border-left: 3px solid var(--primary-color); padding-left: 8px; letter-spacing: 0.5px;";
+        secHeader.innerText = sec.name;
+        container.appendChild(secHeader);
 
-        container.appendChild(item);
+        secVideos.forEach(vid => {
+            const item = document.createElement("div");
+            item.className = "vp-playlist-item";
+            item.innerHTML = `
+                <i class="fa-solid fa-play" style="font-size: 0.8rem; color: var(--text-secondary);"></i>
+                <div style="flex-grow: 1;">
+                    <h4 style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); margin: 0; line-height: 1.3;">${sanitizeHTML(vid.title)}</h4>
+                    ${vid.description ? `<p style="font-size: 0.72rem; color: var(--text-secondary); margin: 3px 0 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;">${sanitizeHTML(vid.description)}</p>` : ''}
+                </div>
+            `;
+            
+            item.onclick = async () => {
+                const checkReq = await dbGet("hawari_video_requests", `email=eq.${vpState.currentUser.email}`);
+                if (checkReq.length === 0 || checkReq[0].status !== "approved") {
+                    showToast("Access Revoked", "Your account has been deactivated or blocked.", "danger");
+                    document.getElementById("btn-vp-exit").click();
+                    return;
+                }
+
+                const playlistItems = container.querySelectorAll(".vp-playlist-item");
+                playlistItems.forEach(i => i.classList.remove("active"));
+                item.classList.add("active");
+
+                playStudentVideo(vid);
+            };
+
+            container.appendChild(item);
+        });
     });
 }
 
 function playStudentVideo(vid) {
     const video = document.getElementById("vp-main-video-player");
-    video.src = vid.video_url;
-    video.load();
+    
+    // Revoke previous objectUrl if set
+    if (video.dataset.objectUrl) {
+        URL.revokeObjectURL(video.dataset.objectUrl);
+        delete video.dataset.objectUrl;
+    }
 
-    document.getElementById("vp-student-video-title").innerText = vid.title;
-    document.getElementById("vp-student-video-desc").innerText = vid.description || "No description provided.";
+    if (vid.video_url.startsWith("indexeddb://")) {
+        const id = vid.video_url.split("indexeddb://")[1];
+        getVideoBlob(id).then(blob => {
+            if (blob) {
+                const objectUrl = URL.createObjectURL(blob);
+                video.dataset.objectUrl = objectUrl;
+                video.src = objectUrl;
+                video.load();
+                triggerPlay();
+            } else {
+                showToast("Video Not Found", "The local video file is not stored on this device.", "danger");
+            }
+        }).catch(err => {
+            console.error("IndexedDB error:", err);
+            showToast("Error Loading Video", "Could not load video from local storage.", "danger");
+        });
+    } else {
+        video.src = vid.video_url;
+        video.load();
+        triggerPlay();
+    }
 
-    // Trigger Play
-    const playBtn = document.getElementById("btn-vp-play-pause");
-    video.play().then(() => {
-        playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`;
-    }).catch(err => {
-        console.warn("Autoplay block. Wait for user gesture.", err);
-        playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`;
-    });
+    function triggerPlay() {
+        document.getElementById("vp-student-video-title").innerText = vid.title;
+        document.getElementById("vp-student-video-desc").innerText = vid.description || "No description provided.";
 
-    // Start Dynamic Anti-Piracy Watermark
-    const stuCode = vpState.currentUser.student_code || "STUDENT";
-    const phone = vpState.currentUser.phone || "01000000000";
-    startWatermark(stuCode, phone);
+        const playBtn = document.getElementById("btn-vp-play-pause");
+        video.play().then(() => {
+            playBtn.innerHTML = `<i class="fa-solid fa-pause"></i>`;
+        }).catch(err => {
+            console.warn("Autoplay block. Wait for user gesture.", err);
+            playBtn.innerHTML = `<i class="fa-solid fa-play"></i>`;
+        });
+
+        const stuCode = vpState.currentUser.student_code || "STUDENT";
+        const phone = vpState.currentUser.phone || "01000000000";
+        startWatermark(stuCode, phone);
+    }
 }
 
 let watermarkTimer = null;
@@ -26648,8 +26937,8 @@ function startWatermark(studentCode, phone) {
     
     if (watermarkTimer) clearInterval(watermarkTimer);
     watermarkTimer = setInterval(() => {
-        const x = Math.floor(Math.random() * 70) + 5; // 5% to 75%
-        const y = Math.floor(Math.random() * 70) + 5; // 5% to 75%
+        const x = Math.floor(Math.random() * 70) + 5;
+        const y = Math.floor(Math.random() * 70) + 5;
         watermarkEl.style.top = y + "%";
         watermarkEl.style.left = x + "%";
     }, 4000);
@@ -26660,5 +26949,99 @@ function stopWatermark() {
         clearInterval(watermarkTimer);
         watermarkTimer = null;
     }
+}
+
+// Supabase Storage & IndexedDB Fallback helpers
+async function uploadFileToSupabase(file, courseId, contentId, progressCallback) {
+    const baseUrl = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    
+    const cleanUrl = baseUrl.replace(/\/$/, '');
+    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
+    const path = `hawari_videos/${courseId}/${contentId}_${cleanFileName}`;
+    const uploadUrl = `${cleanUrl}/storage/v1/object/${path}`;
+
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", uploadUrl, true);
+        xhr.setRequestHeader("apikey", anonKey);
+        xhr.setRequestHeader("Authorization", `Bearer ${anonKey}`);
+        
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                if (progressCallback) progressCallback(pct);
+            }
+        };
+
+        xhr.onload = () => {
+            if (xhr.status === 200 || xhr.status === 201) {
+                const publicUrl = `${cleanUrl}/storage/v1/object/public/${path}`;
+                resolve(publicUrl);
+            } else {
+                reject(new Error(`Upload failed with status ${xhr.status}: ${xhr.responseText}`));
+            }
+        };
+
+        xhr.onerror = () => {
+            reject(new Error("Network error during file upload to Supabase Storage."));
+        };
+
+        xhr.send(file);
+    });
+}
+
+let dbInstance = null;
+function initIndexedDB() {
+    return new Promise((resolve, reject) => {
+        if (dbInstance) return resolve(dbInstance);
+        const request = indexedDB.open("hawari_video_db", 1);
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains("videos")) {
+                db.createObjectStore("videos");
+            }
+        };
+        request.onsuccess = (e) => {
+            dbInstance = e.target.result;
+            resolve(dbInstance);
+        };
+        request.onerror = (e) => {
+            reject(e.target.error);
+        };
+    });
+}
+
+async function saveVideoBlob(id, blob) {
+    const db = await initIndexedDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("videos", "readwrite");
+        const store = tx.objectStore("videos");
+        const request = store.put(blob, id);
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function getVideoBlob(id) {
+    const db = await initIndexedDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("videos", "readonly");
+        const store = tx.objectStore("videos");
+        const request = store.get(id);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function deleteVideoBlob(id) {
+    const db = await initIndexedDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("videos", "readwrite");
+        const store = tx.objectStore("videos");
+        const request = store.delete(id);
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => reject(request.error);
+    });
 }
 

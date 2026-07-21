@@ -55,6 +55,16 @@
                 <p>Master skin pathology, clinical dermatology, diagnostic signs, and therapeutic procedures. Starts with a blank customizable bank to build your own study decks.</p>
                 <button class="btn btn-primary">Enter Course <i class="fa-solid fa-arrow-right"></i></button>
             </div>
+
+            <!-- Videos Portal Card -->
+            <div class="course-card videos-portal-card" id="card-select-videos" style="text-align: center; border-radius: 24px; padding: 40px 30px; cursor: pointer; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); border: 1px solid rgba(255, 255, 255, 0.05);">
+                <div class="course-icon-wrapper" style="color: var(--primary-color);">
+                    <i class="fa-solid fa-circle-play"></i>
+                </div>
+                <h2>Videos Portal</h2>
+                <p>Access secure course video lectures, reels, subscriptions, and active student channels. Fully isolated access control.</p>
+                <button class="btn btn-primary" onclick="window.location.hash='#video-portal'">Open Portal <i class="fa-solid fa-arrow-right"></i></button>
+            </div>
         </div>
     </div>
 
@@ -1507,6 +1517,10 @@
                         <input type="text" id="vp-course-name" required placeholder="e.g. Infection Control Course" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
                     <div class="input-group">
+                        <label for="vp-course-start-date" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Start Date</label>
+                        <input type="date" id="vp-course-start-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+                    <div class="input-group">
                         <label for="vp-course-end-date" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">End Date (Expiration)</label>
                         <input type="date" id="vp-course-end-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
@@ -1572,38 +1586,49 @@
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px;">
                         <div>
                             <h2 style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">Regular Video Lessons</h2>
-                            <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Upload standard length course modules and lecture videos</p>
+                            <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Organize and upload standard length course video files</p>
                         </div>
-                        <button class="btn btn-primary" onclick="document.getElementById('vp-add-video-box').classList.toggle('hidden')" style="border-radius: 8px;">
-                            <i class="fa-solid fa-plus"></i> Add Video Link
+                        <button class="btn btn-primary" id="btn-vp-add-section-videos" style="border-radius: 8px;">
+                            <i class="fa-solid fa-folder-plus"></i> Add Section
                         </button>
                     </div>
 
                     <!-- Add Video Box -->
                     <div id="vp-add-video-box" class="hidden" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 25px;">
-                        <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 15px;">Add New Regular Video Link</h3>
+                        <h3 id="vp-add-video-title-lbl" style="font-size: 1.05rem; font-weight: 700; margin-bottom: 15px;">Add New Regular Video</h3>
                         <form id="vp-add-video-form" onsubmit="event.preventDefault();" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <input type="hidden" id="vp-video-section-id">
                             <div class="input-group">
                                 <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video Title</label>
                                 <input type="text" id="vp-video-title" required placeholder="e.g. Introduction to Virology" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                             </div>
                             <div class="input-group">
-                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video URL (Direct MP4, YouTube Embed, or Vimeo Link)</label>
-                                <input type="url" id="vp-video-url" required placeholder="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video File</label>
+                                <input type="file" id="vp-video-file" accept="video/*" required style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                             </div>
                             <div class="input-group" style="grid-column: span 2;">
                                 <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video Description</label>
                                 <textarea id="vp-video-desc" rows="2" placeholder="Provide a brief summary of the contents covered in this video lesson..." style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none; font-family: inherit; resize: vertical;"></textarea>
                             </div>
+                            <div id="vp-video-progress-container" class="hidden" style="grid-column: span 2; margin-top: 10px;">
+                                <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                    <span>Uploading File...</span>
+                                    <span id="vp-video-progress-text">0%</span>
+                                </div>
+                                <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                    <div id="vp-video-progress-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.1s ease;"></div>
+                                </div>
+                            </div>
                             <div style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px;">
                                 <button type="button" class="btn btn-secondary" onclick="document.getElementById('vp-add-video-box').classList.add('hidden')" style="border-radius: 8px;">Cancel</button>
-                                <button type="submit" class="btn btn-primary" style="border-radius: 8px; padding: 10px 24px;">Upload Link</button>
+                                <button type="submit" class="btn btn-primary" style="border-radius: 8px; padding: 10px 24px;">Upload Video File</button>
                             </div>
                         </form>
                     </div>
 
-                    <div id="vp-instructor-videos-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">
-                        <!-- Regular videos list -->
+                    <!-- Dynamic sections & videos container -->
+                    <div id="vp-instructor-sections-videos-container" style="display: flex; flex-direction: column; gap: 30px;">
+                        <!-- Rendered by JS -->
                     </div>
                 </div>
 
@@ -1612,34 +1637,45 @@
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px;">
                         <div>
                             <h2 style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary);">Short Reels & Summaries</h2>
-                            <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Upload short clips, tips, and key exam point breakdowns</p>
+                            <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Organize and upload short video clips and reels</p>
                         </div>
-                        <button class="btn btn-primary" onclick="document.getElementById('vp-add-short-box').classList.toggle('hidden')" style="border-radius: 8px;">
-                            <i class="fa-solid fa-plus"></i> Add Short Link
+                        <button class="btn btn-primary" id="btn-vp-add-section-shorts" style="border-radius: 8px;">
+                            <i class="fa-solid fa-folder-plus"></i> Add Section
                         </button>
                     </div>
 
                     <!-- Add Short Video Box -->
                     <div id="vp-add-short-box" class="hidden" style="background: rgba(30, 41, 59, 0.3); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 25px;">
-                        <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 15px;">Add New Short Video</h3>
+                        <h3 id="vp-add-short-title-lbl" style="font-size: 1.05rem; font-weight: 700; margin-bottom: 15px;">Add New Short Video</h3>
                         <form id="vp-add-short-form" onsubmit="event.preventDefault();" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <input type="hidden" id="vp-short-section-id">
                             <div class="input-group">
                                 <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Short Title</label>
                                 <input type="text" id="vp-short-title" required placeholder="e.g. Tip: Meningitis Diagnostics" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                             </div>
                             <div class="input-group">
-                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Video URL</label>
-                                <input type="url" id="vp-short-url" required placeholder="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Short Video File</label>
+                                <input type="file" id="vp-short-file" accept="video/*" required style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                            </div>
+                            <div id="vp-short-progress-container" class="hidden" style="grid-column: span 2; margin-top: 10px;">
+                                <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                    <span>Uploading File...</span>
+                                    <span id="vp-short-progress-text">0%</span>
+                                </div>
+                                <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                    <div id="vp-short-progress-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.1s ease;"></div>
+                                </div>
                             </div>
                             <div style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px;">
                                 <button type="button" class="btn btn-secondary" onclick="document.getElementById('vp-add-short-box').classList.add('hidden')" style="border-radius: 8px;">Cancel</button>
-                                <button type="submit" class="btn btn-primary" style="border-radius: 8px; padding: 10px 24px;">Upload Short</button>
+                                <button type="submit" class="btn btn-primary" style="border-radius: 8px; padding: 10px 24px;">Upload Short File</button>
                             </div>
                         </form>
                     </div>
 
-                    <div id="vp-instructor-shorts-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">
-                        <!-- Short videos list -->
+                    <!-- Dynamic sections & shorts container -->
+                    <div id="vp-instructor-sections-shorts-container" style="display: flex; flex-direction: column; gap: 30px;">
+                        <!-- Rendered by JS -->
                     </div>
                 </div>
 

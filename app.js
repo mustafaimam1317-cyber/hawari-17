@@ -20068,7 +20068,7 @@ function getGroupQuestionsSeed() {
     return SEED_QUESTIONS;
 }
 
-function saveStateToStorage() {
+function saveStateToStorage(skipCloudSync = false) {
     if (!state.activeGroup) return;
 
     if (state.currentUser) {
@@ -20088,7 +20088,9 @@ function saveStateToStorage() {
     encryptLocal(getGroupKey(STORAGE_KEYS.REPORT_TASKS), state.reportTasks);
     
     // Cloud sync users registry
-    syncUsersWithCloud();
+    if (!skipCloudSync) {
+        debouncedSync();
+    }
 
     // If active user is Admin, also upload the global questions template!
     const isAdmin = state.currentUser && state.currentUser.role === "admin";
@@ -20358,13 +20360,15 @@ async function selectCourseTrack(groupName) {
     // Load state from the dynamic storage keys of this track
     loadStateFromStorage();
 
-    // Fetch report tasks from cloud after loading to prevent local storage overwrite
-    await fetchReportTasksFromCloud(groupName);
-    await fetchCourseQuizzes(groupName);
-    await fetchQuizResults(groupName);
-    await fetchAnnouncement(groupName);
+    // Fetch report tasks, quizzes, quiz results, and announcements in parallel to avoid UI lag
+    await Promise.all([
+        fetchReportTasksFromCloud(groupName),
+        fetchCourseQuizzes(groupName),
+        fetchQuizResults(groupName),
+        fetchAnnouncement(groupName)
+    ]);
 
-    // Seed default admin/student to cloud if they are missing
+    // Seed default admin/student to cloud if they are missing (async non-blocking)
     seedDefaultUsersToCloud(groupName);
 
     // Check auth status
@@ -20376,6 +20380,9 @@ async function selectCourseTrack(groupName) {
 }
 
 async function seedDefaultUsersToCloud(group) {
+    const seedKey = `hawari_seeded_${group}`;
+    if (localStorage.getItem(seedKey)) return; // Bypass if already seeded
+
     const defaultEmails = [
         { email: "admin@gmail.com", password: "admin", status: "approved", role: "admin" },
         { email: "student@gmail.com", password: "student", status: "approved", role: "user" },
@@ -20417,6 +20424,7 @@ async function seedDefaultUsersToCloud(group) {
         }
     });
     await Promise.all(promises);
+    localStorage.setItem(seedKey, "true"); // Cache the successful seeding state locally
 }
 
 function switchCourseTrack() {
@@ -21069,6 +21077,14 @@ function triggerViewRefresh() {
     }
 }
 
+let syncTimeout = null;
+function debouncedSync() {
+    if (syncTimeout) clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(() => {
+        syncUsersWithCloud();
+    }, 2000);
+}
+
 async function syncUsersWithCloud() {
     const group = state.activeGroup;
     if (!group) return;
@@ -21367,7 +21383,7 @@ function initAuthFlow() {
                 }
 
                 loadUserSpecificProgress(user.email);
-                saveStateToStorage();
+                saveStateToStorage(true); // Skip cloud sync because syncUsersWithCloud() was just run and awaited above
                 
                 btnLoginSubmit.disabled = false;
                 btnLoginSubmit.innerHTML = `Log In <i class="fa-solid fa-right-to-bracket"></i>`;
@@ -24582,14 +24598,18 @@ window.retakeReportTaskStudent = function(rtId) {
 
 window.retakeCourseQuizStudent = async function(quizId) {
     if (!confirm("Are you sure you want to retake this quiz? This will delete your current score and allow you to re-solve it.")) return;
+    
+    // Optimistic UI updates: update local state immediately so user sees changes instantly
+    state.quizResults = state.quizResults.filter(res => res.quiz_id !== quizId || res.email !== state.currentUser.email);
+    renderReportTaskStudentView();
+    showToast("Quiz Reset", "You can now start the quiz again.", "success");
+
     try {
         const id = `${quizId}_${state.currentUser.email}`;
         await supabaseRequest(`hawari_quiz_results?id=eq.${id}`, {
             method: "DELETE"
         });
-        showToast("Quiz Reset", "You can now start the quiz again.", "success");
         await fetchQuizResults(state.activeGroup);
-        renderReportTaskStudentView();
     } catch (e) {
         console.error("Failed to retake course quiz:", e);
     }

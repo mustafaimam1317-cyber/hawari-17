@@ -1721,10 +1721,10 @@
                             <div style="display: flex; gap: 12px; flex: 1; min-width: 280px;">
                                 <div class="search-input-wrapper" style="flex: 2;">
                                     <i class="fa-solid fa-magnifying-glass search-icon"></i>
-                                    <input type="text" id="vp-requests-search" placeholder="Search by email or phone...">
+                                    <input type="text" id="vp-requests-search" oninput="renderVpRequestsTable()" placeholder="Search by email, phone, name, or code...">
                                 </div>
                                 <div class="select-wrapper" style="flex: 1; min-width: 130px;">
-                                    <select id="vp-requests-filter" style="width: 100%; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <select id="vp-requests-filter" onchange="renderVpRequestsTable()" style="width: 100%; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                         <option value="all">All Requests</option>
                                         <option value="pending">Pending</option>
                                         <option value="approved">Approved</option>

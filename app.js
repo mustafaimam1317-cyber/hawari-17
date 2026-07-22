@@ -26828,25 +26828,36 @@ async function renderVpAdminControlPanel() {
 }
 
 async function renderVpRequestsTable() {
+    if (!vpState.activeCourse) return;
     const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}`);
-    vpState.requests = list;
+    vpState.requests = list || [];
 
     const tbody = document.getElementById("vp-requests-table-body");
+    if (!tbody) return;
     tbody.innerHTML = "";
 
-    const searchVal = document.getElementById("vp-requests-search").value.trim().toLowerCase();
-    const filterVal = document.getElementById("vp-requests-filter").value;
+    const searchInput = document.getElementById("vp-requests-search");
+    const filterInput = document.getElementById("vp-requests-filter");
 
-    let filtered = list;
+    const searchVal = searchInput ? searchInput.value.trim().toLowerCase() : "";
+    const filterVal = filterInput ? filterInput.value.trim().toLowerCase() : "all";
 
-    // Filter by search matching Email or Phone
+    let filtered = vpState.requests;
+
+    // Filter by search matching Name, Email, Phone, or Student Code safely
     if (searchVal) {
-        filtered = filtered.filter(r => r.email.includes(searchVal) || r.phone.includes(searchVal) || r.name.toLowerCase().includes(searchVal));
+        filtered = filtered.filter(r => {
+            const name = (r.name || "").toLowerCase();
+            const email = (r.email || "").toLowerCase();
+            const phone = (r.phone || "").toLowerCase();
+            const code = (r.student_code || "").toLowerCase();
+            return name.includes(searchVal) || email.includes(searchVal) || phone.includes(searchVal) || code.includes(searchVal);
+        });
     }
 
-    // Filter by status dropdown selection
+    // Filter by status dropdown selection safely
     if (filterVal !== "all") {
-        filtered = filtered.filter(r => r.status === filterVal);
+        filtered = filtered.filter(r => (r.status || "").trim().toLowerCase() === filterVal);
     }
 
     if (filtered.length === 0) {
@@ -26855,17 +26866,18 @@ async function renderVpRequestsTable() {
     }
 
     filtered.forEach(req => {
+        const currentStatus = (req.status || "pending").toLowerCase();
         let statusBadgeClass = "badge-pending";
-        if (req.status === "approved") statusBadgeClass = "badge-active";
-        if (req.status === "blocked") statusBadgeClass = "badge-blocked";
+        if (currentStatus === "approved") statusBadgeClass = "badge-active";
+        if (currentStatus === "blocked") statusBadgeClass = "badge-blocked";
 
         const row = document.createElement("tr");
         row.innerHTML = `
-            <td><strong>${sanitizeHTML(req.name)}</strong></td>
-            <td>${sanitizeHTML(req.email)}</td>
-            <td>${sanitizeHTML(req.phone)}</td>
-            <td><code style="background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">${sanitizeHTML(req.student_code)}</code></td>
-            <td><span class="badge ${statusBadgeClass}">${req.status.toUpperCase()}</span></td>
+            <td><strong>${sanitizeHTML(req.name || "N/A")}</strong></td>
+            <td>${sanitizeHTML(req.email || "N/A")}</td>
+            <td>${sanitizeHTML(req.phone || "N/A")}</td>
+            <td><code style="background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">${sanitizeHTML(req.student_code || "N/A")}</code></td>
+            <td><span class="badge ${statusBadgeClass}">${currentStatus.toUpperCase()}</span></td>
             <td>
                 ${req.device_token ? `
                     <div style="display:flex; align-items:center; gap:8px;">
@@ -26876,12 +26888,12 @@ async function renderVpRequestsTable() {
             </td>
             <td class="text-right">
                 <div style="display:flex; justify-content:flex-end; gap:6px;">
-                    ${req.status !== "approved" ? `
+                    ${currentStatus !== "approved" ? `
                         <button class="btn btn-success btn-sm" onclick="updateRequestStatus('${req.email}', 'approved')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
                             <i class="fa-solid fa-check"></i> Approve
                         </button>
                     ` : ''}
-                    ${req.status !== "blocked" ? `
+                    ${currentStatus !== "blocked" ? `
                         <button class="btn btn-danger btn-sm" onclick="updateRequestStatus('${req.email}', 'blocked')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
                             <i class="fa-solid fa-ban"></i> Block
                         </button>
@@ -26894,7 +26906,8 @@ async function renderVpRequestsTable() {
 }
 
 window.updateRequestStatus = async function(email, newStatus) {
-    const requests = await dbGet("hawari_video_requests", `email=eq.${email}`);
+    if (!vpState.activeCourse) return;
+    const requests = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
     if (requests.length > 0) {
         const req = requests[0];
         req.status = newStatus;
@@ -26911,7 +26924,8 @@ window.updateRequestStatus = async function(email, newStatus) {
 };
 
 window.resetDeviceFingerprint = async function(email) {
-    const requests = await dbGet("hawari_video_requests", `email=eq.${email}`);
+    if (!vpState.activeCourse) return;
+    const requests = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
     if (requests.length > 0) {
         const req = requests[0];
         req.device_token = "";

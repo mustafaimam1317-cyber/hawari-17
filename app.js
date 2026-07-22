@@ -25829,7 +25829,7 @@ window.handleVideoPortalRouting = async function(hash) {
             `;
             document.getElementById("vp-subscribe-panel").classList.remove("hidden");
             const header = document.getElementById("vp-header");
-            if (header) header.classList.add("hidden");
+            if (header) header.style.display = "none";
             return;
         }
 
@@ -25842,7 +25842,7 @@ window.handleVideoPortalRouting = async function(hash) {
 
         // Hide main header to keep registration link isolated
         const header = document.getElementById("vp-header");
-        if (header) header.classList.add("hidden");
+        if (header) header.style.display = "none";
 
         // Show subscription registration form
         document.getElementById("vp-sub-course-title").innerText = `Subscribe to: ${courses[0].name}`;
@@ -25855,7 +25855,7 @@ window.handleVideoPortalRouting = async function(hash) {
     } else if (hash === "video-portal") {
         // Restore header visibility
         const header = document.getElementById("vp-header");
-        if (header) header.classList.remove("hidden");
+        if (header) header.style.display = "flex";
 
         if (!vpState.currentUser) {
             document.getElementById("vp-auth-panel").classList.remove("hidden");
@@ -26188,7 +26188,7 @@ window.initVideoPortal = function() {
         document.getElementById("vp-subpane-requests").classList.remove("hidden");
         document.getElementById("vp-subpane-links").classList.add("hidden");
         vpState.activeSubTab = "requests";
-        renderVpRequestsTable();
+        renderVpRequestsTable(true);
     };
 
     // Bind Add Section buttons
@@ -26827,10 +26827,12 @@ async function renderVpAdminControlPanel() {
     document.getElementById("vp-edit-asst-pass").value = vpState.activeCourse.assistant_password || "";
 }
 
-async function renderVpRequestsTable() {
+window.renderVpRequestsTable = async function(forceRefresh = false) {
     if (!vpState.activeCourse) return;
-    const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}`);
-    vpState.requests = list || [];
+    if (forceRefresh || !vpState.requests || vpState.requests.length === 0) {
+        const list = await dbGet("hawari_video_requests", `course_id=eq.${vpState.activeCourse.id}`);
+        vpState.requests = list || [];
+    }
 
     const tbody = document.getElementById("vp-requests-table-body");
     if (!tbody) return;
@@ -26898,29 +26900,45 @@ async function renderVpRequestsTable() {
                             <i class="fa-solid fa-ban"></i> Block
                         </button>
                     ` : ''}
+                    <button class="btn btn-danger btn-sm" onclick="deleteVpRequest('${req.email}')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px; background-color: #ef4444; border-color: #ef4444;">
+                        <i class="fa-solid fa-trash"></i> Delete
+                    </button>
                 </div>
             </td>
         `;
         tbody.appendChild(row);
     });
-}
+};
 
 window.updateRequestStatus = async function(email, newStatus) {
     if (!vpState.activeCourse) return;
-    const requests = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
-    if (requests.length > 0) {
-        const req = requests[0];
+    const req = vpState.requests.find(r => r.email === email);
+    if (req) {
         req.status = newStatus;
-        
-        // If blocked, also delete the device fingerprint to fully secure it
         if (newStatus === "blocked") {
             req.device_token = "";
         }
+        
+        // Optimistically render UI instantly
+        renderVpRequestsTable(false);
 
+        // Update database in the background
         await dbPost("hawari_video_requests", req);
         showToast("Request Updated", `Student request status updated to ${newStatus.toUpperCase()}.`, "success");
-        renderVpRequestsTable();
     }
+};
+
+window.deleteVpRequest = async function(email) {
+    if (!vpState.activeCourse) return;
+    if (!confirm(`Are you sure you want to delete registration request for ${email}? They will be able to register again.`)) return;
+
+    // Optimistically update UI instantly
+    vpState.requests = vpState.requests.filter(r => r.email !== email);
+    renderVpRequestsTable(false);
+
+    // Delete from cloud DB in the background
+    await dbDelete("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
+    showToast("Student Deleted", "Registration request deleted successfully.", "success");
 };
 
 window.resetDeviceFingerprint = async function(email) {

@@ -157,6 +157,10 @@
                     <h3>Create Account</h3>
                     <p>Gmail: <strong id="register-email-display"></strong></p>
                 </div>
+                <div class="input-group" style="margin-bottom: 10px;">
+                    <label for="auth-reg-name"><i class="fa-solid fa-user"></i> Full Name (الاسم بالكامل)</label>
+                    <input type="text" id="auth-reg-name" placeholder="أدخل اسمك بالكامل" maxlength="80" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
                 <div class="input-group">
                     <label for="auth-reg-password"><i class="fa-solid fa-lock"></i> Choose Password</label>
                     <input type="password" id="auth-reg-password" placeholder="••••••••" maxlength="32" required>
@@ -1407,7 +1411,7 @@
     <div id="video-portal-view" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-primary); z-index: 3000; overflow-y: auto; font-family: 'Inter', sans-serif;">
         
         <!-- VP Header / Navbar -->
-        <header id="vp-header" class="test-header" style="height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 2px solid var(--border-color); background-color: var(--bg-sidebar); position: sticky; top: 0; z-index: 10;">
+        <header id="vp-header" class="test-header" style="height: 70px; display: none; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 2px solid var(--border-color); background-color: var(--bg-sidebar); position: sticky; top: 0; z-index: 10;">
             <div class="test-title-section">
                 <i class="fa-solid fa-play logo-icon" style="color: var(--primary-color); font-size: 1.4rem;"></i>
                 <div>
@@ -1574,6 +1578,11 @@
                     <li id="vp-nav-superadmin-control" class="hidden">
                         <a href="#" class="nav-item" id="vp-nav-admin" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-weight: 500; margin-bottom: 8px;">
                             <i class="fa-solid fa-screwdriver-wrench" style="width: 20px;"></i> Admin Control
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" class="nav-item" id="vp-nav-exit-workspace" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 8px; color: #ef4444; text-decoration: none; font-weight: 600; margin-top: 15px; border-top: 1px solid var(--border-color);">
+                            <i class="fa-solid fa-circle-chevron-left" style="width: 20px;"></i> Back to Courses
                         </a>
                     </li>
                 </ul>
@@ -1792,7 +1801,7 @@
                                 <i class="fa-solid fa-user-check" style="color: var(--color-success);"></i> Manually Add Student
                             </h3>
                             <p class="text-muted" style="font-size: 0.85rem; margin-bottom: 20px;">Bypass link registration. Manually register and immediately approve a student inside this course.</p>
-                            <form id="vp-manual-student-form" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; gap: 12px;">
+                            <form id="vp-manual-student-form" style="display: flex; flex-direction: column; gap: 12px;">
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Name</label>
                                     <input type="text" id="vp-manual-name" required placeholder="Student Full Name" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
@@ -1941,6 +1950,25 @@
                     <p id="vp-student-video-desc" class="text-muted" style="margin-top: 8px; font-size: 0.92rem; line-height: 1.5;"></p>
                 </div>
             </main>
+        </div>
+
+        <!-- Student Course Switcher Modal -->
+        <div id="vp-student-course-modal" class="auth-overlay hidden" style="z-index: 4000; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(11, 19, 41, 0.85); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center;">
+            <div class="auth-card" style="max-width: 440px; width: 90%; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 24px; padding: 30px; box-shadow: var(--shadow-lg);">
+                <div style="text-align: center; margin-bottom: 25px;">
+                    <div style="width: 55px; height: 55px; border-radius: 50%; background: var(--primary-color-soft); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 15px;">
+                        <i class="fa-solid fa-graduation-cap" style="font-size: 1.6rem; color: var(--primary-color);"></i>
+                    </div>
+                    <h3 style="font-size: 1.35rem; font-weight: 700; color: var(--text-primary); margin: 0;">Switch Video Course</h3>
+                    <p class="text-muted" style="font-size: 0.85rem; margin-top: 5px;">Choose from your active approved courses below</p>
+                </div>
+                <div id="vp-student-modal-courses-list" style="display: flex; flex-direction: column; gap: 12px; max-height: 250px; overflow-y: auto; padding-right: 4px;">
+                    <!-- Populated dynamically -->
+                </div>
+                <button class="btn btn-secondary btn-block" onclick="document.getElementById('vp-student-course-modal').classList.add('hidden');" style="margin-top: 20px; border-radius: 8px;">
+                    Cancel
+                </button>
+            </div>
         </div>
 
     </div>

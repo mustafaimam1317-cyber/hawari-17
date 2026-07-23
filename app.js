@@ -21430,8 +21430,15 @@ function initAuthFlow() {
     // Submit New Registration Request
     if (btnRegisterSubmit) {
         btnRegisterSubmit.addEventListener("click", () => {
+            const nameInput = document.getElementById("auth-reg-name");
+            const name = nameInput ? nameInput.value.trim() : "";
             const password = passwordRegInput.value;
             const confirm = passwordRegConfirmInput.value;
+
+            if (!name) {
+                showToast("Name Required", "Please enter your full name.", "danger");
+                return;
+            }
 
             if (!password || password.length < 6) {
                 showToast("Weak Password", "Password must be at least 6 characters long.", "danger");
@@ -21447,6 +21454,7 @@ function initAuthFlow() {
             const newUser = {
                 email: currentAuthenticatingEmail,
                 password: sha256Sync(password),
+                displayName: name,
                 status: "pending",
                 role: "user",
                 dateRegistered: new Date().toLocaleDateString()
@@ -25747,14 +25755,17 @@ async function dbPost(table, payload) {
     }
     const localKey = getVpLocalKey(table);
     let localData = getLocalData(localKey);
-    const idKey = payload.id ? 'id' : (payload.email ? 'email' : null);
-    if (idKey) {
-        const idx = localData.findIndex(row => String(row[idKey]) === String(payload[idKey]));
-        if (idx >= 0) {
-            localData[idx] = payload;
-        } else {
-            localData.push(payload);
+    let idx = -1;
+    if (table === "hawari_video_requests" && payload.email && payload.course_id) {
+        idx = localData.findIndex(row => String(row.email) === String(payload.email) && String(row.course_id) === String(payload.course_id));
+    } else {
+        const idKey = payload.id ? 'id' : (payload.email ? 'email' : null);
+        if (idKey) {
+            idx = localData.findIndex(row => String(row[idKey]) === String(payload[idKey]));
         }
+    }
+    if (idx >= 0) {
+        localData[idx] = payload;
     } else {
         localData.push(payload);
     }
@@ -25775,14 +25786,22 @@ async function dbDelete(table, idQuery) {
     const localKey = getVpLocalKey(table);
     let localData = getLocalData(localKey);
     const parts = idQuery.split("&");
+    const conditions = [];
     parts.forEach(part => {
         const eqIdx = part.indexOf("=eq.");
         if (eqIdx >= 0) {
-            const key = part.substring(0, eqIdx);
-            const val = part.substring(eqIdx + 4);
-            localData = localData.filter(row => String(row[key]) !== String(val));
+            conditions.push({
+                key: part.substring(0, eqIdx),
+                val: part.substring(eqIdx + 4)
+            });
         }
     });
+    if (conditions.length > 0) {
+        localData = localData.filter(row => {
+            const allMatch = conditions.every(cond => String(row[cond.key]) === String(cond.val));
+            return !allMatch;
+        });
+    }
     saveLocalData(localKey, localData);
     return success;
 }
@@ -25814,24 +25833,7 @@ window.handleVideoPortalRouting = async function(hash) {
             return;
         }
 
-        // Check if student is blocked locally on this browser
-        if (localStorage.getItem(`vp_registered_${courseId}`) === "true") {
-            document.getElementById("vp-subscribe-panel").innerHTML = `
-                <div style="text-align: center; padding: 40px 20px;">
-                    <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(239, 68, 68, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
-                        <i class="fa-solid fa-ban" style="font-size: 2.2rem; color: var(--color-danger);"></i>
-                    </div>
-                    <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--color-danger);">Access Blocked</h3>
-                    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5;">
-                        You have already submitted a registration request for this course. Access to this page is permanently deactivated.
-                    </p>
-                </div>
-            `;
-            document.getElementById("vp-subscribe-panel").classList.remove("hidden");
-            const header = document.getElementById("vp-header");
-            if (header) header.style.display = "none";
-            return;
-        }
+
 
         const courses = await dbGet("hawari_video_courses", `id=eq.${courseId}`);
         if (courses.length === 0) {
@@ -25883,6 +25885,7 @@ window.initVideoPortal = function() {
         vpState.currentUser = null;
         vpState.activeCourse = null;
         stopWatermark();
+        stopSessionValidityCheck();
         const player = document.getElementById("vp-main-video-player");
         if (player) player.pause();
 
@@ -25891,6 +25894,107 @@ window.initVideoPortal = function() {
         const selectorPage = document.getElementById("course-selector-page");
         if (selectorPage) selectorPage.classList.remove("hidden");
     };
+
+    // 1b. Student Course Switcher click handler
+    const userDisplay = document.getElementById("vp-user-display");
+    if (userDisplay) {
+        userDisplay.style.cursor = "pointer";
+        userDisplay.title = "Click to switch courses";
+        userDisplay.onclick = async () => {
+            if (!vpState.currentUser || vpState.currentUser.role !== "student") return;
+
+            // Fetch all approved requests for this student email
+            const list = await dbGet("hawari_video_requests", `email=eq.${vpState.currentUser.email}&status=eq.approved`);
+            if (list.length <= 1) {
+                showToast("No Other Courses", "You are not registered in any other approved courses.", "info");
+                return;
+            }
+
+            // Fetch all course records
+            const courses = await dbGet("hawari_video_courses");
+            
+            const modal = document.getElementById("vp-student-course-modal");
+            const listContainer = document.getElementById("vp-student-modal-courses-list");
+            listContainer.innerHTML = "";
+
+            list.forEach(req => {
+                const course = courses.find(c => c.id === req.course_id);
+                if (!course) return;
+
+                const btn = document.createElement("button");
+                btn.className = "btn btn-block btn-secondary";
+                btn.style.cssText = "display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-size: 0.9rem; font-weight: 600; border-radius: 12px; margin-bottom: 8px; border: 1px solid var(--border-color); text-align: left; width: 100%; box-sizing: border-box;";
+                
+                const isActive = course.id === vpState.activeCourse.id;
+                if (isActive) {
+                    btn.classList.add("btn-primary");
+                    btn.classList.remove("btn-secondary");
+                    btn.style.borderColor = "var(--primary-color)";
+                }
+
+                btn.innerHTML = `
+                    <span><i class="fa-solid fa-graduation-cap" style="margin-right: 8px;"></i> ${course.name}</span>
+                    ${isActive ? '<span class="badge badge-active" style="font-size: 0.7rem; padding: 2px 6px;">Active</span>' : '<i class="fa-solid fa-chevron-right"></i>'}
+                `;
+
+                btn.onclick = async () => {
+                    if (isActive) {
+                        modal.classList.add("hidden");
+                        return;
+                    }
+
+                    // Check Course dates before switching
+                    const now = Date.now();
+                    if (course.start_date && new Date(course.start_date).getTime() > now) {
+                        showToast("Course Not Started", `This course begins on: ${course.start_date}.`, "warning");
+                        return;
+                    }
+                    if (course.end_date && new Date(course.end_date).getTime() < now) {
+                        showToast("Course Expired", "The access period for this course has ended.", "danger");
+                        return;
+                    }
+
+                    // Check Device fingerprint for target course
+                    let localToken = "";
+                    if (window.AndroidBridge && typeof window.AndroidBridge.getDeviceToken === "function") {
+                        localToken = window.AndroidBridge.getDeviceToken();
+                    } else {
+                        localToken = localStorage.getItem(`vp_device_${course.id}`);
+                        if (!localToken) {
+                            localToken = "dev_" + Math.random().toString(36).substring(2) + Date.now();
+                            localStorage.setItem(`vp_device_${course.id}`, localToken);
+                        }
+                    }
+
+                    if (req.device_token && req.device_token !== localToken) {
+                        showToast("Device Mismatch", "Only 1 device is allowed. This account is registered on another device for this course.", "danger");
+                        return;
+                    }
+
+                    if (!req.device_token) {
+                        req.device_token = localToken;
+                        await dbPost("hawari_video_requests", req);
+                    }
+
+                    // Perform the switch
+                    vpState.activeCourse = course;
+                    vpState.currentUser.course_id = course.id;
+                    vpState.currentUser.student_code = req.student_code;
+                    vpState.currentUser.id = req.id;
+
+                    showToast("Switched Course", `Now playing: ${course.name}`, "success");
+                    modal.classList.add("hidden");
+                    
+                    // Re-render student workspace
+                    renderVpStudentWorkspace();
+                };
+
+                listContainer.appendChild(btn);
+            });
+
+            modal.classList.remove("hidden");
+        };
+    }
 
     // 2. Auth Flow handler
     document.getElementById("btn-vp-login-submit").onclick = async () => {
@@ -25937,8 +26041,9 @@ window.initVideoPortal = function() {
         // C. Student Request Check
         const requests = await dbGet("hawari_video_requests", `email=eq.${email}`);
         if (requests.length > 0) {
-            const req = requests[0];
-            if (req.password_hash === sha256Sync(password)) {
+            const hashedInputPassword = sha256Sync(password);
+            const req = requests.find(r => r.password_hash === hashedInputPassword);
+            if (req) {
                 if (req.status === "blocked") {
                     showToast("Blocked Account", "Your access to this course has been blocked.", "danger");
                     return;
@@ -25989,7 +26094,7 @@ window.initVideoPortal = function() {
                     localStorage.setItem(`vp_device_${req.course_id}`, localToken);
                 }
 
-                vpState.currentUser = { email, role: "student", course_id: req.course_id, name: req.name, student_code: req.student_code, phone: req.phone };
+                vpState.currentUser = { email, role: "student", course_id: req.course_id, name: req.name, student_code: req.student_code, phone: req.phone, id: req.id };
                 vpState.activeCourse = targCourse;
 
                 showToast("Welcome Student", `Logged in to ${targCourse.name}.`, "success");
@@ -26020,41 +26125,58 @@ window.initVideoPortal = function() {
         // Verify if they are already registered for this course
         const existing = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${form.dataset.courseId}`);
         if (existing.length > 0) {
-            localStorage.setItem(`vp_registered_${form.dataset.courseId}`, "true");
-            showToast("Duplicate Request", "You have already registered for this course.", "warning");
-            setTimeout(() => {
-                window.location.reload();
-            }, 1500);
-            return;
+            const currentReq = existing[0];
+            if (currentReq.status === "approved") {
+                showToast("Already Approved", "Your account is already approved for this course. Please log in.", "warning");
+                return;
+            }
+            
+            // Allow updating the pending/blocked request by reusing its ID
+            const payload = {
+                id: currentReq.id,
+                course_id: form.dataset.courseId,
+                name: name,
+                email: email,
+                phone: phone,
+                student_code: code || "",
+                password_hash: sha256Sync(password),
+                status: "pending", // Reset to pending for review
+                device_token: "", // Clear fingerprint to allow fresh login
+                created_at: currentReq.created_at || new Date().toLocaleDateString()
+            };
+            await dbPost("hawari_video_requests", payload);
+            showToast("Success", "Registration details updated. Waiting for admin approval.", "success");
+        } else {
+            // Create a brand new request
+            const payload = {
+                id: `req_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                course_id: form.dataset.courseId,
+                name: name,
+                email: email,
+                phone: phone,
+                student_code: code || "",
+                password_hash: sha256Sync(password),
+                status: "pending",
+                device_token: "",
+                created_at: new Date().toLocaleDateString()
+            };
+            await dbPost("hawari_video_requests", payload);
+            showToast("Success", "Registration submitted. Waiting for admin approval.", "success");
         }
-
-        const payload = {
-            id: `req_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-            course_id: form.dataset.courseId,
-            name: name,
-            email: email,
-            phone: phone,
-            student_code: code || "", // Optional!
-            password_hash: sha256Sync(password),
-            status: "pending",
-            device_token: "",
-            created_at: new Date().toLocaleDateString()
-        };
-
-        await dbPost("hawari_video_requests", payload);
-        localStorage.setItem(`vp_registered_${form.dataset.courseId}`, "true");
-        showToast("Success", "Registration submitted. Waiting for admin approval.", "success");
         
-        // Deactivate page immediately by showing success block screen
+        // Show success block with option to register another student
         document.getElementById("vp-subscribe-panel").innerHTML = `
             <div style="text-align: center; padding: 40px 20px;">
                 <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(16, 185, 129, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
                     <i class="fa-solid fa-circle-check" style="font-size: 2.2rem; color: var(--color-success);"></i>
                 </div>
                 <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--color-success);">Submission Successful</h3>
-                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5;">
-                    Your subscription request has been received. This page is now deactivated. If you attempt to access it again, you will be blocked.
+                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5; margin-bottom: 20px;">
+                    Your subscription request has been received. You will be able to access the lectures once the instructor approves your request.
                 </p>
+                <button class="btn btn-primary" onclick="window.location.reload();" style="padding: 8px 16px; border-radius: 8px;">
+                    Register Another Student
+                </button>
             </div>
         `;
     };
@@ -26236,9 +26358,10 @@ window.initVideoPortal = function() {
                 progressText.innerText = pct + "%";
             });
         } catch (err) {
-            console.warn("Supabase Storage upload failed, falling back to local IndexedDB:", err);
-            await saveVideoBlob(contentId, file);
-            uploadUrl = `indexeddb://${contentId}`;
+            console.error("Supabase Storage upload failed:", err);
+            progressContainer.classList.add("hidden");
+            alert(`فشل رفع الفيديو إلى السحابة:\n${err.message}\nيرجى التأكد من صلاحيات المجلد (hawari_videos) وسياسات RLS في لوحة تحكم Supabase.`);
+            return;
         }
 
         const payload = {
@@ -26290,9 +26413,10 @@ window.initVideoPortal = function() {
                 progressText.innerText = pct + "%";
             });
         } catch (err) {
-            console.warn("Supabase Storage upload failed, falling back to local IndexedDB:", err);
-            await saveVideoBlob(contentId, file);
-            uploadUrl = `indexeddb://${contentId}`;
+            console.error("Supabase Storage upload failed:", err);
+            progressContainer.classList.add("hidden");
+            alert(`فشل رفع الفيديو إلى السحابة:\n${err.message}\nيرجى التأكد من صلاحيات المجلد (hawari_videos) وسياسات RLS في لوحة تحكم Supabase.`);
+            return;
         }
 
         const payload = {
@@ -26352,41 +26476,93 @@ window.initVideoPortal = function() {
     // 11. Manual Student registration
     document.getElementById("vp-manual-student-form").onsubmit = async (e) => {
         e.preventDefault();
-        const name = document.getElementById("vp-manual-name").value.trim();
-        const email = document.getElementById("vp-manual-email").value.trim().toLowerCase();
-        const phone = document.getElementById("vp-manual-phone").value.trim();
-        const code = document.getElementById("vp-manual-code").value.trim();
-        const password = document.getElementById("vp-manual-password").value;
+        try {
+            const name = document.getElementById("vp-manual-name").value.trim();
+            const email = document.getElementById("vp-manual-email").value.trim().toLowerCase();
+            const phone = document.getElementById("vp-manual-phone").value.trim();
+            const code = document.getElementById("vp-manual-code").value.trim();
+            const password = document.getElementById("vp-manual-password").value;
 
-        // Check if student exists
-        const existing = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
-        if (existing.length > 0) {
-            showToast("Duplicate Student", "This student account is already registered for this course.", "warning");
-            return;
-        }
+            if (!vpState.activeCourse) {
+                showToast("Error", "No active course selected.", "danger");
+                return;
+            }
 
-        const payload = {
-            id: `req_${Date.now()}`,
-            course_id: vpState.activeCourse.id,
-            name: name,
-            email: email,
-            phone: phone,
-            student_code: code,
-            password_hash: sha256Sync(password),
-            status: "approved",
-            device_token: "",
-            created_at: new Date().toLocaleDateString()
-        };
+            if (!email.endsWith("@gmail.com")) {
+                showToast("Gmail Only", "Only Gmail accounts are allowed.", "warning");
+                return;
+            }
 
-        await dbPost("hawari_video_requests", payload);
-        showToast("Student Activated", "Account registered and immediately approved.", "success");
-        e.target.reset();
-        
-        // Refresh requests table if in requests tab
-        if (vpState.activeSubTab === "requests") {
-            renderVpRequestsTable();
+            // Show loading spinner on button
+            const submitBtn = e.target.querySelector("button[type='submit']");
+            const originalText = submitBtn ? submitBtn.innerHTML : "Add & Activate Student";
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Adding...`;
+            }
+
+            // Check if student exists
+            const existing = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
+            if (existing.length > 0) {
+                showToast("Duplicate Student", "This student account is already registered for this course.", "warning");
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalText;
+                }
+                return;
+            }
+
+            const payload = {
+                id: `req_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                course_id: vpState.activeCourse.id,
+                name: name,
+                email: email,
+                phone: phone,
+                student_code: code,
+                password_hash: sha256Sync(password),
+                status: "approved",
+                device_token: "",
+                created_at: new Date().toLocaleDateString()
+            };
+
+            // Cache local state optimistically
+            if (!vpState.requests) vpState.requests = [];
+            vpState.requests.push(payload);
+
+            await dbPost("hawari_video_requests", payload);
+            
+            showToast("Student Activated", "Account registered and immediately approved.", "success");
+            e.target.reset();
+            
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalText;
+            }
+
+            // Refresh requests table to show the new student immediately
+            renderVpRequestsTable(false);
+        } catch (err) {
+            console.error("[Manual Student] Error adding student:", err);
+            showToast("Error", `Failed to add student: ${err.message}`, "danger");
+            const submitBtn = e.target.querySelector("button[type='submit']");
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = "Add & Activate Student";
+            }
         }
     };
+
+    // 12. Exit Workspace Handler
+    const exitWorkspaceBtn = document.getElementById("vp-nav-exit-workspace");
+    if (exitWorkspaceBtn) {
+        exitWorkspaceBtn.onclick = (e) => {
+            e.preventDefault();
+            vpState.activeCourse = null;
+            document.getElementById("vp-instructor-workspace").classList.add("hidden");
+            document.getElementById("vp-admin-panel").classList.remove("hidden");
+            renderVpAdminPanel();
+        };
+    }
 
     // 12. Requests table filters and search bindings
     document.getElementById("vp-requests-search").oninput = renderVpRequestsTable;
@@ -26846,61 +27022,61 @@ window.renderVpRequestsTable = async function(forceRefresh = false) {
 
     let filtered = vpState.requests;
 
-    // Filter by search matching Name, Email, Phone, or Student Code safely
-    if (searchVal) {
-        filtered = filtered.filter(r => {
-            const name = (r.name || "").toLowerCase();
-            const email = (r.email || "").toLowerCase();
-            const phone = (r.phone || "").toLowerCase();
-            const code = (r.student_code || "").toLowerCase();
-            return name.includes(searchVal) || email.includes(searchVal) || phone.includes(searchVal) || code.includes(searchVal);
-        });
-    }
+    vpState.requests.forEach(req => {
+        const name = req.name || "";
+        const email = req.email || "";
+        const phone = req.phone || "";
+        const code = req.student_code || "";
+        
+        // Apply search filter
+        if (searchVal) {
+            const matchName = name.toLowerCase().includes(searchVal);
+            const matchEmail = email.toLowerCase().includes(searchVal);
+            const matchPhone = phone.toLowerCase().includes(searchVal);
+            const matchCode = code.toLowerCase().includes(searchVal);
+            if (!matchName && !matchEmail && !matchPhone && !matchCode) return;
+        }
 
-    // Filter by status dropdown selection safely
-    if (filterVal !== "all") {
-        filtered = filtered.filter(r => (r.status || "").trim().toLowerCase() === filterVal);
-    }
-
-    if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="padding: 30px; color: var(--text-secondary);">No student requests match criteria.</td></tr>`;
-        return;
-    }
-
-    filtered.forEach(req => {
         const currentStatus = (req.status || "pending").toLowerCase();
         let statusBadgeClass = "badge-pending";
         if (currentStatus === "approved") statusBadgeClass = "badge-active";
         if (currentStatus === "blocked") statusBadgeClass = "badge-blocked";
 
+        // Apply tab filter
+        if (filterVal !== "all" && currentStatus !== filterVal) return;
+
         const row = document.createElement("tr");
         row.innerHTML = `
-            <td><strong>${sanitizeHTML(req.name || "N/A")}</strong></td>
-            <td>${sanitizeHTML(req.email || "N/A")}</td>
-            <td>${sanitizeHTML(req.phone || "N/A")}</td>
-            <td><code style="background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">${sanitizeHTML(req.student_code || "N/A")}</code></td>
+            <td><strong style="color:var(--text-primary); font-weight:600;">${sanitizeHTML(name)}</strong></td>
+            <td><span style="font-family:monospace; color:var(--text-secondary);">${sanitizeHTML(email)}</span></td>
+            <td><span style="color:var(--text-secondary);">${sanitizeHTML(phone)}</span></td>
+            <td><span class="badge" style="background:var(--border-color); color:var(--text-secondary); font-weight:600;">${sanitizeHTML(code)}</span></td>
             <td><span class="badge ${statusBadgeClass}">${currentStatus.toUpperCase()}</span></td>
             <td>
-                ${req.device_token ? `
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="font-size:0.75rem; color:var(--color-success); font-weight:600;"><i class="fa-solid fa-mobile-screen"></i> Locked</span>
-                        <button class="btn btn-secondary btn-sm" onclick="resetDeviceFingerprint('${req.email}')" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px;">Reset</button>
-                    </div>
-                ` : '<span class="text-muted" style="font-size:0.75rem;">Not Activated</span>'}
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:0.75rem; color:var(--text-secondary); font-family:monospace;">
+                        ${req.device_token ? req.device_token.substring(0, 10) + "..." : 'No lock'}
+                    </span>
+                    ${req.device_token ? `
+                        <button class="btn btn-secondary btn-sm" onclick="resetDeviceFingerprint('${req.id}')" style="padding: 2px 6px; font-size: 0.7rem; border-radius: 4px;">
+                            <i class="fa-solid fa-key"></i> Reset
+                        </button>
+                    ` : ''}
+                </div>
             </td>
             <td class="text-right">
                 <div style="display:flex; justify-content:flex-end; gap:6px;">
                     ${currentStatus !== "approved" ? `
-                        <button class="btn btn-success btn-sm" onclick="updateRequestStatus('${req.email}', 'approved')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
+                        <button class="btn btn-success btn-sm" onclick="updateRequestStatus('${req.id}', 'approved')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
                             <i class="fa-solid fa-check"></i> Approve
                         </button>
                     ` : ''}
                     ${currentStatus !== "blocked" ? `
-                        <button class="btn btn-danger btn-sm" onclick="updateRequestStatus('${req.email}', 'blocked')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
+                        <button class="btn btn-danger btn-sm" onclick="updateRequestStatus('${req.id}', 'blocked')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px;">
                             <i class="fa-solid fa-ban"></i> Block
                         </button>
                     ` : ''}
-                    <button class="btn btn-danger btn-sm" onclick="deleteVpRequest('${req.email}')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px; background-color: #ef4444; border-color: #ef4444;">
+                    <button class="btn btn-danger btn-sm" onclick="deleteVpRequest('${req.id}', '${req.email}')" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 6px; background-color: #ef4444; border-color: #ef4444;">
                         <i class="fa-solid fa-trash"></i> Delete
                     </button>
                 </div>
@@ -26908,11 +27084,12 @@ window.renderVpRequestsTable = async function(forceRefresh = false) {
         `;
         tbody.appendChild(row);
     });
-};
+}
+window.renderVpRequestsTable = renderVpRequestsTable;
 
-window.updateRequestStatus = async function(email, newStatus) {
+window.updateRequestStatus = async function(id, newStatus) {
     if (!vpState.activeCourse) return;
-    const req = vpState.requests.find(r => r.email === email);
+    const req = vpState.requests.find(r => r.id === id);
     if (req) {
         req.status = newStatus;
         if (newStatus === "blocked") {
@@ -26928,28 +27105,27 @@ window.updateRequestStatus = async function(email, newStatus) {
     }
 };
 
-window.deleteVpRequest = async function(email) {
+window.deleteVpRequest = async function(id, email) {
     if (!vpState.activeCourse) return;
     if (!confirm(`Are you sure you want to delete registration request for ${email}? They will be able to register again.`)) return;
 
     // Optimistically update UI instantly
-    vpState.requests = vpState.requests.filter(r => r.email !== email);
+    vpState.requests = vpState.requests.filter(r => r.id !== id);
     renderVpRequestsTable(false);
 
     // Delete from cloud DB in the background
-    await dbDelete("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
+    await dbDelete("hawari_video_requests", `id=eq.${id}`);
     showToast("Student Deleted", "Registration request deleted successfully.", "success");
 };
 
-window.resetDeviceFingerprint = async function(email) {
+window.resetDeviceFingerprint = async function(id) {
     if (!vpState.activeCourse) return;
-    const requests = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${vpState.activeCourse.id}`);
-    if (requests.length > 0) {
-        const req = requests[0];
+    const req = vpState.requests.find(r => r.id === id);
+    if (req) {
         req.device_token = "";
+        renderVpRequestsTable(false);
         await dbPost("hawari_video_requests", req);
         showToast("Device Reset", "Student device lock has been cleared. Next login will register a new device.", "success");
-        renderVpRequestsTable();
     }
 };
 
@@ -26982,6 +27158,9 @@ async function renderVpStudentWorkspace() {
 
     // Select first tab
     document.getElementById("btn-vp-stud-tab-videos").click();
+
+    // Start background checks for session validity
+    startSessionValidityCheck();
 }
 
 async function renderStudentPlaylist() {
@@ -27020,7 +27199,7 @@ async function renderStudentPlaylist() {
             `;
             
             item.onclick = async () => {
-                const checkReq = await dbGet("hawari_video_requests", `email=eq.${vpState.currentUser.email}`);
+                const checkReq = await dbGet("hawari_video_requests", `email=eq.${vpState.currentUser.email}&course_id=eq.${vpState.activeCourse.id}`);
                 if (checkReq.length === 0 || checkReq[0].status !== "approved") {
                     showToast("Access Revoked", "Your account has been deactivated or blocked.", "danger");
                     document.getElementById("btn-vp-exit").click();
@@ -27088,6 +27267,111 @@ function playStudentVideo(vid) {
     }
 }
 
+async function wipeSessionAndData(reason) {
+    console.log("Wiping session and downloads. Reason: " + reason);
+    
+    // Clear student local storage session keys
+    localStorage.removeItem("vp_session");
+    
+    // Clear IndexedDB video blobs if any exist
+    try {
+        const db = await initIndexedDB();
+        const tx = db.transaction("videos", "readwrite");
+        const store = tx.objectStore("videos");
+        store.clear();
+    } catch(e) {
+        console.error("Error clearing IndexedDB videos:", e);
+    }
+    
+    // Invoke native bridge to wipe all physical downloads
+    if (window.AndroidBridge && typeof window.AndroidBridge.wipeAllVideos === "function") {
+        try {
+            window.AndroidBridge.wipeAllVideos();
+        } catch(e) {
+            console.error("Error invoking AndroidBridge.wipeAllVideos:", e);
+        }
+    }
+
+    // Force student logout UI update and redirect to Auth screen
+    vpState.currentUser = null;
+    vpState.activeCourse = null;
+    stopWatermark();
+    stopSessionValidityCheck();
+    const player = document.getElementById("vp-main-video-player");
+    if (player) player.pause();
+    
+    showToast("Access Blocked", `Your session has been terminated: ${reason}`, "danger");
+    
+    // Route back to auth panel
+    document.getElementById("vp-student-workspace").classList.add("hidden");
+    document.getElementById("vp-auth-panel").classList.remove("hidden");
+    window.location.hash = "#video-portal";
+    window.handleVideoPortalRouting("video-portal");
+}
+window.wipeSessionAndData = wipeSessionAndData;
+
+async function checkSessionValidity() {
+    if (!vpState.currentUser || vpState.currentUser.role !== "student") return true;
+    
+    try {
+        const email = vpState.currentUser.email;
+        const courseId = vpState.currentUser.course_id;
+        
+        // Fetch current status from database
+        const checkReq = await dbGet("hawari_video_requests", `email=eq.${email}&course_id=eq.${courseId}`);
+        if (checkReq.length === 0) {
+            await wipeSessionAndData("Account deleted by administrator.");
+            return false;
+        }
+        
+        const req = checkReq[0];
+        if (req.status !== "approved") {
+            await wipeSessionAndData("Account is no longer active (status: " + req.status.toUpperCase() + ").");
+            return false;
+        }
+        
+        // If Android device, make sure device token matches or is set
+        if (window.AndroidBridge && typeof window.AndroidBridge.getDeviceToken === "function") {
+            const currentToken = window.AndroidBridge.getDeviceToken();
+            if (req.device_token && req.device_token !== currentToken) {
+                await wipeSessionAndData("Logged in on another device.");
+                return false;
+            }
+        }
+        return true;
+    } catch (e) {
+        console.error("Error during checkSessionValidity:", e);
+        return true; // Don't wipe on random network error to allow offline use
+    }
+}
+window.checkSessionValidity = checkSessionValidity;
+
+let sessionValidityTimer = null;
+function startSessionValidityCheck() {
+    if (sessionValidityTimer) clearInterval(sessionValidityTimer);
+    
+    // Run immediately first
+    checkSessionValidity();
+    
+    // Check every 30 seconds
+    sessionValidityTimer = setInterval(async () => {
+        const isValid = await checkSessionValidity();
+        if (!isValid) {
+            clearInterval(sessionValidityTimer);
+            sessionValidityTimer = null;
+        }
+    }, 30000);
+}
+window.startSessionValidityCheck = startSessionValidityCheck;
+
+function stopSessionValidityCheck() {
+    if (sessionValidityTimer) {
+        clearInterval(sessionValidityTimer);
+        sessionValidityTimer = null;
+    }
+}
+window.stopSessionValidityCheck = stopSessionValidityCheck;
+
 let watermarkTimer = null;
 function startWatermark(studentCode, phone) {
     const watermarkEl = document.getElementById("vp-moving-watermark");
@@ -27126,6 +27410,7 @@ async function uploadFileToSupabase(file, courseId, contentId, progressCallback)
         xhr.open("POST", uploadUrl, true);
         xhr.setRequestHeader("apikey", anonKey);
         xhr.setRequestHeader("Authorization", `Bearer ${anonKey}`);
+        xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
         
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {

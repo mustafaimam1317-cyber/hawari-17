@@ -27298,7 +27298,15 @@ async function wipeSessionAndData(reason) {
     stopWatermark();
     stopSessionValidityCheck();
     const player = document.getElementById("vp-main-video-player");
-    if (player) player.pause();
+    if (player) {
+        player.pause();
+        if (player.dataset.objectUrl) {
+            URL.revokeObjectURL(player.dataset.objectUrl);
+            delete player.dataset.objectUrl;
+        }
+        player.removeAttribute("src");
+        player.load();
+    }
     
     showToast("Access Blocked", `Your session has been terminated: ${reason}`, "danger");
     

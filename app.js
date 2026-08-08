@@ -20068,10 +20068,24 @@ function getGroupQuestionsSeed() {
     return SEED_QUESTIONS;
 }
 
+// Immutable Whitelist of Admin Emails
+const ALLOWED_ADMIN_EMAILS = ["mustafaimam1317@gmail.com"];
+
+function isUserAdmin(user = state.currentUser) {
+    if (!user || !user.email) return false;
+    const cleanEmail = user.email.trim().toLowerCase();
+    return ALLOWED_ADMIN_EMAILS.includes(cleanEmail) && user.role === "admin";
+}
+
 function saveStateToStorage(skipCloudSync = false) {
     if (!state.activeGroup) return;
 
     if (state.currentUser) {
+        // Enforce anti-elevation: if email is not whitelisted, force role to student
+        if (!ALLOWED_ADMIN_EMAILS.includes(state.currentUser.email.trim().toLowerCase())) {
+            state.currentUser.role = "student";
+        }
+        
         const userRecord = state.users.find(u => u.email === state.currentUser.email);
         if (userRecord) {
             userRecord.questions = state.questions;
@@ -20079,12 +20093,40 @@ function saveStateToStorage(skipCloudSync = false) {
             userRecord.notebookNotes = state.notebookNotes;
             userRecord.flashcards = state.flashcards;
             userRecord.lastUpdated = Date.now();
+            if (!ALLOWED_ADMIN_EMAILS.includes(userRecord.email.trim().toLowerCase())) {
+                userRecord.role = "student";
+            }
             state.currentUser.lastUpdated = userRecord.lastUpdated;
         }
     }
-    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
-    encryptLocal(getGroupKey(STORAGE_KEYS.CURRENT_USER), state.currentUser);
-    localStorage.setItem(STORAGE_KEYS.THEME, JSON.stringify(state.isDarkMode));
+
+    // Sanitize users array to remove heavy redundant question bank duplications before saving
+    const sanitizedUsers = state.users.map(u => ({
+        email: u.email,
+        password: u.password,
+        role: ALLOWED_ADMIN_EMAILS.includes(u.email.trim().toLowerCase()) ? u.role : "student",
+        status: u.status,
+        dateRegistered: u.dateRegistered,
+        displayName: u.displayName || "",
+        lastUpdated: u.lastUpdated || Date.now()
+    }));
+
+    // Sanitize current user snapshot for storage
+    let sanitizedCurrentUser = null;
+    if (state.currentUser) {
+        sanitizedCurrentUser = {
+            email: state.currentUser.email,
+            role: isUserAdmin(state.currentUser) ? "admin" : "student",
+            status: state.currentUser.status,
+            dateRegistered: state.currentUser.dateRegistered,
+            displayName: state.currentUser.displayName || "",
+            lastUpdated: state.currentUser.lastUpdated || Date.now()
+        };
+    }
+
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), sanitizedUsers);
+    encryptLocal(getGroupKey(STORAGE_KEYS.CURRENT_USER), sanitizedCurrentUser);
+    encryptLocal(STORAGE_KEYS.THEME, state.isDarkMode);
     encryptLocal(getGroupKey(STORAGE_KEYS.REPORT_TASKS), state.reportTasks);
     
     // Cloud sync users registry
@@ -20093,8 +20135,7 @@ function saveStateToStorage(skipCloudSync = false) {
     }
 
     // If active user is Admin, also upload the global questions template!
-    const isAdmin = state.currentUser && state.currentUser.role === "admin";
-    if (isAdmin) {
+    if (isUserAdmin(state.currentUser)) {
         saveGlobalQuestionsToCloud();
     }
 }
@@ -20739,11 +20780,10 @@ function encryptLocal(key, value) {
             localStorage.setItem(key, JSON.stringify(value));
         }
     } catch (e) {
-        console.warn("Local save quota warning:", e);
         if (e.name === 'QuotaExceededError' || e.code === 22 || (e.message && e.message.includes("exceeded"))) {
             try {
                 Object.keys(localStorage).forEach(k => {
-                    if (k.startsWith('hawari_questions_') || k.startsWith('hawari_tests_')) {
+                    if (k.startsWith('hawari_questions_') || k.startsWith('hawari_tests_') || k.startsWith('hawari_temp_') || k.includes('cache')) {
                         localStorage.removeItem(k);
                     }
                 });
@@ -20751,8 +20791,12 @@ function encryptLocal(key, value) {
             } catch (err) {
                 try {
                     sessionStorage.setItem(key, JSON.stringify(value));
-                } catch (sErr) {}
+                } catch (sErr) {
+                    console.warn("Storage quota full, unable to persist non-critical state locally.");
+                }
             }
+        } else {
+            console.warn("Local save warning:", e);
         }
     }
 }

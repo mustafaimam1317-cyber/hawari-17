@@ -137,42 +137,46 @@
 
             <!-- Password Login Step -->
             <div id="auth-password-step" class="auth-step">
-                <div class="code-header" style="margin-bottom: 15px;">
-                    <h3>Sign In</h3>
-                    <p>Enter the password for <strong id="login-email-display"></strong></p>
-                </div>
-                <div class="input-group">
-                    <label for="auth-login-password"><i class="fa-solid fa-lock"></i> Password</label>
-                    <input type="password" id="auth-login-password" placeholder="••••••••" maxlength="32" required>
-                </div>
-                <button id="btn-login-submit" class="btn btn-primary btn-block">
-                    Log In <i class="fa-solid fa-right-to-bracket"></i>
-                </button>
-                <button id="btn-back-to-email-2" class="btn btn-link btn-block">Back</button>
+                <form id="auth-login-form" onsubmit="event.preventDefault();">
+                    <div class="code-header" style="margin-bottom: 15px;">
+                        <h3>Sign In</h3>
+                        <p>Enter the password for <strong id="login-email-display"></strong></p>
+                    </div>
+                    <div class="input-group">
+                        <label for="auth-login-password"><i class="fa-solid fa-lock"></i> Password</label>
+                        <input type="password" id="auth-login-password" name="password" autocomplete="current-password" placeholder="••••••••" maxlength="32" required>
+                    </div>
+                    <button id="btn-login-submit" type="submit" class="btn btn-primary btn-block">
+                        Log In <i class="fa-solid fa-right-to-bracket"></i>
+                    </button>
+                    <button id="btn-back-to-email-2" type="button" class="btn btn-link btn-block">Back</button>
+                </form>
             </div>
 
             <!-- Account Registration Step -->
             <div id="auth-register-step" class="auth-step">
-                <div class="code-header" style="margin-bottom: 15px;">
-                    <h3>Create Account</h3>
-                    <p>Gmail: <strong id="register-email-display"></strong></p>
-                </div>
-                <div class="input-group" style="margin-bottom: 10px;">
-                    <label for="auth-reg-name"><i class="fa-solid fa-user"></i> Full Name (الاسم بالكامل)</label>
-                    <input type="text" id="auth-reg-name" placeholder="أدخل اسمك بالكامل" maxlength="80" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                </div>
-                <div class="input-group">
-                    <label for="auth-reg-password"><i class="fa-solid fa-lock"></i> Choose Password</label>
-                    <input type="password" id="auth-reg-password" placeholder="••••••••" maxlength="32" required>
-                </div>
-                <div class="input-group" style="margin-top: 10px;">
-                    <label for="auth-reg-confirm"><i class="fa-solid fa-lock"></i> Confirm Password</label>
-                    <input type="password" id="auth-reg-confirm" placeholder="••••••••" maxlength="32" required>
-                </div>
-                <button id="btn-register-submit" class="btn btn-primary btn-block" style="margin-top: 15px;">
-                    Send Registration Request <i class="fa-solid fa-paper-plane"></i>
-                </button>
-                <button id="btn-back-to-email-3" class="btn btn-link btn-block">Back</button>
+                <form id="auth-register-form" onsubmit="event.preventDefault();">
+                    <div class="code-header" style="margin-bottom: 15px;">
+                        <h3>Create Account</h3>
+                        <p>Gmail: <strong id="register-email-display"></strong></p>
+                    </div>
+                    <div class="input-group" style="margin-bottom: 10px;">
+                        <label for="auth-reg-name"><i class="fa-solid fa-user"></i> Full Name (الاسم بالكامل)</label>
+                        <input type="text" id="auth-reg-name" name="name" autocomplete="name" placeholder="أدخل اسمك بالكامل" maxlength="80" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+                    <div class="input-group">
+                        <label for="auth-reg-password"><i class="fa-solid fa-lock"></i> Choose Password</label>
+                        <input type="password" id="auth-reg-password" name="new-password" autocomplete="new-password" placeholder="••••••••" maxlength="32" required>
+                    </div>
+                    <div class="input-group" style="margin-top: 10px;">
+                        <label for="auth-reg-confirm"><i class="fa-solid fa-lock"></i> Confirm Password</label>
+                        <input type="password" id="auth-reg-confirm" name="confirm-password" autocomplete="new-password" placeholder="••••••••" maxlength="32" required>
+                    </div>
+                    <button id="btn-register-submit" type="submit" class="btn btn-primary btn-block" style="margin-top: 15px;">
+                        Send Registration Request <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                    <button id="btn-back-to-email-3" type="button" class="btn btn-link btn-block">Back</button>
+                </form>
             </div>
 
             <!-- Pending Approval Step -->
@@ -1437,19 +1441,21 @@
                 <p class="text-muted" style="font-size: 0.9rem; margin-top: 5px;">Access custom video courses and active subscriptions</p>
             </div>
             
-            <div class="input-group" style="margin-bottom: 20px;">
-                <label for="vp-auth-email" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Email Address</label>
-                <input type="email" id="vp-auth-email" placeholder="example@gmail.com" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-            </div>
+            <form id="vp-auth-form" onsubmit="event.preventDefault();">
+                <div class="input-group" style="margin-bottom: 20px;">
+                    <label for="vp-auth-email" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Email Address</label>
+                    <input type="email" id="vp-auth-email" name="email" autocomplete="username" placeholder="example@gmail.com" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
 
-            <div class="input-group" style="margin-bottom: 25px;">
-                <label for="vp-auth-password" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Password</label>
-                <input type="password" id="vp-auth-password" placeholder="••••••••" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-            </div>
+                <div class="input-group" style="margin-bottom: 25px;">
+                    <label for="vp-auth-password" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Password</label>
+                    <input type="password" id="vp-auth-password" name="password" autocomplete="current-password" placeholder="••••••••" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                </div>
 
-            <button class="btn btn-primary btn-block" id="btn-vp-login-submit" style="padding: 12px; font-weight: 600; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                Log In <i class="fa-solid fa-arrow-right"></i>
-            </button>
+                <button type="submit" class="btn btn-primary btn-block" id="btn-vp-login-submit" style="padding: 12px; font-weight: 600; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    Log In <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </form>
         </div>
 
         <!-- 2. VP Subscription Form Panel -->
@@ -1485,7 +1491,7 @@
 
                 <div class="input-group" style="margin-bottom: 20px;">
                     <label for="vp-sub-password" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Password (To Login Later)</label>
-                    <input type="password" id="vp-sub-password" placeholder="••••••••" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    <input type="password" id="vp-sub-password" name="password" autocomplete="new-password" placeholder="••••••••" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                 </div>
 
                 <button type="submit" class="btn btn-success btn-block" id="btn-vp-sub-submit" style="padding: 12px; font-weight: 600; border-radius: 8px;">
@@ -1530,7 +1536,7 @@
                     </div>
                     <div class="input-group">
                         <label for="vp-course-password" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Instructor Password</label>
-                        <input type="password" id="vp-course-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                        <input type="password" id="vp-course-password" name="instructor-password" autocomplete="new-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
                     <div style="display: flex; gap: 10px;">
                         <button type="submit" class="btn btn-primary" style="flex: 1; padding: 10px; border-radius: 8px;">Create</button>
@@ -1783,7 +1789,7 @@
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Password</label>
-                                    <input type="password" id="vp-assistant-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="password" id="vp-assistant-password" name="assistant-password" autocomplete="new-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <button type="submit" class="btn btn-primary" style="margin-top: 10px; padding: 10px; border-radius: 8px;">
                                     Save Assistant Credentials
@@ -1820,7 +1826,7 @@
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Initial Password</label>
-                                    <input type="password" id="vp-manual-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="password" id="vp-manual-password" name="student-password" autocomplete="new-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <button type="submit" class="btn btn-success" style="margin-top: 10px; padding: 10px; border-radius: 8px;">
                                     Add & Activate Student

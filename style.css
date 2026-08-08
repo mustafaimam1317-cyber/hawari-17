@@ -1,5 +1,5 @@
 /* ================= STYLE SYSTEM VARIABLES ================= */
-:root {
+:root, .light-theme {
     /* Fonts */
     --font-primary: 'Inter', sans-serif;
     --font-heading: 'Outfit', sans-serif;
@@ -9,36 +9,39 @@
     --color-success-soft: rgba(16, 185, 129, 0.1);
     --color-danger: #ef4444;
     --color-danger-soft: rgba(239, 68, 68, 0.1);
-    --color-warning: #f59e0b;
-    --color-warning-soft: rgba(245, 158, 11, 0.15);
-    --color-info: #0284c7;
+    --color-warning: #8E5745;
+    --color-warning-soft: rgba(142, 87, 69, 0.15);
+    --color-info: #9B71B2;
     
-    /* Light Mode Variables */
-    --bg-primary: #f8fafc;
-    --bg-secondary: #ffffff;
-    --bg-sidebar: #ffffff;
-    --bg-accent: #eff6ff;
-    --border-color: #e2e8f0;
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
-    --primary-color: #2563eb;
-    --primary-color-hover: #1d4ed8;
-    --primary-color-soft: rgba(37, 99, 235, 0.08);
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+    /* Light Mode Variables - Pattern #3 Neumorphism (Pale Orchid & Amethyst - Image 2) */
+    --bg-primary: #FBF1FF;
+    --bg-secondary: #F7EBFA;
+    --bg-sidebar: #F2E2F7;
+    --bg-accent: #EFE0F5;
+    --border-color: rgba(227, 208, 234, 0.6);
+    --text-primary: #3A1C36;
+    --text-secondary: #5C3357;
+    --text-muted: #8E6889;
+    --primary-color: #9B71B2;
+    --primary-color-hover: #84559E;
+    --primary-color-soft: rgba(155, 113, 178, 0.14);
     
-    /* Editor highlight colors (RGB value for selection matching) */
+    /* Neumorphic Dual Tactile Shadows */
+    --shadow-sm: 3px 3px 7px rgba(92, 51, 87, 0.08), -3px -3px 7px rgba(255, 255, 255, 0.95);
+    --shadow-md: 6px 6px 14px rgba(92, 51, 87, 0.10), -6px -6px 14px rgba(255, 255, 255, 0.95);
+    --shadow-lg: 10px 10px 24px rgba(92, 51, 87, 0.13), -10px -10px 24px rgba(255, 255, 255, 1.0);
+    --shadow-inset: inset 3px 3px 6px rgba(92, 51, 87, 0.10), inset -3px -3px 6px rgba(255, 255, 255, 0.85);
+    
+    /* Editor highlight colors */
     --highlight-yellow: #fef08a;
-    --highlight-blue: #bfdbfe;
+    --highlight-blue: #e3d0ea;
     --highlight-green: #bbf7d0;
 
     --sidebar-width: 260px;
     --transition-speed: 0.3s;
 }
 
-/* Dark Mode Variables */
+/* Dark Mode Variables (Original Theme Restored) */
 .dark-theme {
     --bg-primary: #0b0f19;
     --bg-secondary: #111827;

@@ -20739,13 +20739,27 @@ function encryptLocal(key, value) {
             localStorage.setItem(key, JSON.stringify(value));
         }
     } catch (e) {
-        console.error("Local save failed:", e);
+        console.warn("Local save quota warning:", e);
+        if (e.name === 'QuotaExceededError' || e.code === 22 || (e.message && e.message.includes("exceeded"))) {
+            try {
+                Object.keys(localStorage).forEach(k => {
+                    if (k.startsWith('hawari_questions_') || k.startsWith('hawari_tests_')) {
+                        localStorage.removeItem(k);
+                    }
+                });
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (err) {
+                try {
+                    sessionStorage.setItem(key, JSON.stringify(value));
+                } catch (sErr) {}
+            }
+        }
     }
 }
 
 function decryptLocal(key, defaultValue) {
     try {
-        const val = localStorage.getItem(key);
+        const val = localStorage.getItem(key) || sessionStorage.getItem(key);
         if (!val) return defaultValue;
         return JSON.parse(val);
     } catch (e) {
@@ -20773,13 +20787,22 @@ async function supabaseRequest(path, options = {}) {
             headers
         });
         if (!response.ok) {
-            console.error(`Supabase request to ${path} failed:`, await response.text());
+            const errText = await response.text();
+            if (errText) console.error(`Supabase request to ${path} failed:`, errText);
             return null;
         }
         if (options.method === "DELETE" || response.status === 204) {
             return true;
         }
-        return await response.json();
+        const text = await response.text();
+        if (!text || text.trim() === "") {
+            return [];
+        }
+        try {
+            return JSON.parse(text);
+        } catch (jsonErr) {
+            return [];
+        }
     } catch (e) {
         console.error(`Supabase request to ${path} error:`, e);
         return null;
@@ -25879,8 +25902,13 @@ window.handleVideoPortalRouting = async function(hash) {
 };
 
 window.initVideoPortal = function() {
+    const bindEvent = (id, event, fn) => {
+        const el = document.getElementById(id);
+        if (el) el[event] = fn;
+    };
+
     // 1. Exit Portal handler
-    document.getElementById("btn-vp-exit").onclick = () => {
+    bindEvent("btn-vp-exit", "onclick", () => {
         // Log out portal user and redirect to landing page
         vpState.currentUser = null;
         vpState.activeCourse = null;
@@ -25889,11 +25917,12 @@ window.initVideoPortal = function() {
         const player = document.getElementById("vp-main-video-player");
         if (player) player.pause();
 
-        document.getElementById("video-portal-view").classList.add("hidden");
+        const portalView = document.getElementById("video-portal-view");
+        if (portalView) portalView.classList.add("hidden");
         window.location.hash = "";
         const selectorPage = document.getElementById("course-selector-page");
         if (selectorPage) selectorPage.classList.remove("hidden");
-    };
+    });
 
     // 1b. Student Course Switcher click handler
     const userDisplay = document.getElementById("vp-user-display");
@@ -26108,7 +26137,7 @@ window.initVideoPortal = function() {
     };
 
     // 3. Subscription registration form submit handler
-    document.getElementById("vp-subscribe-form").onsubmit = async (e) => {
+    bindEvent("vp-subscribe-form", "onsubmit", async (e) => {
         e.preventDefault();
         const form = e.target;
         const name = document.getElementById("vp-sub-name").value.trim();
@@ -26165,24 +26194,27 @@ window.initVideoPortal = function() {
         }
         
         // Show success block with option to register another student
-        document.getElementById("vp-subscribe-panel").innerHTML = `
-            <div style="text-align: center; padding: 40px 20px;">
-                <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(16, 185, 129, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
-                    <i class="fa-solid fa-circle-check" style="font-size: 2.2rem; color: var(--color-success);"></i>
+        const subPanel = document.getElementById("vp-subscribe-panel");
+        if (subPanel) {
+            subPanel.innerHTML = `
+                <div style="text-align: center; padding: 40px 20px;">
+                    <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(16, 185, 129, 0.1); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+                        <i class="fa-solid fa-circle-check" style="font-size: 2.2rem; color: var(--color-success);"></i>
+                    </div>
+                    <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--color-success);">Submission Successful</h3>
+                    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5; margin-bottom: 20px;">
+                        Your subscription request has been received. You will be able to access the lectures once the instructor approves your request.
+                    </p>
+                    <button class="btn btn-primary" onclick="window.location.reload();" style="padding: 8px 16px; border-radius: 8px;">
+                        Register Another Student
+                    </button>
                 </div>
-                <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--color-success);">Submission Successful</h3>
-                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 10px; line-height: 1.5; margin-bottom: 20px;">
-                    Your subscription request has been received. You will be able to access the lectures once the instructor approves your request.
-                </p>
-                <button class="btn btn-primary" onclick="window.location.reload();" style="padding: 8px 16px; border-radius: 8px;">
-                    Register Another Student
-                </button>
-            </div>
-        `;
-    };
+            `;
+        }
+    });
 
     // 4. Admin Course Form submission handler
-    document.getElementById("vp-admin-course-form").onsubmit = async (e) => {
+    bindEvent("vp-admin-course-form", "onsubmit", async (e) => {
         e.preventDefault();
         const name = document.getElementById("vp-course-name").value.trim();
         const start = document.getElementById("vp-course-start-date").value;
@@ -26204,16 +26236,19 @@ window.initVideoPortal = function() {
         await dbPost("hawari_video_courses", payload);
         showToast("Course Created", `Track "${name}" has been successfully added.`, "success");
         e.target.reset();
-        document.getElementById("vp-admin-create-course-box").classList.add("hidden");
+        const createBox = document.getElementById("vp-admin-create-course-box");
+        if (createBox) createBox.classList.add("hidden");
         renderVpAdminPanel();
-    };
+    });
 
-    document.getElementById("btn-vp-show-add-course").onclick = () => {
-        document.getElementById("vp-admin-create-course-box").classList.toggle("hidden");
-    };
-    document.getElementById("btn-vp-cancel-add-course").onclick = () => {
-        document.getElementById("vp-admin-create-course-box").classList.add("hidden");
-    };
+    bindEvent("btn-vp-show-add-course", "onclick", () => {
+        const box = document.getElementById("vp-admin-create-course-box");
+        if (box) box.classList.toggle("hidden");
+    });
+    bindEvent("btn-vp-cancel-add-course", "onclick", () => {
+        const box = document.getElementById("vp-admin-create-course-box");
+        if (box) box.classList.add("hidden");
+    });
 
     // 5. Workspace Sidebar view navigation
     const wsNavs = ['videos', 'shorts', 'subs', 'settings', 'admin'];
@@ -26229,7 +26264,8 @@ window.initVideoPortal = function() {
                     if (pane) pane.classList.add("hidden");
                 });
                 el.classList.add("active");
-                document.getElementById(`vp-pane-${tab}`).classList.remove("hidden");
+                const targetPane = document.getElementById(`vp-pane-${tab}`);
+                if (targetPane) targetPane.classList.remove("hidden");
                 vpState.activeTab = tab;
                 if (tab === "admin") {
                     renderVpAdminControlPanel();
@@ -26239,16 +26275,18 @@ window.initVideoPortal = function() {
     });
 
     // Copy Registration Link button
-    document.getElementById("btn-copy-course-reg-url").onclick = () => {
+    bindEvent("btn-copy-course-reg-url", "onclick", () => {
         const urlInput = document.getElementById("vp-course-reg-url-display");
-        urlInput.select();
-        urlInput.setSelectionRange(0, 99999);
-        navigator.clipboard.writeText(urlInput.value);
-        showToast("Copied!", "Registration link copied to clipboard.", "success");
-    };
+        if (urlInput) {
+            urlInput.select();
+            urlInput.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(urlInput.value);
+            showToast("Copied!", "Registration link copied to clipboard.", "success");
+        }
+    });
 
     // Admin Control Expiration Bounds Form
-    document.getElementById("vp-course-bounds-form").onsubmit = async (e) => {
+    bindEvent("vp-course-bounds-form", "onsubmit", async (e) => {
         e.preventDefault();
         const start = document.getElementById("vp-edit-start-date").value;
         const end = document.getElementById("vp-edit-end-date").value;
@@ -26265,10 +26303,10 @@ window.initVideoPortal = function() {
         vpState.activeCourse = payload;
         showToast("Boundaries Updated", "Course start and expiration dates saved successfully.", "success");
         renderVpAdminControlPanel();
-    };
+    });
 
     // Admin Control Course Users Credentials Form
-    document.getElementById("vp-course-users-form").onsubmit = async (e) => {
+    bindEvent("vp-course-users-form", "onsubmit", async (e) => {
         e.preventDefault();
         const instEmail = document.getElementById("vp-edit-inst-email").value.trim().toLowerCase();
         const instPass = document.getElementById("vp-edit-inst-pass").value;
@@ -26289,53 +26327,69 @@ window.initVideoPortal = function() {
         vpState.activeCourse = payload;
         showToast("Credentials Updated", "Course manager (instructor & assistant) accounts updated.", "success");
         renderVpAdminControlPanel();
-    };
+    });
 
     // 6. Subscriptions Tabs (Generate Link / Requests) navigation
-    document.getElementById("btn-vp-subtab-links").onclick = () => {
-        document.getElementById("btn-vp-subtab-links").classList.add("active");
-        document.getElementById("btn-vp-subtab-links").style.borderColor = "var(--primary-color)";
-        document.getElementById("btn-vp-subtab-requests").classList.remove("active");
-        document.getElementById("btn-vp-subtab-requests").style.borderColor = "transparent";
-        document.getElementById("vp-subpane-links").classList.remove("hidden");
-        document.getElementById("vp-subpane-requests").classList.add("hidden");
+    bindEvent("btn-vp-subtab-links", "onclick", () => {
+        const btnLinks = document.getElementById("btn-vp-subtab-links");
+        const btnReqs = document.getElementById("btn-vp-subtab-requests");
+        const paneLinks = document.getElementById("vp-subpane-links");
+        const paneReqs = document.getElementById("vp-subpane-requests");
+        if (btnLinks) {
+            btnLinks.classList.add("active");
+            btnLinks.style.borderColor = "var(--primary-color)";
+        }
+        if (btnReqs) {
+            btnReqs.classList.remove("active");
+            btnReqs.style.borderColor = "transparent";
+        }
+        if (paneLinks) paneLinks.classList.remove("hidden");
+        if (paneReqs) paneReqs.classList.add("hidden");
         vpState.activeSubTab = "links";
-    };
+    });
 
-    document.getElementById("btn-vp-subtab-requests").onclick = () => {
-        document.getElementById("btn-vp-subtab-requests").classList.add("active");
-        document.getElementById("btn-vp-subtab-requests").style.borderColor = "var(--primary-color)";
-        document.getElementById("btn-vp-subtab-links").classList.remove("active");
-        document.getElementById("btn-vp-subtab-links").style.borderColor = "transparent";
-        document.getElementById("vp-subpane-requests").classList.remove("hidden");
-        document.getElementById("vp-subpane-links").classList.add("hidden");
+    bindEvent("btn-vp-subtab-requests", "onclick", () => {
+        const btnLinks = document.getElementById("btn-vp-subtab-links");
+        const btnReqs = document.getElementById("btn-vp-subtab-requests");
+        const paneLinks = document.getElementById("vp-subpane-links");
+        const paneReqs = document.getElementById("vp-subpane-requests");
+        if (btnReqs) {
+            btnReqs.classList.add("active");
+            btnReqs.style.borderColor = "var(--primary-color)";
+        }
+        if (btnLinks) {
+            btnLinks.classList.remove("active");
+            btnLinks.style.borderColor = "transparent";
+        }
+        if (paneReqs) paneReqs.classList.remove("hidden");
+        if (paneLinks) paneLinks.classList.add("hidden");
         vpState.activeSubTab = "requests";
         renderVpRequestsTable(true);
-    };
+    });
 
     // Bind Add Section buttons
-    document.getElementById("btn-vp-add-section-videos").onclick = () => {
+    bindEvent("btn-vp-add-section-videos", "onclick", () => {
         const name = prompt("Enter Section Name:");
         if (name && name.trim()) {
             addVpSection(name.trim(), "regular");
         }
-    };
+    });
 
-    document.getElementById("btn-vp-add-section-shorts").onclick = () => {
+    bindEvent("btn-vp-add-section-shorts", "onclick", () => {
         const name = prompt("Enter Section Name:");
         if (name && name.trim()) {
             addVpSection(name.trim(), "short");
         }
-    };
+    });
 
     // 7. Regular Video File uploading
-    document.getElementById("vp-add-video-form").onsubmit = async (e) => {
+    bindEvent("vp-add-video-form", "onsubmit", async (e) => {
         e.preventDefault();
         const sectionId = document.getElementById("vp-video-section-id").value;
         const title = document.getElementById("vp-video-title").value.trim();
         const desc = document.getElementById("vp-video-desc").value.trim();
         const fileInput = document.getElementById("vp-video-file");
-        const file = fileInput.files[0];
+        const file = fileInput ? fileInput.files[0] : null;
 
         if (!file) {
             showToast("Required File", "Please select a video file to upload.", "warning");
@@ -26347,19 +26401,19 @@ window.initVideoPortal = function() {
         const progressBar = document.getElementById("vp-video-progress-bar");
         const progressText = document.getElementById("vp-video-progress-text");
         
-        progressContainer.classList.remove("hidden");
-        progressBar.style.width = "0%";
-        progressText.innerText = "0%";
+        if (progressContainer) progressContainer.classList.remove("hidden");
+        if (progressBar) progressBar.style.width = "0%";
+        if (progressText) progressText.innerText = "0%";
 
         let uploadUrl = "";
         try {
             uploadUrl = await uploadFileToSupabase(file, vpState.activeCourse.id, contentId, (pct) => {
-                progressBar.style.width = pct + "%";
-                progressText.innerText = pct + "%";
+                if (progressBar) progressBar.style.width = pct + "%";
+                if (progressText) progressText.innerText = pct + "%";
             });
         } catch (err) {
             console.error("Supabase Storage upload failed:", err);
-            progressContainer.classList.add("hidden");
+            if (progressContainer) progressContainer.classList.add("hidden");
             alert(`فشل رفع الفيديو إلى السحابة:\n${err.message}\nيرجى التأكد من صلاحيات المجلد (hawari_videos) وسياسات RLS في لوحة تحكم Supabase.`);
             return;
         }
@@ -26378,19 +26432,20 @@ window.initVideoPortal = function() {
         await dbPost("hawari_video_content", payload);
         showToast("Video Added", "Regular course video uploaded successfully.", "success");
         
-        progressContainer.classList.add("hidden");
+        if (progressContainer) progressContainer.classList.add("hidden");
         e.target.reset();
-        document.getElementById("vp-add-video-box").classList.add("hidden");
+        const box = document.getElementById("vp-add-video-box");
+        if (box) box.classList.add("hidden");
         loadWorkspaceContent();
-    };
+    });
 
     // 8. Short Video File uploading
-    document.getElementById("vp-add-short-form").onsubmit = async (e) => {
+    bindEvent("vp-add-short-form", "onsubmit", async (e) => {
         e.preventDefault();
         const sectionId = document.getElementById("vp-short-section-id").value;
         const title = document.getElementById("vp-short-title").value.trim();
         const fileInput = document.getElementById("vp-short-file");
-        const file = fileInput.files[0];
+        const file = fileInput ? fileInput.files[0] : null;
 
         if (!file) {
             showToast("Required File", "Please select a short video file to upload.", "warning");
@@ -26402,19 +26457,19 @@ window.initVideoPortal = function() {
         const progressBar = document.getElementById("vp-short-progress-bar");
         const progressText = document.getElementById("vp-short-progress-text");
         
-        progressContainer.classList.remove("hidden");
-        progressBar.style.width = "0%";
-        progressText.innerText = "0%";
+        if (progressContainer) progressContainer.classList.remove("hidden");
+        if (progressBar) progressBar.style.width = "0%";
+        if (progressText) progressText.innerText = "0%";
 
         let uploadUrl = "";
         try {
             uploadUrl = await uploadFileToSupabase(file, vpState.activeCourse.id, contentId, (pct) => {
-                progressBar.style.width = pct + "%";
-                progressText.innerText = pct + "%";
+                if (progressBar) progressBar.style.width = pct + "%";
+                if (progressText) progressText.innerText = pct + "%";
             });
         } catch (err) {
             console.error("Supabase Storage upload failed:", err);
-            progressContainer.classList.add("hidden");
+            if (progressContainer) progressContainer.classList.add("hidden");
             alert(`فشل رفع الفيديو إلى السحابة:\n${err.message}\nيرجى التأكد من صلاحيات المجلد (hawari_videos) وسياسات RLS في لوحة تحكم Supabase.`);
             return;
         }
@@ -26433,14 +26488,15 @@ window.initVideoPortal = function() {
         await dbPost("hawari_video_content", payload);
         showToast("Short Added", "Short video uploaded successfully.", "success");
         
-        progressContainer.classList.add("hidden");
+        if (progressContainer) progressContainer.classList.add("hidden");
         e.target.reset();
-        document.getElementById("vp-add-short-box").classList.add("hidden");
+        const box = document.getElementById("vp-add-short-box");
+        if (box) box.classList.add("hidden");
         loadWorkspaceContent();
-    };
+    });
 
     // 9. Subscription Link Generator
-    document.getElementById("vp-generate-link-form").onsubmit = async (e) => {
+    bindEvent("vp-generate-link-form", "onsubmit", async (e) => {
         e.preventDefault();
         const name = document.getElementById("vp-link-name").value.trim();
         const price = document.getElementById("vp-link-price").value.trim();
@@ -26456,10 +26512,10 @@ window.initVideoPortal = function() {
         showToast("Link Generated", "Registration URL has been added to active list.", "success");
         e.target.reset();
         loadWorkspaceContent();
-    };
+    });
 
     // 10. Assistant setup
-    document.getElementById("vp-invite-assistant-form").onsubmit = async (e) => {
+    bindEvent("vp-invite-assistant-form", "onsubmit", async (e) => {
         e.preventDefault();
         const email = document.getElementById("vp-assistant-email").value.trim().toLowerCase();
         const password = document.getElementById("vp-assistant-password").value;
@@ -26471,10 +26527,10 @@ window.initVideoPortal = function() {
         showToast("Assistant Added", "Assistant login credentials successfully saved.", "success");
         e.target.reset();
         renderWorkspaceSettings();
-    };
+    });
 
     // 11. Manual Student registration
-    document.getElementById("vp-manual-student-form").onsubmit = async (e) => {
+    bindEvent("vp-manual-student-form", "onsubmit", async (e) => {
         e.preventDefault();
         try {
             const name = document.getElementById("vp-manual-name").value.trim();
@@ -26550,7 +26606,7 @@ window.initVideoPortal = function() {
                 submitBtn.innerHTML = "Add & Activate Student";
             }
         }
-    };
+    });
 
     // 12. Exit Workspace Handler
     const exitWorkspaceBtn = document.getElementById("vp-nav-exit-workspace");
@@ -26565,22 +26621,26 @@ window.initVideoPortal = function() {
     }
 
     // 12. Requests table filters and search bindings
-    document.getElementById("vp-requests-search").oninput = renderVpRequestsTable;
-    document.getElementById("vp-requests-filter").onchange = renderVpRequestsTable;
+    bindEvent("vp-requests-search", "oninput", renderVpRequestsTable);
+    bindEvent("vp-requests-filter", "onchange", renderVpRequestsTable);
 
     // 13. Student workspace playlist tab toggling
-    document.getElementById("btn-vp-stud-tab-videos").onclick = () => {
-        document.getElementById("btn-vp-stud-tab-videos").className = "btn btn-primary";
-        document.getElementById("btn-vp-stud-tab-shorts").className = "btn btn-secondary";
+    bindEvent("btn-vp-stud-tab-videos", "onclick", () => {
+        const btnV = document.getElementById("btn-vp-stud-tab-videos");
+        const btnS = document.getElementById("btn-vp-stud-tab-shorts");
+        if (btnV) btnV.className = "btn btn-primary";
+        if (btnS) btnS.className = "btn btn-secondary";
         vpState.studentPlaylistTab = "videos";
         renderStudentPlaylist();
-    };
-    document.getElementById("btn-vp-stud-tab-shorts").onclick = () => {
-        document.getElementById("btn-vp-stud-tab-shorts").className = "btn btn-primary";
-        document.getElementById("btn-vp-stud-tab-videos").className = "btn btn-secondary";
+    });
+
+    bindEvent("btn-vp-stud-tab-shorts", "onclick", () => {
+        const btnV = document.getElementById("btn-vp-stud-tab-videos");
+        const btnS = document.getElementById("btn-vp-stud-tab-shorts");
+        if (btnS) btnS.className = "btn btn-primary";
+        if (btnV) btnV.className = "btn btn-secondary";
         vpState.studentPlaylistTab = "shorts";
-        renderStudentPlaylist();
-    };
+    });
 
     // 14. Custom Video Player Controls
     const video = document.getElementById("vp-main-video-player");

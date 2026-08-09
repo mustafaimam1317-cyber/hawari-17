@@ -20732,6 +20732,8 @@ function switchView(viewName) {
         renderFlashcardsView();
     } else if (viewName === "report-task") {
         renderReportTaskStudentView();
+    } else if (viewName === "hawari-book") {
+        renderHawariBookView();
     } else if (viewName === "admin-panel") {
         renderAdminPanel();
     }
@@ -21163,6 +21165,8 @@ function triggerViewRefresh() {
         renderFlashcardsView();
     } else if (state.activeView === "report-task") {
         renderReportTaskStudentView();
+    } else if (state.activeView === "hawari-book") {
+        renderHawariBookView();
     }
 }
 
@@ -23222,6 +23226,7 @@ function renderAdminPanel() {
     renderAdminReportTasksTab();
     renderAdminApprovalsTab();
     renderAdminQuizzesTab();
+    renderAdminBookAccessManager();
 }
 
 function renderAdminQuestionsTab() {
@@ -23818,9 +23823,96 @@ function populateAdminTopicSelect(selectedTopic) {
 }
 
 let activeFlashcardIdx = 0;
+let activeFlashcardTab = "official"; // "official" | "personal"
 
 function renderFlashcardsView() {
-    const list = state.flashcards || [];
+    // Bind Tab Switchers
+    const btnOfficial = document.getElementById("btn-tab-fc-official");
+    const btnPersonal = document.getElementById("btn-tab-fc-personal");
+    const btnCreate = document.getElementById("btn-create-personal-flashcard");
+
+    if (btnOfficial && !btnOfficial.dataset.bound) {
+        btnOfficial.dataset.bound = "true";
+        btnOfficial.onclick = () => {
+            activeFlashcardTab = "official";
+            btnOfficial.classList.add("active");
+            if (btnPersonal) btnPersonal.classList.remove("active");
+            activeFlashcardIdx = 0;
+            renderFlashcardsView();
+        };
+    }
+
+    if (btnPersonal && !btnPersonal.dataset.bound) {
+        btnPersonal.dataset.bound = "true";
+        btnPersonal.onclick = () => {
+            activeFlashcardTab = "personal";
+            btnPersonal.classList.add("active");
+            if (btnOfficial) btnOfficial.classList.remove("active");
+            activeFlashcardIdx = 0;
+            renderFlashcardsView();
+        };
+    }
+
+    if (btnCreate && !btnCreate.dataset.bound) {
+        btnCreate.dataset.bound = "true";
+        btnCreate.onclick = () => {
+            const modal = document.getElementById("modal-create-flashcard");
+            if (modal) modal.classList.remove("hidden");
+        };
+    }
+
+    // Bind Create Personal Flashcard Form
+    const createForm = document.getElementById("form-create-personal-flashcard");
+    if (createForm && !createForm.dataset.bound) {
+        createForm.dataset.bound = "true";
+        createForm.onsubmit = (e) => {
+            e.preventDefault();
+            const cat = document.getElementById("fc-new-category").value.trim();
+            const front = document.getElementById("fc-new-front").value.trim();
+            const back = document.getElementById("fc-new-back").value.trim();
+
+            if (!front || !back) {
+                showToast("Required Fields", "Please enter both front question and back answer.", "warning");
+                return;
+            }
+
+            const newCard = {
+                id: "fc_pers_" + Date.now() + Math.random().toString(36).substring(2, 6),
+                category: cat || "Personal Notes",
+                front: front,
+                back: back,
+                status: "review",
+                isOfficial: false,
+                authorEmail: state.currentUser ? state.currentUser.email : "guest"
+            };
+
+            if (!state.flashcards) state.flashcards = [];
+            state.flashcards.unshift(newCard);
+            saveStateToStorage();
+
+            showToast("Flashcard Added", "Created new card in My Personal Flashcards!", "success");
+            createForm.reset();
+            const modal = document.getElementById("modal-create-flashcard");
+            if (modal) modal.classList.add("hidden");
+
+            // Auto-switch to personal tab
+            activeFlashcardTab = "personal";
+            if (btnPersonal) btnPersonal.classList.add("active");
+            if (btnOfficial) btnOfficial.classList.remove("active");
+            activeFlashcardIdx = 0;
+            renderFlashcardsView();
+        };
+    }
+
+    // Filter Flashcards according to active tab
+    const allCards = state.flashcards || [];
+    let list = [];
+    if (activeFlashcardTab === "official") {
+        list = allCards.filter(c => c.isOfficial !== false);
+    } else {
+        const userEmail = state.currentUser ? state.currentUser.email : "";
+        list = allCards.filter(c => c.isOfficial === false && (!c.authorEmail || c.authorEmail === userEmail));
+    }
     
     const masteredLbl = document.getElementById("flashcard-stat-mastered");
     const reviewLbl = document.getElementById("flashcard-stat-review");
@@ -23860,59 +23952,72 @@ function renderFlashcardsView() {
 
     // Reset card flip view (make sure front is shown)
     const cardBox = document.getElementById("active-flashcard-box");
-    cardBox.classList.remove("flipped");
-
-    // Click handler for 3D flip card toggle
-    cardBox.onclick = () => {
-        cardBox.classList.toggle("flipped");
-    };
+    if (cardBox) {
+        cardBox.classList.remove("flipped");
+        cardBox.onclick = () => {
+            cardBox.classList.toggle("flipped");
+        };
+    }
 
     // Pop front
-    document.getElementById("card-front-category").innerText = activeCard.category || "General";
-    document.getElementById("card-front-text").innerText = activeCard.front;
+    const fCat = document.getElementById("card-front-category");
+    const fTxt = document.getElementById("card-front-text");
+    if (fCat) fCat.innerText = activeCard.category || "General";
+    if (fTxt) fTxt.innerText = activeCard.front;
 
     // Pop back
-    document.getElementById("card-back-category").innerText = activeCard.category || "General";
-    document.getElementById("card-back-text").innerText = activeCard.back;
+    const bCat = document.getElementById("card-back-category");
+    const bTxt = document.getElementById("card-back-text");
+    if (bCat) bCat.innerText = activeCard.category || "General";
+    if (bTxt) bTxt.innerText = activeCard.back;
 
     // Nav progress indicator
-    document.getElementById("flashcard-progress-indicator").innerText = `Card ${activeFlashcardIdx + 1} of ${list.length}`;
+    const prog = document.getElementById("flashcard-progress-indicator");
+    if (prog) prog.innerText = `Card ${activeFlashcardIdx + 1} of ${list.length}`;
 
     // Nav controls
-    document.getElementById("btn-fc-prev").onclick = () => {
-        activeFlashcardIdx--;
-        renderFlashcardsView();
-    };
+    const btnPrev = document.getElementById("btn-fc-prev");
+    const btnNext = document.getElementById("btn-fc-next");
+    if (btnPrev) {
+        btnPrev.onclick = () => {
+            activeFlashcardIdx--;
+            renderFlashcardsView();
+        };
+    }
 
-    document.getElementById("btn-fc-next").onclick = () => {
-        activeFlashcardIdx++;
-        renderFlashcardsView();
-    };
+    if (btnNext) {
+        btnNext.onclick = () => {
+            activeFlashcardIdx++;
+            renderFlashcardsView();
+        };
+    }
 
     // Card status actions
-    document.getElementById("btn-fc-mastered").onclick = () => {
-        activeCard.status = "mastered";
-        saveStateToStorage();
-        showToast("Mastered", "Marked as mastered! Keep going.", "success");
-        
-        // Go to next automatically
-        setTimeout(() => {
-            activeFlashcardIdx++;
-            renderFlashcardsView();
-        }, 300);
-    };
+    const btnMastered = document.getElementById("btn-fc-mastered");
+    const btnReview = document.getElementById("btn-fc-review");
+    if (btnMastered) {
+        btnMastered.onclick = () => {
+            activeCard.status = "mastered";
+            saveStateToStorage();
+            showToast("Mastered", "Marked as mastered! Keep going.", "success");
+            setTimeout(() => {
+                activeFlashcardIdx++;
+                renderFlashcardsView();
+            }, 300);
+        };
+    }
 
-    document.getElementById("btn-fc-review").onclick = () => {
-        activeCard.status = "review";
-        saveStateToStorage();
-        showToast("Needs Review", "Marked for review.", "warning");
-        
-        // Go to next automatically
-        setTimeout(() => {
-            activeFlashcardIdx++;
-            renderFlashcardsView();
-        }, 300);
-    };
+    if (btnReview) {
+        btnReview.onclick = () => {
+            activeCard.status = "review";
+            saveStateToStorage();
+            showToast("Needs Review", "Marked for review.", "warning");
+            setTimeout(() => {
+                activeFlashcardIdx++;
+                renderFlashcardsView();
+            }, 300);
+        };
+    }
 }
 
 let editFlashcardId = "";
@@ -27601,4 +27706,447 @@ async function deleteVideoBlob(id) {
         request.onerror = () => reject(request.error);
     });
 }
+
+// ================= HAWARI BOOK & CANVAS ANNOTATOR ENGINE =================
+let bookState = {
+    currentPage: 1,
+    numPages: 10,
+    zoom: 1.0,
+    activeTool: "pan", // "pan" | "pen" | "highlighter" | "text" | "eraser"
+    activeColor: "#2563eb",
+    strokeSize: 4,
+    isDrawing: false,
+    annotations: {}, // { [page]: [strokes] }
+    authorizedEmails: ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"]
+};
+
+// Check if a user email is authorized for Hawari Book access
+function isUserBookAuthorized(user) {
+    if (!user) return false;
+    if (user.role === "admin" || user.email === "mustafaimam1317@gmail.com") return true;
+    const email = user.email ? user.email.toLowerCase() : "";
+    return bookState.authorizedEmails.includes(email);
+}
+
+// Fetch Hawari Book authorized student emails list from Supabase
+async function fetchBookAccessList() {
+    try {
+        const rows = await supabaseRequest("hawari_book_access?select=email,status");
+        if (Array.isArray(rows) && rows.length > 0) {
+            const activeEmails = rows
+                .filter(r => r.status !== "revoked")
+                .map(r => r.email.toLowerCase());
+            bookState.authorizedEmails = Array.from(new Set([...bookState.authorizedEmails, ...activeEmails]));
+        }
+    } catch (e) {
+        console.warn("[BookAccess] Cloud fetch fallback:", e);
+    }
+}
+
+// Admin grant book access
+async function grantBookAccess(email) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) return;
+    if (!bookState.authorizedEmails.includes(cleanEmail)) {
+        bookState.authorizedEmails.push(cleanEmail);
+    }
+
+    try {
+        await supabaseRequest("hawari_book_access", {
+            method: "POST",
+            headers: { "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify({
+                email: cleanEmail,
+                status: "active",
+                granted_at: new Date().toISOString()
+            })
+        });
+    } catch (e) {
+        console.warn("[BookAccess] Cloud grant fallback:", e);
+    }
+}
+
+// Admin revoke book access
+async function revokeBookAccess(email) {
+    const cleanEmail = email.trim().toLowerCase();
+    bookState.authorizedEmails = bookState.authorizedEmails.filter(e => e !== cleanEmail);
+
+    try {
+        await supabaseRequest(`hawari_book_access?email=eq.${encodeURIComponent(cleanEmail)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "revoked" })
+        });
+    } catch (e) {
+        console.warn("[BookAccess] Cloud revoke fallback:", e);
+    }
+}
+
+// Render Admin Hawari Book Student Access Control UI inside Admin Panel
+function renderAdminBookAccessManager() {
+    const listEl = document.getElementById("admin-book-authorized-list");
+    const countEl = document.getElementById("admin-book-authorized-count");
+    if (!listEl) return;
+
+    fetchBookAccessList().then(() => {
+        const list = bookState.authorizedEmails.filter(e => e !== "mustafaimam1317@gmail.com");
+        if (countEl) countEl.innerText = list.length;
+        listEl.innerHTML = "";
+
+        if (list.length === 0) {
+            listEl.innerHTML = `<span class="text-muted" style="padding: 10px; font-size: 0.85rem; display: block; text-align: center;">No student emails currently authorized.</span>`;
+            return;
+        }
+
+        list.forEach(email => {
+            const item = document.createElement("div");
+            item.style.cssText = "display: flex; align-items: center; justify-content: space-between; background: var(--bg-primary); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 0.88rem;";
+            item.innerHTML = `
+                <span><i class="fa-solid fa-user-check" style="color: var(--color-success); margin-right: 6px;"></i> ${escapeHTML(email)}</span>
+                <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem;" onclick="revokeStudentBookAccess('${escapeHTML(email)}')">
+                    <i class="fa-solid fa-user-xmark"></i> Revoke
+                </button>
+            `;
+            listEl.appendChild(item);
+        });
+    });
+
+    // Bind Admin Authorize Form
+    const accessForm = document.getElementById("admin-book-access-form");
+    if (accessForm && !accessForm.dataset.bound) {
+        accessForm.dataset.bound = "true";
+        accessForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const input = document.getElementById("admin-book-access-email");
+            const email = input ? input.value.trim().toLowerCase() : "";
+
+            if (!email.endsWith("@gmail.com")) {
+                showToast("Gmail Required", "Please enter a valid Gmail address.", "warning");
+                return;
+            }
+
+            await grantBookAccess(email);
+            showToast("Access Authorized", `Granted Hawari Book access to ${email}`, "success");
+            if (input) input.value = "";
+            renderAdminBookAccessManager();
+        };
+    }
+}
+window.revokeStudentBookAccess = async function(email) {
+    await revokeBookAccess(email);
+    showToast("Access Revoked", `Revoked Hawari Book access for ${email}`, "info");
+    renderAdminBookAccessManager();
+};
+
+// Render Hawari Book View & Canvas Annotator Engine
+function renderHawariBookView() {
+    const isAuth = isUserBookAuthorized(state.currentUser);
+    const workspaceContainer = document.getElementById("book-workspace-container");
+    const restrictedCard = document.getElementById("book-access-restricted-card");
+    const badge = document.getElementById("book-access-status-badge");
+
+    if (!isAuth) {
+        if (workspaceContainer) workspaceContainer.classList.add("hidden");
+        if (restrictedCard) restrictedCard.classList.remove("hidden");
+        if (badge) {
+            badge.className = "badge badge-danger";
+            badge.innerHTML = `<i class="fa-solid fa-lock"></i> Access Restricted`;
+        }
+        return;
+    } else {
+        if (workspaceContainer) workspaceContainer.classList.remove("hidden");
+        if (restrictedCard) restrictedCard.classList.add("hidden");
+        if (badge) {
+            badge.className = "badge badge-active";
+            badge.innerHTML = `<i class="fa-solid fa-lock-open"></i> Access Granted`;
+        }
+    }
+
+    // Bind toolbar controls
+    bindBookToolbarEvents();
+
+    // Render Canvas & Page content
+    redrawBookCanvas();
+}
+
+function bindBookToolbarEvents() {
+    const btnPrev = document.getElementById("btn-book-prev-page");
+    const btnNext = document.getElementById("btn-book-next-page");
+    const btnZoomIn = document.getElementById("btn-book-zoom-in");
+    const btnZoomOut = document.getElementById("btn-book-zoom-out");
+    const btnZoomReset = document.getElementById("btn-book-zoom-reset");
+    const btnClear = document.getElementById("btn-book-clear-page");
+    const btnSave = document.getElementById("btn-book-save-annotations");
+    const btnCreateFc = document.getElementById("btn-book-create-flashcard");
+
+    if (btnPrev && !btnPrev.dataset.bound) {
+        btnPrev.dataset.bound = "true";
+        btnPrev.onclick = () => {
+            if (bookState.currentPage > 1) {
+                bookState.currentPage--;
+                redrawBookCanvas();
+            }
+        };
+    }
+
+    if (btnNext && !btnNext.dataset.bound) {
+        btnNext.dataset.bound = "true";
+        btnNext.onclick = () => {
+            if (bookState.currentPage < bookState.numPages) {
+                bookState.currentPage++;
+                redrawBookCanvas();
+            }
+        };
+    }
+
+    if (btnZoomIn && !btnZoomIn.dataset.bound) {
+        btnZoomIn.dataset.bound = "true";
+        btnZoomIn.onclick = () => {
+            if (bookState.zoom < 2.0) {
+                bookState.zoom += 0.15;
+                redrawBookCanvas();
+            }
+        };
+    }
+
+    if (btnZoomOut && !btnZoomOut.dataset.bound) {
+        btnZoomOut.dataset.bound = "true";
+        btnZoomOut.onclick = () => {
+            if (bookState.zoom > 0.6) {
+                bookState.zoom -= 0.15;
+                redrawBookCanvas();
+            }
+        };
+    }
+
+    if (btnZoomReset && !btnZoomReset.dataset.bound) {
+        btnZoomReset.dataset.bound = "true";
+        btnZoomReset.onclick = () => {
+            bookState.zoom = 1.0;
+            redrawBookCanvas();
+        };
+    }
+
+    // Tool picker buttons
+    const tools = ["pan", "pen", "highlighter", "text", "eraser"];
+    tools.forEach(t => {
+        const btn = document.getElementById(`btn-tool-${t}`);
+        if (btn && !btn.dataset.bound) {
+            btn.dataset.bound = "true";
+            btn.onclick = () => {
+                bookState.activeTool = t;
+                tools.forEach(tOther => {
+                    const b = document.getElementById(`btn-tool-${tOther}`);
+                    if (b) b.classList.remove("active");
+                });
+                btn.classList.add("active");
+            };
+        }
+    });
+
+    // Color dots
+    document.querySelectorAll(".color-dot").forEach(dot => {
+        if (!dot.dataset.bound) {
+            dot.dataset.bound = "true";
+            dot.onclick = () => {
+                document.querySelectorAll(".color-dot").forEach(d => d.classList.remove("active"));
+                dot.classList.add("active");
+                bookState.activeColor = dot.dataset.color || "#2563eb";
+            };
+        }
+    });
+
+    if (btnClear && !btnClear.dataset.bound) {
+        btnClear.dataset.bound = "true";
+        btnClear.onclick = () => {
+            bookState.annotations[bookState.currentPage] = [];
+            redrawBookCanvas();
+            showToast("Canvas Cleared", `Cleared annotations on page ${bookState.currentPage}`, "info");
+        };
+    }
+
+    if (btnSave && !btnSave.dataset.bound) {
+        btnSave.dataset.bound = "true";
+        btnSave.onclick = () => {
+            localStorage.setItem("hawari_book_annotations", JSON.stringify(bookState.annotations));
+            showToast("Saved", `Saved annotations for Hawari Book page ${bookState.currentPage}!`, "success");
+        };
+    }
+
+    if (btnCreateFc && !btnCreateFc.dataset.bound) {
+        btnCreateFc.dataset.bound = "true";
+        btnCreateFc.onclick = () => {
+            const modal = document.getElementById("modal-create-flashcard");
+            const cat = document.getElementById("fc-new-category");
+            const front = document.getElementById("fc-new-front");
+            if (cat) cat.value = `Hawari Book Page ${bookState.currentPage}`;
+            if (front) front.value = `High-Yield Concept from Page ${bookState.currentPage}`;
+            if (modal) modal.classList.remove("hidden");
+        };
+    }
+
+    // Attach drawing canvas listeners
+    const animCanvas = document.getElementById("book-annotation-canvas");
+    if (animCanvas && !animCanvas.dataset.bound) {
+        animCanvas.dataset.bound = "true";
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        const startDraw = (e) => {
+            if (bookState.activeTool === "pan") return;
+            isDrawing = true;
+            const rect = animCanvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            lastX = (clientX - rect.left) / bookState.zoom;
+            lastY = (clientY - rect.top) / bookState.zoom;
+
+            if (!bookState.annotations[bookState.currentPage]) {
+                bookState.annotations[bookState.currentPage] = [];
+            }
+        };
+
+        const drawMove = (e) => {
+            if (!isDrawing || bookState.activeTool === "pan") return;
+            const rect = animCanvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const currentX = (clientX - rect.left) / bookState.zoom;
+            const currentY = (clientY - rect.top) / bookState.zoom;
+
+            const stroke = {
+                tool: bookState.activeTool,
+                color: bookState.activeColor,
+                size: bookState.activeTool === "highlighter" ? 18 : (bookState.activeTool === "eraser" ? 24 : 4),
+                fromX: lastX,
+                fromY: lastY,
+                toX: currentX,
+                toY: currentY
+            };
+
+            bookState.annotations[bookState.currentPage].push(stroke);
+            drawSingleStroke(animCanvas.getContext("2d"), stroke);
+
+            lastX = currentX;
+            lastY = currentY;
+        };
+
+        const stopDraw = () => {
+            isDrawing = false;
+        };
+
+        animCanvas.addEventListener("mousedown", startDraw);
+        animCanvas.addEventListener("mousemove", drawMove);
+        animCanvas.addEventListener("mouseup", stopDraw);
+        animCanvas.addEventListener("mouseleave", stopDraw);
+        animCanvas.addEventListener("touchstart", startDraw);
+        animCanvas.addEventListener("touchmove", drawMove);
+        animCanvas.addEventListener("touchend", stopDraw);
+    }
+}
+
+function drawSingleStroke(ctx, stroke) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(stroke.fromX, stroke.fromY);
+    ctx.lineTo(stroke.toX, stroke.toY);
+
+    if (stroke.tool === "highlighter") {
+        ctx.strokeStyle = stroke.color;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = stroke.size || 18;
+        ctx.lineCap = "square";
+    } else if (stroke.tool === "eraser") {
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.lineWidth = stroke.size || 24;
+        ctx.lineCap = "round";
+    } else {
+        ctx.strokeStyle = stroke.color;
+        ctx.globalAlpha = 1.0;
+        ctx.lineWidth = stroke.size || 4;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Redraw canvas pages & overlays
+function redrawBookCanvas() {
+    const pageNumEl = document.getElementById("book-current-page-num");
+    const totalPagesEl = document.getElementById("book-total-pages-num");
+    const zoomPctEl = document.getElementById("book-zoom-percentage");
+
+    if (pageNumEl) pageNumEl.innerText = bookState.currentPage;
+    if (totalPagesEl) totalPagesEl.innerText = bookState.numPages;
+    if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
+
+    const pdfCanvas = document.getElementById("book-pdf-canvas");
+    const animCanvas = document.getElementById("book-annotation-canvas");
+    const stack = document.getElementById("book-canvas-stack");
+
+    if (!pdfCanvas || !animCanvas) return;
+
+    const baseWidth = 720;
+    const baseHeight = 980;
+    const scaledWidth = Math.round(baseWidth * bookState.zoom);
+    const scaledHeight = Math.round(baseHeight * bookState.zoom);
+
+    if (stack) {
+        stack.style.width = scaledWidth + "px";
+        stack.style.height = scaledHeight + "px";
+    }
+
+    pdfCanvas.width = scaledWidth;
+    pdfCanvas.height = scaledHeight;
+    animCanvas.width = scaledWidth;
+    animCanvas.height = scaledHeight;
+
+    const pdfCtx = pdfCanvas.getContext("2d");
+    const animCtx = animCanvas.getContext("2d");
+
+    // Draw PDF page background placeholder / content
+    pdfCtx.fillStyle = "#ffffff";
+    pdfCtx.fillRect(0, 0, scaledWidth, scaledHeight);
+
+    // Draw Book header & course text simulation
+    pdfCtx.fillStyle = "#3A1C36";
+    pdfCtx.font = `bold ${Math.round(22 * bookState.zoom)}px Outfit, sans-serif`;
+    pdfCtx.fillText(`HAWARI CLINICAL COURSE - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 50 * bookState.zoom);
+
+    pdfCtx.fillStyle = "#9B71B2";
+    pdfCtx.fillRect(30 * bookState.zoom, 65 * bookState.zoom, scaledWidth - 60 * bookState.zoom, 3 * bookState.zoom);
+
+    pdfCtx.fillStyle = "#5C3357";
+    pdfCtx.font = `${Math.round(14 * bookState.zoom)}px Inter, sans-serif`;
+    
+    const sampleText = [
+        "Infection Control & Medical Microbiology Key Principles:",
+        "1. Standard Precautions: Applied to all patients regardless of suspected or confirmed infection status.",
+        "2. Hand Hygiene: Perform before and after patient contact, after touching blood or bodily fluids.",
+        "3. Personal Protective Equipment (PPE): Gloves, gowns, masks, and eye protection based on exposure risk.",
+        "4. Environmental Cleaning: Disinfection of high-touch surfaces with approved hospital germicides.",
+        "5. Clinical Dermatology Notes: Assess primary lesions (macules, papules, plaques, vesicles) systematically."
+    ];
+
+    let yOffset = 110;
+    sampleText.forEach(line => {
+        pdfCtx.fillText(line, 35 * bookState.zoom, yOffset * bookState.zoom);
+        yOffset += 45;
+    });
+
+    // Restore saved strokes for current page
+    const pageStrokes = bookState.annotations[bookState.currentPage] || [];
+    pageStrokes.forEach(s => {
+        const scaledStroke = {
+            ...s,
+            fromX: s.fromX * bookState.zoom,
+            fromY: s.fromY * bookState.zoom,
+            toX: s.toX * bookState.zoom,
+            toY: s.toY * bookState.zoom
+        };
+        drawSingleStroke(animCtx, scaledStroke);
+    });
+}
+
 

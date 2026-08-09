@@ -2706,5 +2706,62 @@ body.group-dermatology.dark-theme {
     color: var(--primary-color) !important;
 }
 
+/* ================= HAWARI BOOK & DUAL FLASHCARDS STYLES ================= */
+.book-tool-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.book-tool-btn:hover {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+.book-tool-btn.active {
+    background: var(--primary-color) !important;
+    color: #ffffff !important;
+    box-shadow: var(--shadow-sm);
+}
+.color-dot {
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.color-dot:hover {
+    transform: scale(1.15);
+}
+.color-dot.active {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--primary-color);
+}
+.book-canvas-viewport::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+.book-canvas-viewport::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+.book-canvas-viewport::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+}
+.admin-tab-btn {
+    color: var(--text-secondary);
+    background: transparent;
+}
+.admin-tab-btn.active {
+    background: var(--primary-color) !important;
+    color: #ffffff !important;
+    box-shadow: var(--shadow-sm);
+}
+
+
 
 

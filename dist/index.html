@@ -17,8 +17,8 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-a8a5c193.js"></script>
-  <link rel="stylesheet" href="/assets/index-e7235f75.css">
+  <script type="module" crossorigin src="/assets/index-f6081421.js"></script>
+  <link rel="stylesheet" href="/assets/index-7f411e22.css">
 </head>
 <body class="light-theme">
     
@@ -240,6 +240,10 @@
                 <a href="#notebook" class="nav-item" id="nav-notebook">
                     <i class="fa-solid fa-book-open"></i>
                     <span>Notebook</span>
+                </a>
+                <a href="#hawari-book" class="nav-item" id="nav-hawari-book">
+                    <i class="fa-solid fa-book-open-reader"></i>
+                    <span>Hawari Book</span>
                 </a>
                 <a href="#flashcards" class="nav-item" id="nav-flashcards">
                     <i class="fa-solid fa-bolt"></i>
@@ -624,18 +628,123 @@
                 </div>
             </section>
 
+            <!-- ================= HAWARI BOOK VIEW ================= -->
+            <section id="hawari-book-view" class="view-section hidden">
+                <div class="page-header" style="flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
+                    <div>
+                        <h2><i class="fa-solid fa-book-open-reader" style="color: var(--primary-color); margin-right: 8px;"></i> Hawari Course Book</h2>
+                        <p>Interactive PDF reader, canvas drawing tools, page highlights, and annotations.</p>
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <span id="book-access-status-badge" class="badge badge-active" style="padding: 6px 12px; font-size: 0.85rem;"><i class="fa-solid fa-lock-open"></i> Access Granted</span>
+                        <button id="btn-book-create-flashcard" class="btn btn-secondary btn-outline" style="padding: 8px 14px; font-size: 0.85rem;">
+                            <i class="fa-solid fa-plus"></i> Flashcard from Note
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Access Locked Warning Box (Visible when Student is NOT authorized by Admin) -->
+                <div id="book-access-restricted-card" class="grid-card hidden" style="text-align: center; padding: 48px 24px; max-width: 650px; margin: 40px auto; border-radius: 20px;">
+                    <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); color: #ef4444; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px; font-size: 2rem;">
+                        <i class="fa-solid fa-lock"></i>
+                    </div>
+                    <h3 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 12px;">Hawari Book Access Locked</h3>
+                    <p style="color: var(--text-muted); line-height: 1.6; margin-bottom: 24px;">
+                        Access to the interactive Hawari PDF Course Book is restricted to authorized student accounts. Your email is not currently activated for book access.
+                    </p>
+                    <div style="background: var(--bg-secondary); padding: 16px; border-radius: 12px; border: 1px solid var(--border-color); text-align: left; font-size: 0.9rem; margin-bottom: 20px;">
+                        <strong style="color: var(--text-primary); display: block; margin-bottom: 4px;"><i class="fa-solid fa-circle-info" style="color: var(--primary-color);"></i> How to activate access:</strong>
+                        Contact the course instructor/administrator (<a href="mailto:mustafaimam1317@gmail.com" style="color: var(--primary-color);">mustafaimam1317@gmail.com</a>) to approve your Gmail address for Hawari Book access.
+                    </div>
+                </div>
+
+                <!-- Main Interactive Book Reader Container -->
+                <div id="book-workspace-container" class="book-workspace-wrapper grid-card" style="padding: 16px; border-radius: 16px;">
+                    <!-- Reader Top Toolbar -->
+                    <div class="book-toolbar" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); margin-bottom: 16px;">
+                        <!-- Page Navigation -->
+                        <div class="toolbar-group" style="display: flex; align-items: center; gap: 8px;">
+                            <button id="btn-book-prev-page" class="btn btn-secondary btn-icon" title="Previous Page"><i class="fa-solid fa-chevron-left"></i></button>
+                            <span style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary);">
+                                Page <span id="book-current-page-num" style="color: var(--text-primary);">1</span> / <span id="book-total-pages-num">1</span>
+                            </span>
+                            <button id="btn-book-next-page" class="btn btn-secondary btn-icon" title="Next Page"><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+
+                        <!-- Zoom Controls -->
+                        <div class="toolbar-group" style="display: flex; align-items: center; gap: 6px;">
+                            <button id="btn-book-zoom-out" class="btn btn-secondary btn-icon" title="Zoom Out"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+                            <span id="book-zoom-percentage" style="font-size: 0.85rem; font-weight: 600; width: 45px; text-align: center;">100%</span>
+                            <button id="btn-book-zoom-in" class="btn btn-secondary btn-icon" title="Zoom In"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+                            <button id="btn-book-zoom-reset" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.75rem;">Reset</button>
+                        </div>
+
+                        <!-- Drawing & Canvas Tools -->
+                        <div class="toolbar-group" style="display: flex; align-items: center; gap: 6px; background: var(--bg-secondary); padding: 4px 8px; border-radius: 10px; border: 1px solid var(--border-color);">
+                            <button class="tool-btn book-tool-btn active" id="btn-tool-pan" title="Pan / Scroll Mode"><i class="fa-solid fa-hand"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-pen" title="Drawing Pen"><i class="fa-solid fa-pen"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-highlighter" title="Text Highlighter"><i class="fa-solid fa-highlighter"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-text" title="Add Sticky Note / Text"><i class="fa-solid fa-note-sticky"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-eraser" title="Eraser"><i class="fa-solid fa-eraser"></i></button>
+                            <span class="toolbar-divider" style="height: 18px; width: 1px; background: var(--border-color); margin: 0 4px;"></span>
+                            
+                            <!-- Color Picker Palette -->
+                            <div class="book-color-palette" style="display: flex; gap: 4px; align-items: center;">
+                                <button class="color-dot active" data-color="#2563eb" style="background: #2563eb; width: 18px; height: 18px; border-radius: 50%; border: 2px solid white; cursor: pointer;"></button>
+                                <button class="color-dot" data-color="#10b981" style="background: #10b981; width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4); cursor: pointer;"></button>
+                                <button class="color-dot" data-color="#eab308" style="background: #eab308; width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4); cursor: pointer;"></button>
+                                <button class="color-dot" data-color="#ef4444" style="background: #ef4444; width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4); cursor: pointer;"></button>
+                                <button class="color-dot" data-color="#000000" style="background: #000000; width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4); cursor: pointer;"></button>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="toolbar-group" style="display: flex; align-items: center; gap: 8px;">
+                            <button id="btn-book-clear-page" class="btn btn-secondary btn-outline" style="padding: 6px 12px; font-size: 0.8rem;"><i class="fa-solid fa-trash-can"></i> Clear</button>
+                            <button id="btn-book-save-annotations" class="btn btn-primary" style="padding: 6px 14px; font-size: 0.8rem;"><i class="fa-solid fa-floppy-disk"></i> Save Annotations</button>
+                        </div>
+                    </div>
+
+                    <!-- Canvas Stack Workspace Area -->
+                    <div id="book-canvas-viewport" class="book-canvas-viewport" style="position: relative; width: 100%; min-height: 650px; overflow: auto; text-align: center; background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; box-sizing: border-border-box;">
+                        <div id="book-canvas-stack" style="position: relative; display: inline-block; box-shadow: 0 10px 30px rgba(0,0,0,0.3); border-radius: 8px; overflow: hidden; background: #ffffff;">
+                            <!-- PDF Renderer Canvas -->
+                            <canvas id="book-pdf-canvas" style="display: block; width: 100%; height: auto;"></canvas>
+                            <!-- Interactive Drawing Overlay Canvas -->
+                            <canvas id="book-annotation-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: default;"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- ================= FLASHCARDS VIEW ================= -->
             <section id="flashcards-view" class="view-section hidden">
-                <div class="page-header" style="flex-wrap: wrap; gap: 16px;">
+                <div class="page-header" style="flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
                     <div>
                         <h2>Flashcards Deck</h2>
                         <p>Flip interactive cards to reinforce high-yield infection topics.</p>
                     </div>
-                    <div class="flashcards-stats-header" style="display: flex; gap: 16px; font-size: 0.9rem; background: var(--bg-secondary); padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border-color);">
-                        <span>Mastered: <strong id="flashcard-stat-mastered" class="text-success">0</strong></span>
-                        <span>Review: <strong id="flashcard-stat-review" class="text-warning">0</strong></span>
-                        <span>Total: <strong id="flashcard-stat-total">0</strong></span>
+
+                    <!-- Dual Flashcards Sub-Tab Switcher -->
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="admin-tabs-bar" style="margin-top: 0; border-bottom: none; padding: 4px; background: rgba(30, 41, 59, 0.4); border-radius: 12px; display: inline-flex; gap: 4px;">
+                            <button class="admin-tab-btn active" id="btn-tab-fc-official" style="padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">
+                                <i class="fa-solid fa-certificate" style="color: var(--primary-color); margin-right: 6px;"></i> Official Flashcards
+                            </button>
+                            <button class="admin-tab-btn" id="btn-tab-fc-personal" style="padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">
+                                <i class="fa-solid fa-user-pen" style="color: var(--color-success); margin-right: 6px;"></i> My Personal Flashcards
+                            </button>
+                        </div>
+                        <button id="btn-create-personal-flashcard" class="btn btn-primary" style="padding: 8px 14px; font-size: 0.85rem; border-radius: 8px;">
+                            <i class="fa-solid fa-plus"></i> New Flashcard
+                        </button>
                     </div>
+                </div>
+
+                <div class="flashcards-stats-header" style="display: flex; gap: 16px; font-size: 0.9rem; background: var(--bg-secondary); padding: 10px 18px; border-radius: 10px; border: 1px solid var(--border-color); margin-bottom: 20px;">
+                    <span>Mastered: <strong id="flashcard-stat-mastered" class="text-success">0</strong></span>
+                    <span>Review: <strong id="flashcard-stat-review" class="text-warning">0</strong></span>
+                    <span>Total Cards: <strong id="flashcard-stat-total">0</strong></span>
                 </div>
 
                 <div id="flashcards-empty-state" class="grid-card empty-state hidden" style="text-align: center; padding: 48px 24px; min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
@@ -1154,6 +1263,26 @@
                                     <i class="fa-solid fa-user-plus"></i> Add User Account
                                 </button>
                             </form>
+                        </div>
+
+                        <!-- Hawari Book Student Access Authorization Manager -->
+                        <div class="grid-card" style="margin-top: 24px; border: 1px solid var(--primary-color);">
+                            <h3><i class="fa-solid fa-book-open-reader" style="color: var(--primary-color);"></i> Hawari Book Student Access Control</h3>
+                            <p class="section-desc">Grant or revoke per-student access to the interactive Hawari PDF Course Book.</p>
+                            <form id="admin-book-access-form" onsubmit="event.preventDefault();">
+                                <div class="input-group">
+                                    <label for="admin-book-access-email"><i class="fa-regular fa-envelope"></i> Student Gmail Address</label>
+                                    <input type="email" id="admin-book-access-email" placeholder="e.g. student@gmail.com" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary);">
+                                </div>
+                                <button type="submit" class="btn btn-success btn-block" style="margin-top: 12px; padding: 10px;">
+                                    <i class="fa-solid fa-key"></i> Authorize Hawari Book Access
+                                </button>
+                            </form>
+
+                            <h4 style="margin-top: 20px; font-size: 0.95rem; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">Authorized Students List (<span id="admin-book-authorized-count">0</span>)</h4>
+                            <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 180px; overflow-y: auto;">
+                                <!-- Dynamic authorized student emails list -->
+                            </div>
                         </div>
 
                         <!-- Users Management Panel -->
@@ -1976,6 +2105,45 @@
                 <button class="btn btn-secondary btn-block" onclick="document.getElementById('vp-student-course-modal').classList.add('hidden');" style="margin-top: 20px; border-radius: 8px;">
                     Cancel
                 </button>
+            </div>
+        </div>
+
+        <!-- Personal Flashcard Creation Modal -->
+        <div id="modal-create-flashcard" class="auth-overlay hidden" style="z-index: 4000; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(11, 19, 41, 0.85); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center;">
+            <div class="auth-card" style="max-width: 480px; width: 90%; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 20px; padding: 28px; box-shadow: var(--shadow-lg);">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <div style="width: 50px; height: 50px; border-radius: 50%; background: var(--color-success-soft); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;">
+                        <i class="fa-solid fa-user-pen" style="font-size: 1.5rem; color: var(--color-success);"></i>
+                    </div>
+                    <h3 style="font-size: 1.3rem; font-weight: 700; color: var(--text-primary); margin: 0;">Create Personal Flashcard</h3>
+                    <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Add a custom study card to your personal deck</p>
+                </div>
+
+                <form id="form-create-personal-flashcard" onsubmit="event.preventDefault();">
+                    <div class="input-group" style="margin-bottom: 14px;">
+                        <label for="fc-new-category" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Category / Topic</label>
+                        <input type="text" id="fc-new-category" placeholder="e.g. Infection Control / Derma Notes" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    </div>
+
+                    <div class="input-group" style="margin-bottom: 14px;">
+                        <label for="fc-new-front" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Card Front (Question / Prompt)</label>
+                        <textarea id="fc-new-front" rows="3" placeholder="Enter the question or concept..." required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none; resize: vertical;"></textarea>
+                    </div>
+
+                    <div class="input-group" style="margin-bottom: 20px;">
+                        <label for="fc-new-back" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Card Back (Answer / Explanation)</label>
+                        <textarea id="fc-new-back" rows="3" placeholder="Enter the detailed answer..." required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none; resize: vertical;"></textarea>
+                    </div>
+
+                    <div style="display: flex; gap: 10px;">
+                        <button type="submit" class="btn btn-success btn-block" style="flex: 1; padding: 10px; border-radius: 8px;">
+                            <i class="fa-solid fa-plus"></i> Add to My Flashcards
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-create-flashcard').classList.add('hidden');" style="padding: 10px 16px; border-radius: 8px;">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
 

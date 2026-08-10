@@ -2756,11 +2756,50 @@ body.group-dermatology.dark-theme {
     color: var(--text-secondary);
     background: transparent;
 }
-.admin-tab-btn.active {
-    background: var(--primary-color) !important;
-    color: #ffffff !important;
-    box-shadow: var(--shadow-sm);
+/* ================= DRM ANTI-PIRACY & SCREENSHOT PROTECTION ================= */
+@media print {
+    html, body, #app-layout, #hawari-book-view {
+        display: none !important;
+        visibility: hidden !important;
+    }
 }
+
+.canvas-blurred {
+    filter: blur(25px) grayscale(80%) !important;
+    transition: filter 0.2s ease-in-out;
+}
+
+.book-laser-cursor {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='%23ef4444' opacity='0.9'/%3E%3Ccircle cx='12' cy='12' r='4' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, auto !important;
+}
+
+#book-ruler-widget {
+    touch-action: none;
+}
+
+.book-drawer {
+    transition: all 0.3s ease;
+}
+
+.book-thumbnail-card {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px;
+    cursor: pointer;
+    background: var(--bg-primary);
+    text-align: center;
+    transition: all 0.2s ease;
+}
+.book-thumbnail-card:hover, .book-thumbnail-card.active {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px var(--primary-color);
+}
+.book-thumbnail-card img, .book-thumbnail-card canvas {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+}
+
 
 
 

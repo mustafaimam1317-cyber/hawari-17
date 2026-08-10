@@ -700,17 +700,19 @@
                         
                         <!-- Tool Selectors -->
                         <div class="toolbar-group" style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
-                            <button class="tool-btn book-tool-btn active" id="btn-tool-pan" title="Pan / Navigate Mode"><i class="fa-solid fa-hand"></i></button>
-                            <button class="tool-btn book-tool-btn" id="btn-tool-pen" title="Drawing Pen"><i class="fa-solid fa-pen"></i></button>
-                            <button class="tool-btn book-tool-btn" id="btn-tool-highlighter" title="Text Highlighter"><i class="fa-solid fa-highlighter"></i></button>
-                            <button class="tool-btn book-tool-btn" id="btn-tool-text" title="Add Text Box"><i class="fa-solid fa-font"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-select" title="Select / Move / Resize (V)"><i class="fa-solid fa-arrow-pointer"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-lasso" title="Lasso Select Area"><i class="fa-solid fa-lasso"></i></button>
+                            <button class="tool-btn book-tool-btn active" id="btn-tool-pan" title="Hand Pan / Scroll"><i class="fa-solid fa-hand"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-pen" title="Drawing Pen (P)"><i class="fa-solid fa-pen-nib"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-highlighter" title="Text Highlighter (H)"><i class="fa-solid fa-highlighter"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-text" title="Add Text Box (T)"><i class="fa-solid fa-font"></i></button>
                             <button class="tool-btn book-tool-btn" id="btn-tool-underline" title="Underline Text"><i class="fa-solid fa-underline"></i></button>
                             <button class="tool-btn book-tool-btn" id="btn-tool-strikethrough" title="Strikethrough Text"><i class="fa-solid fa-strikethrough"></i></button>
                             <button class="tool-btn book-tool-btn" id="btn-tool-circle" title="Draw Circle / Ellipse"><i class="fa-regular fa-circle"></i></button>
                             <button class="tool-btn book-tool-btn" id="btn-tool-rectangle" title="Draw Rectangle"><i class="fa-regular fa-square"></i></button>
                             <button class="tool-btn book-tool-btn" id="btn-tool-arrow" title="Draw Arrow"><i class="fa-solid fa-arrow-right"></i></button>
                             <button class="tool-btn book-tool-btn" id="btn-tool-laser" title="Laser Pointer 🔴"><i class="fa-solid fa-bullseye" style="color: #ef4444;"></i></button>
-                            <button class="tool-btn book-tool-btn" id="btn-tool-eraser" title="Eraser"><i class="fa-solid fa-eraser"></i></button>
+                            <button class="tool-btn book-tool-btn" id="btn-tool-eraser" title="Eraser (E)"><i class="fa-solid fa-eraser"></i></button>
                         </div>
 
                         <!-- Fixed 5-Color Palette & Pen Thickness Selectors -->
@@ -735,23 +737,35 @@
                             </div>
                         </div>
 
-                        <!-- Extra Study Widgets (Ruler, Stickers, Blank Notes, Undo/Redo) -->
-                        <div class="toolbar-group" style="display: flex; align-items: center; gap: 6px;">
+                        <!-- Extra Study Widgets (Ruler, Stickers, Blank Notes, Snap, Undo/Redo) -->
+                        <div class="toolbar-group" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                             <button id="btn-toggle-ruler" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.78rem;" title="Virtual Ruler"><i class="fa-solid fa-ruler-combined"></i> Ruler</button>
                             
-                            <!-- Stickers Select Dropdown -->
+                            <!-- Medical Vector Sticker Library Dropdown -->
                             <select id="book-sticker-select" style="padding: 4px 6px; font-size: 0.78rem; border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); outline: none;">
-                                <option value="">🏷️ Stamp Sticker...</option>
-                                <option value="⭐">⭐ Star</option>
-                                <option value="⚠️">⚠️ Important</option>
-                                <option value="💡">💡 High-Yield</option>
-                                <option value="❓">❓ Question</option>
-                                <option value="💉">💉 Microbe / Vaccine</option>
-                                <option value="📌">📌 Bookmark</option>
-                                <option value="👍">👍 Approved</option>
+                                <option value="">🏷️ Medical Badge Sticker...</option>
+                                <option value="HIGH YIELD">🔥 HIGH YIELD</option>
+                                <option value="IMPORTANT">⚡ IMPORTANT</option>
+                                <option value="REMEMBER">🧠 REMEMBER</option>
+                                <option value="WARNING">⚠️ WARNING</option>
+                                <option value="EXAM">🎯 EXAM CORNER</option>
+                                <option value="TIP">💡 CLINICAL TIP</option>
+                                <option value="NOTE">📝 NOTE</option>
+                                <option value="REVIEW">🔄 REVIEW</option>
+                                <option value="QUESTION">❓ QUESTION</option>
+                                <option value="DONE">✅ DONE</option>
                             </select>
 
-                            <button id="btn-add-blank-page" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.78rem;" title="Insert Blank / Lined Scratchpad Page">+ Scratch Page</button>
+                            <!-- Add Sticky Note Button -->
+                            <button id="btn-add-sticky-note" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.78rem;" title="Add Sticky Note"><i class="fa-solid fa-sticky-note"></i> Note</button>
+
+                            <!-- Baseline Snapping Toggle Switch -->
+                            <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; color: var(--text-secondary); cursor: pointer;" title="Snap typed text baseline to nearest ruled notebook line">
+                                <input type="checkbox" id="snap-baseline-toggle" checked style="cursor: pointer;">
+                                <span>Snap Lines</span>
+                            </label>
+
+                            <button id="btn-add-blank-page" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.78rem;" title="Choose & Insert Scratchpad Page Template">+ Scratch Page</button>
                             <span class="toolbar-divider" style="height: 18px; width: 1px; background: var(--border-color); margin: 0 2px;"></span>
 
                             <!-- Undo / Redo / Clear -->
@@ -2333,6 +2347,66 @@
                     </div>
                 </form>
             </div>
+        <!-- Scratchpad Page Template Picker Modal -->
+        <div id="modal-scratchpad-template" class="auth-overlay hidden" style="z-index: 4000; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(11, 19, 41, 0.85); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center;">
+            <div class="auth-card" style="max-width: 600px; width: 92%; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 24px; padding: 28px; box-shadow: var(--shadow-lg);">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <div style="width: 52px; height: 52px; border-radius: 50%; background: var(--primary-color-soft); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;">
+                        <i class="fa-solid fa-file-pen" style="font-size: 1.5rem; color: var(--primary-color);"></i>
+                    </div>
+                    <h3 style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin: 0;">Choose Scratchpad Template</h3>
+                    <p class="text-muted" style="font-size: 0.85rem; margin-top: 4px;">Select notebook paper style for page <span id="scratchpad-target-page-num">1</span></p>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 12px; margin-bottom: 24px;">
+                    <div class="template-option-card active" data-template="blank" onclick="selectScratchpadTemplate('blank', this)">
+                        <i class="fa-regular fa-file" style="font-size: 1.8rem; color: var(--primary-color); margin-bottom: 6px; display: block;"></i>
+                        <strong style="font-size: 0.85rem; display: block; color: var(--text-primary);">Blank</strong>
+                        <span class="text-muted" style="font-size: 0.72rem;">Plain Paper</span>
+                    </div>
+
+                    <div class="template-option-card" data-template="lined" onclick="selectScratchpadTemplate('lined', this)">
+                        <i class="fa-solid fa-align-justify" style="font-size: 1.8rem; color: var(--primary-color); margin-bottom: 6px; display: block;"></i>
+                        <strong style="font-size: 0.85rem; display: block; color: var(--text-primary);">Ruled</strong>
+                        <span class="text-muted" style="font-size: 0.72rem;">Lined Notebook</span>
+                    </div>
+
+                    <div class="template-option-card" data-template="grid" onclick="selectScratchpadTemplate('grid', this)">
+                        <i class="fa-solid fa-table-cells" style="font-size: 1.8rem; color: var(--primary-color); margin-bottom: 6px; display: block;"></i>
+                        <strong style="font-size: 0.85rem; display: block; color: var(--text-primary);">Grid</strong>
+                        <span class="text-muted" style="font-size: 0.72rem;">Graph Paper</span>
+                    </div>
+
+                    <div class="template-option-card" data-template="dotted" onclick="selectScratchpadTemplate('dotted', this)">
+                        <i class="fa-solid fa-ellipsis" style="font-size: 1.8rem; color: var(--primary-color); margin-bottom: 6px; display: block;"></i>
+                        <strong style="font-size: 0.85rem; display: block; color: var(--text-primary);">Dotted</strong>
+                        <span class="text-muted" style="font-size: 0.72rem;">Bullet Journal</span>
+                    </div>
+
+                    <div class="template-option-card" data-template="cornell" onclick="selectScratchpadTemplate('cornell', this)">
+                        <i class="fa-solid fa-table-columns" style="font-size: 1.8rem; color: var(--primary-color); margin-bottom: 6px; display: block;"></i>
+                        <strong style="font-size: 0.85rem; display: block; color: var(--text-primary);">Cornell</strong>
+                        <span class="text-muted" style="font-size: 0.72rem;">Clinical Study</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 12px;">
+                    <button type="button" class="btn btn-primary btn-block" onclick="applySelectedScratchpadTemplate()" style="flex: 1; padding: 10px; border-radius: 8px;">
+                        <i class="fa-solid fa-check"></i> Apply Page Template
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-scratchpad-template').classList.add('hidden');" style="padding: 10px 16px; border-radius: 8px;">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating PDF Text Selection Action Menu -->
+        <div id="pdf-text-select-menu" class="hidden">
+            <button id="btn-pdf-act-highlight"><i class="fa-solid fa-highlighter" style="color: #eab308;"></i> Highlight</button>
+            <button id="btn-pdf-act-note"><i class="fa-solid fa-sticky-note" style="color: #06b6d4;"></i> Add Note</button>
+            <button id="btn-pdf-act-flashcard"><i class="fa-solid fa-layer-group" style="color: #10b981;"></i> Flashcard</button>
+            <button id="btn-pdf-act-copy"><i class="fa-solid fa-copy" style="color: #3b82f6;"></i> Copy</button>
         </div>
 
     </div>

@@ -28307,6 +28307,21 @@ function bindBookToolbarEvents() {
     });
 
     // Color Palette
+    // Tool Selection & Custom SVG Cursor Updating
+    document.querySelectorAll(".book-tool-btn").forEach(btn => {
+        if (!btn.dataset.bound) {
+            btn.dataset.bound = "true";
+            btn.onclick = () => {
+                document.querySelectorAll(".book-tool-btn").forEach(b => b.classList.remove("active"));
+                btn.classList.add("active");
+
+                const toolId = btn.id.replace("btn-tool-", "");
+                bookState.activeTool = toolId;
+                updateBookViewportCursor(toolId);
+            };
+        }
+    });
+
     document.querySelectorAll(".color-dot").forEach(dot => {
         if (!dot.dataset.bound) {
             dot.dataset.bound = "true";
@@ -28334,31 +28349,52 @@ function bindBookToolbarEvents() {
             if (ruler) {
                 ruler.classList.toggle("hidden");
                 makeWidgetDraggable(ruler);
+                if (!ruler.classList.contains("hidden")) {
+                    updateBookViewportCursor("ruler");
+                } else {
+                    updateBookViewportCursor(bookState.activeTool);
+                }
             }
         };
     }
 
-    // Sticker Stamp Selector
+    // Medical Vector Sticker Stamp Selector
     if (stickerSelect && !stickerSelect.dataset.bound) {
         stickerSelect.dataset.bound = "true";
         stickerSelect.onchange = () => {
             const val = stickerSelect.value;
             if (val) {
-                stampStickerOnPage(val);
+                stampVectorStickerOnPage(val);
                 stickerSelect.value = "";
             }
         };
     }
 
-    // Insert Blank / Lined Scratch Page
+    // Sticky Note Button
+    const btnStickyNote = document.getElementById("btn-add-sticky-note");
+    if (btnStickyNote && !btnStickyNote.dataset.bound) {
+        btnStickyNote.dataset.bound = "true";
+        btnStickyNote.onclick = () => {
+            addStickyNoteOnPage();
+        };
+    }
+
+    // Insert Scratchpad Page Template Picker Modal Trigger
     if (btnAddBlank && !btnAddBlank.dataset.bound) {
         btnAddBlank.dataset.bound = "true";
         btnAddBlank.onclick = () => {
-            bookState.extraPages[bookState.currentPage] = "lined";
-            redrawBookCanvas();
-            showToast("Scratch Page Added", `Added lined notebook scratchpad to page ${bookState.currentPage}`, "success");
+            const modal = document.getElementById("modal-scratchpad-template");
+            const lblPage = document.getElementById("scratchpad-target-page-num");
+            if (lblPage) lblPage.innerText = bookState.currentPage;
+            if (modal) modal.classList.remove("hidden");
         };
     }
+
+    // Initialize Global Keyboard Shortcuts (V, P, H, T, E, L, Ctrl+Z, Ctrl+Y, Delete)
+    initBookKeyboardShortcuts();
+
+    // Initialize Floating PDF Text Selection Action Menu
+    initPdfTextSelectionListener();
 
     // Undo / Redo / Clear Page
     if (btnUndo && !btnUndo.dataset.bound) {
@@ -28789,17 +28825,87 @@ function drawSingleStroke(ctx, s) {
     } else if (s.type === "arrow") {
         drawCanvasArrow(ctx, s.x, s.y, s.toX, s.toY, s.color);
     } else if (s.type === "text") {
-        ctx.fillStyle = s.color;
+        ctx.fillStyle = s.color || "#1e293b";
         ctx.font = `bold ${s.size || 16}px Inter, sans-serif`;
         ctx.fillText(s.text, s.x, s.y);
     } else if (s.type === "sticker") {
-        ctx.font = `${s.size || 32}px sans-serif`;
-        ctx.fillText(s.text, s.x, s.y);
-        if (s.note) {
-            ctx.font = `bold 13px Inter, sans-serif`;
-            ctx.fillStyle = s.color || bookState.activeColor || "#2563eb";
-            ctx.fillText(s.note, s.x + 36, s.y - 6);
+        // Render Professional Graphical Vector Sticker Badge
+        const w = s.width || 130;
+        const h = s.height || 36;
+        const radius = 18;
+        const color = s.color || "#ef4444";
+
+        ctx.save();
+        ctx.translate(s.x, s.y);
+
+        // Badge pill background
+        ctx.beginPath();
+        ctx.roundRect(0, 0, w, h, radius);
+        ctx.fillStyle = color;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.15)";
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 3;
+        ctx.fill();
+
+        // White inner border ring
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+        ctx.stroke();
+
+        // White text badge title
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "900 12px Inter, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText((s.badgeType || s.text || "STICKER").toUpperCase(), 14, h / 2);
+
+        // Note subtext if present
+        if (s.note && s.note !== "Click to edit text...") {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+            ctx.font = "500 10px Inter, sans-serif";
+            ctx.fillText(s.note, 85, h / 2);
         }
+        ctx.restore();
+
+    } else if (s.type === "note") {
+        // Render Professional Editable Sticky Note
+        const w = s.width || 180;
+        const h = s.height || 140;
+        const bg = s.color || "#fef08a";
+
+        ctx.save();
+        ctx.translate(s.x, s.y);
+
+        // Soft Drop Shadow
+        ctx.fillStyle = bg;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.18)";
+        ctx.shadowBlur = 12;
+        ctx.shadowOffsetY = 4;
+        ctx.fillRect(0, 0, w, h);
+        ctx.shadowColor = "transparent";
+
+        // Top Header Pin Bar
+        ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
+        ctx.fillRect(0, 0, w, 24);
+
+        // Header Pin Icon Dot
+        ctx.beginPath();
+        ctx.arc(w / 2, 12, 4, 0, 2 * Math.PI);
+        ctx.fillStyle = "#ef4444";
+        ctx.fill();
+
+        // Sticky Note Content Text
+        ctx.fillStyle = "#1e293b";
+        ctx.font = "500 13px Outfit, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        
+        // Multi-line text wrapper
+        const lines = (s.text || "Click to add note...").split("\n");
+        lines.forEach((line, idx) => {
+            if (idx < 6) ctx.fillText(line, 12, 32 + idx * 18);
+        });
+        ctx.restore();
     }
     ctx.restore();
 }
@@ -29020,17 +29126,17 @@ function redrawBookCanvas() {
     const pdfCtx = pdfCanvas.getContext("2d");
     const animCtx = animCanvas.getContext("2d");
 
-    // Draw Page Background (Check if Blank/Lined Scratchpad page)
+    // Draw Page Background (Check if Blank/Ruled/Grid/Dotted/Cornell Scratchpad page)
     pdfCtx.fillStyle = "#ffffff";
     pdfCtx.fillRect(0, 0, scaledWidth, scaledHeight);
 
-    const isLinedPage = bookState.extraPages[bookState.currentPage] === "lined";
+    const pageTemplate = bookState.extraPages[bookState.currentPage];
 
-    if (isLinedPage) {
-        // Draw Lined Notebook Page Background
-        pdfCtx.strokeStyle = "#e2e8f0";
+    if (pageTemplate === "lined") {
+        // Ruled notebook page
+        pdfCtx.strokeStyle = "#cbd5e1";
         pdfCtx.lineWidth = 1;
-        for (let lineY = 60; lineY < scaledHeight; lineY += 30 * bookState.zoom) {
+        for (let lineY = 60 * bookState.zoom; lineY < scaledHeight; lineY += 30 * bookState.zoom) {
             pdfCtx.beginPath();
             pdfCtx.moveTo(0, lineY);
             pdfCtx.lineTo(scaledWidth, lineY);
@@ -29040,14 +29146,84 @@ function redrawBookCanvas() {
         pdfCtx.strokeStyle = "#fca5a5";
         pdfCtx.lineWidth = 2;
         pdfCtx.beginPath();
-        pdfCtx.moveTo(50 * bookState.zoom, 0);
-        pdfCtx.lineTo(50 * bookState.zoom, scaledHeight);
+        pdfCtx.moveTo(60 * bookState.zoom, 0);
+        pdfCtx.lineTo(60 * bookState.zoom, scaledHeight);
         pdfCtx.stroke();
 
         pdfCtx.fillStyle = "#64748b";
-        pdfCtx.font = `bold ${Math.round(16 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`SCRATCHPAD NOTEBOOK - PAGE ${bookState.currentPage}`, 65 * bookState.zoom, 40 * bookState.zoom);
+        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
+        pdfCtx.fillText(`RULED SCRATCHPAD - PAGE ${bookState.currentPage}`, 75 * bookState.zoom, 40 * bookState.zoom);
 
+    } else if (pageTemplate === "grid") {
+        // Graph paper grid
+        pdfCtx.strokeStyle = "#e2e8f0";
+        pdfCtx.lineWidth = 1;
+        const step = 25 * bookState.zoom;
+        for (let gx = 0; gx < scaledWidth; gx += step) {
+            pdfCtx.beginPath(); pdfCtx.moveTo(gx, 0); pdfCtx.lineTo(gx, scaledHeight); pdfCtx.stroke();
+        }
+        for (let gy = 0; gy < scaledHeight; gy += step) {
+            pdfCtx.beginPath(); pdfCtx.moveTo(0, gy); pdfCtx.lineTo(scaledWidth, gy); pdfCtx.stroke();
+        }
+        pdfCtx.fillStyle = "#64748b";
+        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
+        pdfCtx.fillText(`GRID GRAPH PAPER - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
+
+    } else if (pageTemplate === "dotted") {
+        // Dot matrix paper
+        pdfCtx.fillStyle = "#94a3b8";
+        const step = 25 * bookState.zoom;
+        for (let dx = 25 * bookState.zoom; dx < scaledWidth; dx += step) {
+            for (let dy = 25 * bookState.zoom; dy < scaledHeight; dy += step) {
+                pdfCtx.beginPath();
+                pdfCtx.arc(dx, dy, 1.5 * bookState.zoom, 0, 2 * Math.PI);
+                pdfCtx.fill();
+            }
+        }
+        pdfCtx.fillStyle = "#64748b";
+        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
+        pdfCtx.fillText(`DOTTED JOURNAL - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
+
+    } else if (pageTemplate === "cornell") {
+        // Cornell Notes layout
+        pdfCtx.strokeStyle = "#94a3b8";
+        pdfCtx.lineWidth = 2;
+        pdfCtx.strokeRect(20 * bookState.zoom, 20 * bookState.zoom, scaledWidth - 40 * bookState.zoom, 50 * bookState.zoom);
+        
+        pdfCtx.fillStyle = "#1e293b";
+        pdfCtx.font = `bold ${Math.round(15 * bookState.zoom)}px Outfit, sans-serif`;
+        pdfCtx.fillText(`CORNELL NOTES | Topic: _____________________ | Date: ____/____/2026`, 35 * bookState.zoom, 50 * bookState.zoom);
+
+        // Left Cue Column Line
+        pdfCtx.beginPath();
+        pdfCtx.moveTo(200 * bookState.zoom, 70 * bookState.zoom);
+        pdfCtx.lineTo(200 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
+        pdfCtx.stroke();
+
+        // Horizontal Summary Line
+        pdfCtx.beginPath();
+        pdfCtx.moveTo(20 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
+        pdfCtx.lineTo(scaledWidth - 20 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
+        pdfCtx.stroke();
+
+        // Ruled lines inside Notes & Cue areas
+        pdfCtx.strokeStyle = "#e2e8f0";
+        pdfCtx.lineWidth = 1;
+        for (let lineY = 100 * bookState.zoom; lineY < scaledHeight - 160 * bookState.zoom; lineY += 30 * bookState.zoom) {
+            pdfCtx.beginPath(); pdfCtx.moveTo(20 * bookState.zoom, lineY); pdfCtx.lineTo(scaledWidth - 20 * bookState.zoom, lineY); pdfCtx.stroke();
+        }
+
+        pdfCtx.fillStyle = "#64748b";
+        pdfCtx.font = `bold ${Math.round(12 * bookState.zoom)}px Outfit, sans-serif`;
+        pdfCtx.fillText(`CUE COLUMN (Keywords / Questions)`, 30 * bookState.zoom, 92 * bookState.zoom);
+        pdfCtx.fillText(`MAIN CLINICAL NOTES`, 215 * bookState.zoom, 92 * bookState.zoom);
+        pdfCtx.fillText(`SUMMARY (2-3 sentences overview)`, 30 * bookState.zoom, scaledHeight - 140 * bookState.zoom);
+
+    } else if (pageTemplate === "blank") {
+        // Plain blank page
+        pdfCtx.fillStyle = "#64748b";
+        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
+        pdfCtx.fillText(`BLANK SCRATCHPAD - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
     } else {
         // Draw Normal Book Page Content
         pdfCtx.fillStyle = "#3A1C36";

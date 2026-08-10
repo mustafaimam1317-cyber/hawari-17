@@ -2785,42 +2785,219 @@ body.group-dermatology.dark-theme {
     }
 }
 
-.book-laser-cursor {
-    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='%23ef4444' opacity='0.95'/%3E%3Ccircle cx='12' cy='12' r='3' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, auto !important;
+/* ==========================================================================
+   HAWARI COURSE BOOK ANNOTATION ENGINE & INTERACTION SYSTEM STYLES
+   ========================================================================== */
+
+/* 1. Custom SVG Data-URI Cursors */
+.book-cursor-grab {
+    cursor: grab !important;
+}
+.book-cursor-grabbing {
+    cursor: grabbing !important;
+}
+.book-cursor-pen {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z'/%3E%3C/svg%3E") 2 22, crosshair !important;
+}
+.book-cursor-highlighter {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='%23eab308' opacity='0.85'%3E%3Cpath d='M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z'/%3E%3Cpath d='M3 21h18' stroke='%23eab308' stroke-width='2'/%3E%3C/svg%3E") 4 20, crosshair !important;
+}
+.book-cursor-eraser {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='%23f43f5e'%3E%3Cpath d='m7 21-4-4 10-10 4 4L7 21z'/%3E%3Cpath d='M17 7l2-2 4 4-2 2-4-4z' fill='%23fb7185'/%3E%3C/svg%3E") 4 20, pointer !important;
+}
+.book-cursor-text {
+    cursor: text !important;
+}
+.book-cursor-crosshair {
+    cursor: crosshair !important;
+}
+.book-cursor-ruler {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ca8a04' stroke-width='2'%3E%3Cpath d='M2 22 22 2M6 18l2 2M10 14l2 2M14 10l2 2M18 6l2 2'/%3E%3C/svg%3E") 2 22, crosshair !important;
 }
 
-.pen-size-btn.active {
-    border-color: var(--primary-color) !important;
-    background: var(--primary-color) !important;
-    color: #ffffff !important;
+/* 2. Interactive Object Selection Bounding Box & Resizing Handles */
+.annotation-selection-overlay {
+    position: absolute;
+    border: 2px dashed #2563eb;
+    background: rgba(37, 99, 235, 0.08);
+    pointer-events: auto;
+    box-sizing: border-box;
+    z-index: 50;
+}
+.bbox-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: #ffffff;
+    border: 2px solid #2563eb;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+    z-index: 51;
+}
+.bbox-handle.nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.bbox-handle.ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.bbox-handle.se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.bbox-handle.sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+
+.bbox-rotate-handle {
+    position: absolute;
+    top: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 12px;
+    height: 12px;
+    background: #10b981;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    cursor: grab;
+    z-index: 51;
+}
+.bbox-rotate-line {
+    position: absolute;
+    top: -16px;
+    left: 50%;
+    width: 2px;
+    height: 16px;
+    background: #2563eb;
+    transform: translateX(-50%);
 }
 
-#book-ruler-widget {
-    touch-action: none;
+/* 3. Medical Vector Sticker Library Badges */
+.sticker-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    user-select: none;
+    cursor: move;
+    border: 1px solid rgba(255,255,255,0.3);
 }
 
-.book-drawer {
-    transition: all 0.3s ease;
+.sticker-important {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: #ffffff;
+}
+.sticker-highyield {
+    background: linear-gradient(135deg, #eab308, #ca8a04);
+    color: #0f172a;
+}
+.sticker-remember {
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    color: #ffffff;
+}
+.sticker-warning {
+    background: linear-gradient(135deg, #f97316, #ea580c);
+    color: #ffffff;
+}
+.sticker-exam {
+    background: linear-gradient(135deg, #a855f7, #7e22ce);
+    color: #ffffff;
+}
+.sticker-tip {
+    background: linear-gradient(135deg, #10b981, #047857);
+    color: #ffffff;
+}
+.sticker-note {
+    background: linear-gradient(135deg, #06b6d4, #0891b2);
+    color: #ffffff;
+}
+.sticker-review {
+    background: linear-gradient(135deg, #ec4899, #be185d);
+    color: #ffffff;
+}
+.sticker-question {
+    background: linear-gradient(135deg, #6366f1, #4338ca);
+    color: #ffffff;
+}
+.sticker-done {
+    background: linear-gradient(135deg, #22c55e, #15803d);
+    color: #ffffff;
 }
 
-.book-thumbnail-card {
-    border: 1px solid var(--border-color);
+/* 4. Editable Sticky Notes */
+.hawari-sticky-note {
+    position: absolute;
+    width: 200px;
+    min-height: 160px;
+    background: #fef08a;
+    color: #1e293b;
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.18);
+    border: 1px solid #fde047;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    z-index: 30;
+    box-sizing: border-box;
+}
+.hawari-sticky-note .note-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+    padding-bottom: 6px;
+    margin-bottom: 8px;
+    cursor: move;
+}
+
+/* 5. PDF Text Selection Floating Action Menu */
+#pdf-text-select-menu {
+    position: absolute;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #0f172a;
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    padding: 6px 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+    backdrop-filter: blur(12px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+#pdf-text-select-menu button {
+    background: transparent;
+    border: none;
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 4px 8px;
     border-radius: 6px;
-    padding: 4px;
     cursor: pointer;
-    background: var(--bg-primary);
-    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     transition: all 0.2s ease;
 }
-.book-thumbnail-card:hover, .book-thumbnail-card.active {
+#pdf-text-select-menu button:hover {
+    background: rgba(255,255,255,0.15);
+    color: #ffffff;
+}
+
+/* 6. Template Picker Cards */
+.template-option-card {
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 14px;
+    text-align: center;
+    cursor: pointer;
+    background: var(--bg-primary);
+    transition: all 0.25s ease;
+}
+.template-option-card:hover, .template-option-card.active {
     border-color: var(--primary-color);
-    box-shadow: 0 0 0 2px var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+    transform: translateY(-2px);
 }
-.book-thumbnail-card img, .book-thumbnail-card canvas {
-    width: 100%;
-    height: auto;
-    border-radius: 4px;
-}
+
 
 
 

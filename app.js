@@ -27966,6 +27966,49 @@ window.searchBookLibrary = function(q) {
 };
 
 // Open specific book in Book Viewer Workspace
+
+// Helper to request a short-lived signed URL for a private PDF course book (300s TTL)
+async function getSignedBookUrl(filePath, expiresIn = 300) {
+    try {
+        const cleanUrl = (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, '');
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+        
+        // Extract relative file path if legacy URL format was passed
+        let targetPath = filePath || "";
+        if (targetPath.includes("/hawari_books/")) {
+            targetPath = targetPath.split("/hawari_books/").pop();
+        } else if (targetPath.startsWith("http://") || targetPath.startsWith("https://")) {
+            targetPath = targetPath.split("/").pop();
+        }
+
+        console.log("[Security] Requesting signed URL for path:", targetPath);
+
+        const response = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${targetPath}`, {
+            method: "POST",
+            headers: {
+                "apikey": anonKey,
+                "Authorization": `Bearer ${(state.currentUser && state.currentUser.token) ? state.currentUser.token : anonKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ expiresIn })
+        });
+
+        if (!response.ok) {
+            console.warn("[Security] Signed URL generation rejected by server RLS:", response.status);
+            return null;
+        }
+
+        const data = await response.json();
+        if (data && data.signedURL) {
+            return `${cleanUrl}${data.signedURL}`;
+        }
+        return null;
+    } catch (err) {
+        console.error("[Security] Error fetching signed URL:", err);
+        return null;
+    }
+}
+
 window.openBook = async function(bookId) {
     const book = (state.books || []).find(b => b.id === bookId);
     if (!book) return;
@@ -28308,7 +28351,9 @@ async function processBookPdfUpload({ title, category, pages, file, progressCont
 
     try {
         const fileExt = file.name.split('.').pop();
-        const fileName = `hawari_book_${group}_${Date.now()}.${fileExt}`;
+        const bookId = "book_" + Date.now();
+const relativeStoragePath = `${group}/${bookId}.${fileExt}`;
+const fileName = relativeStoragePath;
         const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
         const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
 

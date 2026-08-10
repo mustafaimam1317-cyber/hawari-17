@@ -28095,6 +28095,24 @@ function bindBookToolbarEvents() {
     const stickerSelect = document.getElementById("book-sticker-select");
     const btnAddBlank = document.getElementById("btn-add-blank-page");
     const colorPicker = document.getElementById("book-custom-color-picker");
+    const btnDeletePdf = document.getElementById("btn-admin-delete-book-pdf");
+
+    if (btnDeletePdf && !btnDeletePdf.dataset.bound) {
+        btnDeletePdf.dataset.bound = "true";
+        btnDeletePdf.onclick = deleteAdminBookPdfFile;
+    }
+
+    // Pen Stroke Size Buttons (1px, 2px, 3px, 5px)
+    document.querySelectorAll(".pen-size-btn").forEach(btn => {
+        if (!btn.dataset.bound) {
+            btn.dataset.bound = "true";
+            btn.onclick = () => {
+                document.querySelectorAll(".pen-size-btn").forEach(b => b.classList.remove("active"));
+                btn.classList.add("active");
+                bookState.strokeSize = parseInt(btn.dataset.size || "3");
+            };
+        }
+    });
 
     // Drawer Toggle
     if (btnDrawer && !btnDrawer.dataset.bound) {
@@ -28230,7 +28248,7 @@ function bindBookToolbarEvents() {
         };
     }
 
-    // Tools Selection
+    // Tools Selection & Mouse Pointer Cursor Toggle
     const tools = ["pan", "pen", "highlighter", "text", "underline", "strikethrough", "circle", "rectangle", "arrow", "laser", "eraser"];
     tools.forEach(t => {
         const btn = document.getElementById(`btn-tool-${t}`);
@@ -28246,7 +28264,7 @@ function bindBookToolbarEvents() {
 
                 const viewport = document.getElementById("book-canvas-viewport");
                 if (viewport) {
-                    if (t === "laser") {
+                    if (t === "laser" || t === "pen" || t === "highlighter" || t === "eraser") {
                         viewport.classList.add("book-laser-cursor");
                     } else {
                         viewport.classList.remove("book-laser-cursor");
@@ -28335,8 +28353,35 @@ function bindBookToolbarEvents() {
         };
     }
 
-    // Attach drawing canvas event listeners
+    // Flashcard Creation Modals Fix
+    const btnCreateFc = document.getElementById("btn-book-create-flashcard");
+    const btnCreateFcPersonal = document.getElementById("btn-create-personal-flashcard");
+
+    if (btnCreateFc && !btnCreateFc.dataset.bound) {
+        btnCreateFc.dataset.bound = "true";
+        btnCreateFc.onclick = () => {
+            const modal = document.getElementById("modal-create-flashcard");
+            const cat = document.getElementById("fc-new-category");
+            const front = document.getElementById("fc-new-front");
+            if (cat) cat.value = `Hawari Book Page ${bookState.currentPage}`;
+            if (front) front.value = `High-Yield Concept from Page ${bookState.currentPage}`;
+            if (modal) modal.classList.remove("hidden");
+        };
+    }
+
+    if (btnCreateFcPersonal && !btnCreateFcPersonal.dataset.bound) {
+        btnCreateFcPersonal.dataset.bound = "true";
+        btnCreateFcPersonal.onclick = () => {
+            const modal = document.getElementById("modal-create-flashcard");
+            if (modal) modal.classList.remove("hidden");
+        };
+    }
+
+    // Attach Pointer Events drawing canvas listeners
     initBookCanvasDrawing();
+
+    // Start Real-Time Laser Trail Animation Loop
+    initLaserTrailLoop();
 
     // Drawer Sub-tab Bindings
     bindDrawerSubtabs();
@@ -28352,10 +28397,88 @@ function updateBookmarkIcon() {
     }
 }
 
-// Canvas Drawing & Shape Engine
+// Canvas Drawing & Fading Laser Pointer Trail Engine
 let isDrawingShape = false;
 let startX = 0;
 let startY = 0;
+let laserDots = []; // [ { x, y, time } ]
+let laserAnimFrame = null;
+
+function initLaserTrailLoop() {
+    if (laserAnimFrame) return;
+    const loop = () => {
+        if (state.activeView === "hawari-book" && laserDots.length > 0) {
+            renderLaserTrailDots();
+        }
+        laserAnimFrame = requestAnimationFrame(loop);
+    };
+    laserAnimFrame = requestAnimationFrame(loop);
+}
+
+function renderLaserTrailDots() {
+    const animCanvas = document.getElementById("book-annotation-canvas");
+    if (!animCanvas) return;
+    const ctx = animCanvas.getContext("2d");
+    const now = Date.now();
+
+    // Filter dots older than 1500ms
+    laserDots = laserDots.filter(d => now - d.time < 1500);
+
+    if (laserDots.length === 0) {
+        redrawBookCanvas();
+        return;
+    }
+
+    redrawBookCanvas(); // Redraw base canvas & permanent strokes first
+
+    ctx.save();
+    laserDots.forEach(d => {
+        const age = now - d.time;
+        const opacity = Math.max(0, 1 - age / 1500);
+
+        ctx.beginPath();
+        ctx.arc(d.x * bookState.zoom, d.y * bookState.zoom, 10 * opacity, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(239, 68, 68, ${opacity * 0.9})`;
+        ctx.shadowColor = "#ef4444";
+        ctx.shadowBlur = 12 * opacity;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(d.x * bookState.zoom, d.y * bookState.zoom, 4 * opacity, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+        ctx.fill();
+    });
+    ctx.restore();
+}
+
+// Delete Active PDF Book File
+async function deleteAdminBookPdfFile() {
+    if (!confirm("Are you sure you want to delete the active PDF book file?")) return;
+    try {
+        if (bookState.activeBookFile && bookState.activeBookFile.id) {
+            await supabaseRequest(`hawari_book_files?id=eq.${encodeURIComponent(bookState.activeBookFile.id)}`, {
+                method: "DELETE"
+            });
+        }
+        bookState.activeBookFile = null;
+        bookState.numPages = 10;
+        showToast("Book Deleted", "Deleted active PDF book file.", "info");
+
+        const titleLbl = document.getElementById("admin-active-book-title-lbl");
+        const pagesLbl = document.getElementById("admin-active-book-pages-lbl");
+        if (titleLbl) titleLbl.innerText = "None";
+        if (pagesLbl) pagesLbl.innerText = "0";
+
+        redrawBookCanvas();
+    } catch (e) {
+        console.warn("[BookDelete] Delete fallback:", e);
+        showToast("Delete Error", "Could not delete PDF file.", "danger");
+    }
+}
+
+
+
+
 
 function initBookCanvasDrawing() {
     const animCanvas = document.getElementById("book-annotation-canvas");
@@ -28369,21 +28492,37 @@ function initBookCanvasDrawing() {
         const rect = animCanvas.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        return {
-            x: (clientX - rect.left) / bookState.zoom,
-            y: (clientY - rect.top) / bookState.zoom
-        };
+        let x = (clientX - rect.left) / bookState.zoom;
+        let y = (clientY - rect.top) / bookState.zoom;
+
+        // Virtual Ruler Straight-Line Snapping Check
+        const ruler = document.getElementById("book-ruler-widget");
+        if (ruler && !ruler.classList.contains("hidden")) {
+            const rRect = ruler.getBoundingClientRect();
+            const canvasRect = animCanvas.getBoundingClientRect();
+            const rulerTopCanvas = (rRect.top - canvasRect.top) / bookState.zoom;
+            if (Math.abs(y - rulerTopCanvas) < 25) {
+                y = rulerTopCanvas; // Snap straight line along ruler top edge!
+            }
+        }
+        return { x, y };
     };
 
     const startDraw = (e) => {
         const tool = bookState.activeTool;
-        if (tool === "pan" || tool === "laser") return;
+        if (tool === "pan") return;
 
         const coords = getCoords(e);
         lastX = coords.x;
         lastY = coords.y;
         startX = coords.x;
         startY = coords.y;
+
+        if (tool === "laser") {
+            laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
+            isDrawingShape = true;
+            return;
+        }
 
         const page = bookState.currentPage;
         if (!bookState.annotations[page]) {
@@ -28416,15 +28555,26 @@ function initBookCanvasDrawing() {
     const drawMove = (e) => {
         if (!isDrawingShape) return;
         const tool = bookState.activeTool;
-        if (tool === "pan" || tool === "laser") return;
+        if (tool === "pan") return;
 
         const coords = getCoords(e);
 
+        if (tool === "laser") {
+            laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
+            return;
+        }
+
         if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
+            // Pointer Pressure Sensitivity scaling (for Stylus Tablets)
+            const pressure = (e.pressure && e.pressure > 0) ? e.pressure : 0.5;
+            const sizeMult = tool === "pen" ? (pressure * 1.6) : 1.0;
+            const baseSize = tool === "highlighter" ? 18 : (tool === "eraser" ? 24 : bookState.strokeSize);
+            const actualSize = Math.max(1, Math.round(baseSize * sizeMult));
+
             const stroke = {
                 type: tool,
                 color: bookState.activeColor,
-                size: tool === "highlighter" ? 18 : (tool === "eraser" ? 24 : 4),
+                size: actualSize,
                 fromX: lastX,
                 fromY: lastY,
                 toX: coords.x,
@@ -28442,6 +28592,8 @@ function initBookCanvasDrawing() {
         isDrawingShape = false;
 
         const tool = bookState.activeTool;
+        if (tool === "laser") return;
+
         const page = bookState.currentPage;
 
         if (tool === "underline" || tool === "strikethrough" || tool === "circle" || tool === "rectangle" || tool === "arrow") {
@@ -28476,33 +28628,37 @@ function initBookCanvasDrawing() {
         }
     };
 
-    animCanvas.addEventListener("mousedown", startDraw);
-    animCanvas.addEventListener("mousemove", drawMove);
-    animCanvas.addEventListener("mouseup", stopDraw);
-    animCanvas.addEventListener("mouseleave", stopDraw);
+    // Use PointerEvents to support Stylus Pen pressure sensitivity
+    animCanvas.addEventListener("pointerdown", startDraw);
+    animCanvas.addEventListener("pointermove", drawMove);
+    animCanvas.addEventListener("pointerup", stopDraw);
+    animCanvas.addEventListener("pointerleave", stopDraw);
     animCanvas.addEventListener("touchstart", startDraw);
     animCanvas.addEventListener("touchmove", drawMove);
     animCanvas.addEventListener("touchend", stopDraw);
 }
 
-function stampStickerOnPage(sticker) {
+function stampStickerOnPage(stickerSymbol) {
     const page = bookState.currentPage;
     if (!bookState.annotations[page]) bookState.annotations[page] = [];
 
     saveHistoryState(page);
 
+    const noteText = prompt(`Enter optional note inside sticker ${stickerSymbol}:`, "");
+
     const stickerObj = {
         type: "sticker",
-        text: sticker,
-        x: 100,
-        y: 150,
+        text: stickerSymbol,
+        note: noteText ? noteText.trim() : "",
+        x: 120,
+        y: 160,
         size: 32
     };
 
     bookState.annotations[page].push(stickerObj);
     saveBookPageAnnotationToCloud(page);
     redrawBookCanvas();
-    showToast("Sticker Stamped", `Added ${sticker} stamp to page ${page}`, "success");
+    showToast("Sticker Placed", `Stamped ${stickerSymbol} sticker on page ${page}`, "success");
 }
 
 function saveHistoryState(page) {
@@ -28607,6 +28763,11 @@ function drawSingleStroke(ctx, s) {
     } else if (s.type === "sticker") {
         ctx.font = `${s.size || 32}px sans-serif`;
         ctx.fillText(s.text, s.x, s.y);
+        if (s.note) {
+            ctx.font = `bold 13px Inter, sans-serif`;
+            ctx.fillStyle = s.color || bookState.activeColor || "#2563eb";
+            ctx.fillText(s.note, s.x + 36, s.y - 6);
+        }
     }
     ctx.restore();
 }

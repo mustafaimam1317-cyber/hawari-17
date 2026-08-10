@@ -2769,8 +2769,30 @@ body.group-dermatology.dark-theme {
     transition: filter 0.2s ease-in-out;
 }
 
+#book-watermark-overlay {
+    animation: watermarkFloat 14s ease-in-out infinite alternate;
+}
+
+@keyframes watermarkFloat {
+    0% {
+        transform: rotate(-25deg) translate(0px, 0px);
+    }
+    50% {
+        transform: rotate(-25deg) translate(30px, 20px);
+    }
+    100% {
+        transform: rotate(-25deg) translate(-20px, -15px);
+    }
+}
+
 .book-laser-cursor {
-    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='%23ef4444' opacity='0.9'/%3E%3Ccircle cx='12' cy='12' r='4' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, auto !important;
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='%23ef4444' opacity='0.95'/%3E%3Ccircle cx='12' cy='12' r='3' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, auto !important;
+}
+
+.pen-size-btn.active {
+    border-color: var(--primary-color) !important;
+    background: var(--primary-color) !important;
+    color: #ffffff !important;
 }
 
 #book-ruler-widget {

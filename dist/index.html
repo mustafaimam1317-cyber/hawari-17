@@ -17,8 +17,8 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-  <script type="module" crossorigin src="/assets/index-b5c9514e.js"></script>
-  <link rel="stylesheet" href="/assets/index-de432cb6.css">
+  <script type="module" crossorigin src="/assets/index-88577e40.js"></script>
+  <link rel="stylesheet" href="/assets/index-e477a3e2.css">
 </head>
 <body class="light-theme">
     
@@ -715,7 +715,7 @@
                             <button class="tool-btn book-tool-btn" id="btn-tool-eraser" title="Eraser"><i class="fa-solid fa-eraser"></i></button>
                         </div>
 
-                        <!-- Fixed 5-Color Palette & Size/Opacity -->
+                        <!-- Fixed 5-Color Palette & Pen Thickness Selectors -->
                         <div class="toolbar-group" style="display: flex; align-items: center; gap: 10px;">
                             <div class="book-color-palette" style="display: flex; gap: 5px; align-items: center;">
                                 <button class="color-dot active" data-color="#2563eb" style="background: #2563eb; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; cursor: pointer;" title="Royal Blue"></button>
@@ -725,7 +725,16 @@
                                 <button class="color-dot" data-color="#0f172a" style="background: #0f172a; width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4); cursor: pointer;" title="Midnight Dark"></button>
                             </div>
                             <!-- Custom Color Picker -->
-                            <input type="color" id="book-custom-color-picker" value="#2563eb" style="width: 26px; height: 26px; padding: 0; border: none; background: transparent; cursor: pointer;" title="Custom Color">
+                            <input type="color" id="book-custom-color-picker" value="#2563eb" style="width: 24px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer;" title="Custom Color">
+                            <span class="toolbar-divider" style="height: 18px; width: 1px; background: var(--border-color); margin: 0 2px;"></span>
+                            
+                            <!-- Pen Thickness Options -->
+                            <div class="pen-size-selector" style="display: flex; gap: 3px; align-items: center;">
+                                <button class="pen-size-btn" data-size="1" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); cursor: pointer;">1px</button>
+                                <button class="pen-size-btn" data-size="2" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); cursor: pointer;">2px</button>
+                                <button class="pen-size-btn active" data-size="3" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--primary-color); background: var(--primary-color); color: #fff; cursor: pointer;">3px</button>
+                                <button class="pen-size-btn" data-size="5" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); cursor: pointer;">5px</button>
+                            </div>
                         </div>
 
                         <!-- Extra Study Widgets (Ruler, Stickers, Blank Notes, Undo/Redo) -->
@@ -1465,42 +1474,59 @@
                             </div>
                         </form>
                     </div>
+                </div>
+
                 <!-- Admin Hawari Book Management Tab -->
                 <div id="admin-book-management-tab" class="admin-tab-content">
-                    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: start;">
-                        <!-- Upload PDF/Book File Card -->
-                        <div class="grid-card">
-                            <h3><i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-color);"></i> Upload PDF Book</h3>
-                            <p class="section-desc">Upload course PDF document to Supabase storage for student access.</p>
-                            <form id="admin-upload-book-form" onsubmit="event.preventDefault();">
-                                <div class="input-group" style="margin-bottom: 12px;">
-                                    <label for="admin-book-file-title" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Book Title</label>
-                                    <input type="text" id="admin-book-file-title" placeholder="e.g. Hawari Clinical Course 2026 Edition" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                <div class="input-group" style="margin-bottom: 12px;">
-                                    <label for="admin-book-pdf-file" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">PDF File Document</label>
-                                    <input type="file" id="admin-book-pdf-file" accept=".pdf,application/pdf" style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                <div class="input-group" style="margin-bottom: 15px;">
-                                    <label for="admin-book-total-pages" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Total Pages Count</label>
-                                    <input type="number" id="admin-book-total-pages" value="120" min="1" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                <div id="admin-book-upload-progress" class="hidden" style="margin-bottom: 15px;">
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                        <span>Uploading Book PDF...</span>
-                                        <span id="admin-book-upload-pct">0%</span>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
+                        
+                        <!-- Col 1: Upload PDF/Book File Card & Active PDF File Manager -->
+                        <div style="display: flex; flex-direction: column; gap: 24px;">
+                            <div class="grid-card">
+                                <h3><i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-color);"></i> Upload PDF Book</h3>
+                                <p class="section-desc">Upload course PDF document to Supabase cloud storage for students.</p>
+                                <form id="admin-upload-book-form" onsubmit="event.preventDefault();">
+                                    <div class="input-group" style="margin-bottom: 12px;">
+                                        <label for="admin-book-file-title" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Book Title</label>
+                                        <input type="text" id="admin-book-file-title" placeholder="e.g. Hawari Clinical Course 2026 Edition" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
-                                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
-                                        <div id="admin-book-upload-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.1s ease;"></div>
+                                    <div class="input-group" style="margin-bottom: 12px;">
+                                        <label for="admin-book-pdf-file" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">PDF File Document</label>
+                                        <input type="file" id="admin-book-pdf-file" accept=".pdf,application/pdf" style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
+                                    <div class="input-group" style="margin-bottom: 15px;">
+                                        <label for="admin-book-total-pages" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Total Pages Count</label>
+                                        <input type="number" id="admin-book-total-pages" value="120" min="1" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                    <div id="admin-book-upload-progress" class="hidden" style="margin-bottom: 15px;">
+                                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                            <span>Uploading Book PDF...</span>
+                                            <span id="admin-book-upload-pct">0%</span>
+                                        </div>
+                                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                            <div id="admin-book-upload-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.1s ease;"></div>
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary btn-block">
+                                        <i class="fa-solid fa-upload"></i> Upload & Set Active Book
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- Active PDF Book Info & Delete Card -->
+                            <div class="grid-card" style="border: 1px dashed var(--border-color);">
+                                <h3 style="font-size: 1rem; color: var(--text-primary); margin-bottom: 8px;"><i class="fa-solid fa-file-pdf" style="color: var(--color-danger);"></i> Active PDF Book File</h3>
+                                <div id="admin-active-book-info" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">
+                                    <div><strong>Title:</strong> <span id="admin-active-book-title-lbl">Hawari Clinical Course</span></div>
+                                    <div><strong>Pages:</strong> <span id="admin-active-book-pages-lbl">120</span> pages</div>
                                 </div>
-                                <button type="submit" class="btn btn-primary btn-block">
-                                    <i class="fa-solid fa-upload"></i> Upload & Set Active Book
+                                <button id="btn-admin-delete-book-pdf" class="btn btn-danger btn-outline btn-block" style="padding: 8px; font-size: 0.8rem;">
+                                    <i class="fa-solid fa-trash-can"></i> Delete Active PDF Book
                                 </button>
-                            </form>
+                            </div>
                         </div>
 
-                        <!-- Independent Student Subscriptions Table -->
+                        <!-- Col 2: Independent Student Subscriptions Table -->
                         <div class="grid-card">
                             <div class="card-header-flex" style="margin-bottom: 15px;">
                                 <h3>Student Book Access Subscriptions</h3>
@@ -1517,7 +1543,7 @@
                             </form>
 
                             <!-- Authorized List -->
-                            <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto;">
+                            <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto;">
                                 <!-- Dynamic rows -->
                             </div>
                         </div>

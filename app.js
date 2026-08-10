@@ -28275,7 +28275,8 @@ async function fetchBookAccessList() {
     const group = state.activeGroup || "infection";
     if (!bookState.groupAuthorizedEmails) bookState.groupAuthorizedEmails = {};
     try {
-        const rows = await supabaseRequest(`hawari_book_access?group_name=eq.${encodeURIComponent(group)}&select=email,status,group_name`);
+        console.log("[BookAccess] Fetching access list...");
+    const rows = await supabaseRequest(`hawari_book_access?select=email,status`);
         if (Array.isArray(rows)) {
             const activeEmails = rows
                 .filter(r => r.status !== "revoked")
@@ -28301,20 +28302,29 @@ async function grantBookAccess(email) {
         bookState.groupAuthorizedEmails[group].push(cleanEmail);
     }
 
+    console.log("[BookAccess] Grant started for:", cleanEmail);
     try {
-        await supabaseRequest("hawari_book_access", {
+        const res = await supabaseRequest("hawari_book_access", {
             method: "POST",
             headers: { "Prefer": "resolution=merge-duplicates" },
             body: JSON.stringify({
-                id: `${cleanEmail}_${group}`,
                 email: cleanEmail,
-                group_name: group,
                 status: "active",
                 granted_at: new Date().toISOString()
             })
         });
+        console.log("[BookAccess] Grant database response:", res);
+        if (res && res.success === false) {
+            console.error("[BookAccess] Grant failed:", res.error || res.status);
+            showToast("Grant Failed", res.error || "Could not grant access on server", "danger");
+            return;
+        }
+        console.log("[BookAccess] Grant success");
+        showToast("Access Granted", `Access granted to ${cleanEmail}`, "success");
+        await fetchBookAccessList();
     } catch (e) {
-        console.warn("[BookAccess] Cloud grant fallback:", e);
+        console.error("[BookAccess] Grant failed with exception:", e);
+        showToast("Grant Error", "Could not complete access request", "danger");
     }
 }
 

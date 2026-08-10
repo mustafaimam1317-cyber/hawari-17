@@ -2998,6 +2998,101 @@ body.group-dermatology.dark-theme {
     transform: translateY(-2px);
 }
 
+/* 7. Book Library Dynamic Grid Cards & Cover Art */
+.hawari-book-card {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    box-shadow: var(--shadow-md);
+}
+.hawari-book-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 16px 36px rgba(0,0,0,0.25);
+    border-color: var(--primary-color);
+}
+
+.book-card-cover {
+    height: 170px;
+    position: relative;
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 18px;
+    color: #ffffff;
+    overflow: hidden;
+}
+.book-card-cover::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 8px;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.2);
+    box-shadow: 2px 0 6px rgba(0,0,0,0.3);
+}
+
+.book-cover-badge {
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(8px);
+}
+
+.book-cover-title {
+    font-size: 1.15rem;
+    font-weight: 800;
+    line-height: 1.35;
+    color: #ffffff;
+    margin-bottom: 4px;
+    z-index: 2;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+
+.book-card-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.book-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.book-card-progress-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-primary);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 4px;
+}
+
+.book-card-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary-color) 0%, #3b82f6 100%);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
 
 
 

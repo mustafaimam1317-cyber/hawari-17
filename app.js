@@ -20784,8 +20784,9 @@ function encryptLocal(key, value) {
     } catch (e) {
         if (e.name === 'QuotaExceededError' || e.code === 22 || (e.message && e.message.includes("exceeded"))) {
             try {
+                // Safely clean ONLY non-critical temporary cache items, NEVER touch user tests, scores, or questions!
                 Object.keys(localStorage).forEach(k => {
-                    if (k.startsWith('hawari_questions_') || k.startsWith('hawari_tests_') || k.startsWith('hawari_temp_') || k.includes('cache')) {
+                    if (k.startsWith('hawari_temp_') || k.startsWith('hawari_cache_') || k.startsWith('pdf_page_cache_')) {
                         localStorage.removeItem(k);
                     }
                 });
@@ -27710,10 +27711,10 @@ async function deleteVideoBlob(id) {
 // ================= HAWARI BOOK & CANVAS ANNOTATOR ENGINE =================
 let bookState = {
     currentPage: 1,
-    numPages: 120,
+    numPages: 0,
     zoom: 1.0,
     fitMode: "normal", // "normal" | "fit-width" | "fit-page"
-    activeTool: "pan", // "pan"|"pen"|"highlighter"|"text"|"underline"|"strikethrough"|"circle"|"rectangle"|"arrow"|"laser"|"eraser"
+    activeTool: "pan", // "pan"|"select"|"lasso"|"pen"|"highlighter"|"text"|"underline"|"strikethrough"|"circle"|"rectangle"|"arrow"|"laser"|"eraser"
     activeColor: "#2563eb",
     strokeSize: 4,
     isDrawing: false,
@@ -27722,11 +27723,8 @@ let bookState = {
     bookmarks: [], // array of page numbers e.g. [1, 5, 12]
     extraPages: {}, // { [pageNumber]: 'blank' | 'lined' }
     authorizedEmails: ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"],
-    activeBookFile: {
-        id: "default_book_1",
-        title: "Hawari Infection & Clinical Course",
-        total_pages: 120
-    }
+    activeBookFile: null, // Dynamic active book object. NO DEFAULT 120-page dummy fallback!
+    userProgressMap: {}
 };
 
 // Check if a user email is authorized for Hawari Book access
@@ -27804,11 +27802,386 @@ function updateBookWatermark() {
     watermarkEl.innerHTML = html;
 }
 
+// Fetch list of books from Supabase / localStorage
+async function fetchBookLibraryData() {
+    try {
+        const query = `hawari_book_files?group_name=eq.${state.activeGroup}&order=uploaded_at.desc`;
+        const cloudBooks = await supabaseRequest(query);
+        if (Array.isArray(cloudBooks)) {
+            state.books = cloudBooks;
+        } else {
+            const local = localStorage.getItem("hawari_books_" + state.activeGroup);
+            state.books = local ? JSON.parse(local) : [];
+        }
+    } catch (e) {
+        console.warn("[BookLibrary] Cloud fetch fallback:", e);
+        const local = localStorage.getItem("hawari_books_" + state.activeGroup);
+        state.books = local ? JSON.parse(local) : [];
+    }
+    try {
+        localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books || []));
+    } catch(err){}
+    return state.books;
+}
+
+// Save user reading progress for active book
+async function saveUserBookProgress() {
+    if (!state.currentUser || !bookState.activeBookFile) return;
+    const bookId = bookState.activeBookFile.id;
+    const email = state.currentUser.email;
+    const page = bookState.currentPage || 1;
+
+    bookState.userProgressMap[bookId] = page;
+    localStorage.setItem(`hawari_prog_${email}_${bookId}`, page.toString());
+
+    try {
+        await supabaseRequest("hawari_user_book_progress", {
+            method: "POST",
+            headers: { "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify({
+                id: `${email}_${bookId}`,
+                email: email,
+                book_id: bookId,
+                last_page: page,
+                last_opened_at: new Date().toISOString()
+            })
+        });
+    } catch (e) {
+        console.warn("[BookProgress] Cloud save fallback:", e);
+    }
+}
+
+// Fetch user reading progress for a book
+async function fetchUserBookProgress(bookId) {
+    if (!state.currentUser) return 1;
+    const email = state.currentUser.email;
+    const local = localStorage.getItem(`hawari_prog_${email}_${bookId}`);
+    if (local) return parseInt(local) || 1;
+
+    try {
+        const records = await supabaseRequest(`hawari_user_book_progress?email=eq.${encodeURIComponent(email)}&book_id=eq.${bookId}`);
+        if (Array.isArray(records) && records.length > 0) {
+            const page = records[0].last_page || 1;
+            localStorage.setItem(`hawari_prog_${email}_${bookId}`, page.toString());
+            return page;
+        }
+    } catch (e) {
+        console.warn("[BookProgress] Cloud fetch fallback:", e);
+    }
+    return 1;
+}
+
+// Render Book Library Grid View
+async function renderBookLibrary(filterCategory = "all", searchQuery = "") {
+    const gridEl = document.getElementById("book-library-grid");
+    const emptyEl = document.getElementById("book-library-empty");
+    if (!gridEl) return;
+
+    await fetchBookLibraryData();
+
+    let booksList = state.books || [];
+    
+    // Apply category filter
+    if (filterCategory && filterCategory !== "all") {
+        booksList = booksList.filter(b => b.category === filterCategory);
+    }
+
+    // Apply search filter
+    if (searchQuery && searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        booksList = booksList.filter(b => (b.title || "").toLowerCase().includes(q) || (b.category || "").toLowerCase().includes(q));
+    }
+
+    gridEl.innerHTML = "";
+
+    if (booksList.length === 0) {
+        gridEl.classList.add("hidden");
+        if (emptyEl) emptyEl.classList.remove("hidden");
+        return;
+    }
+
+    gridEl.classList.remove("hidden");
+    if (emptyEl) emptyEl.classList.add("hidden");
+
+    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com");
+
+    for (const book of booksList) {
+        const lastPage = await fetchUserBookProgress(book.id);
+        const totalPages = book.total_pages || 1;
+        const pct = Math.min(100, Math.round((lastPage / totalPages) * 100));
+
+        let gradient = "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)";
+        if (book.category === "Infection") gradient = "linear-gradient(135deg, #1e40af 0%, #1e1b4b 100%)";
+        else if (book.category === "Dermatology") gradient = "linear-gradient(135deg, #9d174d 0%, #4c0519 100%)";
+        else if (book.category === "Pharmacology") gradient = "linear-gradient(135deg, #065f46 0%, #022c22 100%)";
+
+        const card = document.createElement("div");
+        card.className = "hawari-book-card";
+        card.innerHTML = `
+            <div class="book-card-cover" style="background: ${gradient};">
+                <span class="book-cover-badge">${escapeHTML(book.category || "General")}</span>
+                <div>
+                    <h4 class="book-cover-title">${escapeHTML(book.title)}</h4>
+                    <span style="font-size: 0.78rem; opacity: 0.85;"><i class="fa-solid fa-file-pdf"></i> ${totalPages} Pages</span>
+                </div>
+            </div>
+            <div class="book-card-body">
+                <div>
+                    <div class="book-card-meta">
+                        <span><i class="fa-solid fa-bookmark" style="color: var(--primary-color);"></i> ${lastPage > 1 ? `Page ${lastPage} of ${totalPages}` : "Not Started"}</span>
+                        <span>${pct}%</span>
+                    </div>
+                    <div class="book-card-progress-bar">
+                        <div class="book-card-progress-fill" style="width: ${pct}%;"></div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">
+                    <button class="btn btn-primary" style="flex: 1; padding: 8px 12px; font-size: 0.85rem;" onclick="openBook('${book.id}')">
+                        <i class="fa-solid fa-book-open"></i> ${lastPage > 1 ? `Continue (p.${lastPage})` : "Open Book"}
+                    </button>
+                    ${isAdmin ? `
+                        <button class="btn btn-danger btn-icon" style="padding: 8px 10px;" title="Delete Book Permanently" onclick="deleteAdminBook('${book.id}', '${escapeHTML(book.title)}')">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    ` : ""}
+                </div>
+            </div>
+        `;
+        gridEl.appendChild(card);
+    }
+}
+
+window.filterBookLibrary = function(cat, btnEl) {
+    const btns = document.querySelectorAll("#book-library-category-filters button");
+    btns.forEach(b => b.classList.remove("active"));
+    if (btnEl) btnEl.classList.add("active");
+    const searchVal = document.getElementById("book-library-search-input")?.value || "";
+    renderBookLibrary(cat, searchVal);
+};
+
+window.searchBookLibrary = function(q) {
+    const activeCatBtn = document.querySelector("#book-library-category-filters button.active");
+    const cat = activeCatBtn ? activeCatBtn.dataset.cat : "all";
+    renderBookLibrary(cat, q);
+};
+
+// Open specific book in Book Viewer Workspace
+window.openBook = async function(bookId) {
+    const book = (state.books || []).find(b => b.id === bookId);
+    if (!book) return;
+
+    // Set active book
+    bookState.activeBookFile = book;
+    bookState.numPages = book.total_pages || 1;
+    bookState.annotations = {}; // CLEAR memory to prevent annotations bleeding between books!
+
+    // Fetch user progress for this book
+    const lastPage = await fetchUserBookProgress(bookId);
+    bookState.currentPage = lastPage;
+
+    // Fetch annotations scoped to this book
+    await fetchBookCloudAnnotations();
+
+    // Update UI elements
+    const titleEl = document.getElementById("book-viewer-title");
+    if (titleEl) titleEl.innerText = book.title;
+
+    const totalPagesEl = document.getElementById("book-total-pages-num");
+    if (totalPagesEl) totalPagesEl.innerText = book.total_pages;
+
+    const gotoInput = document.getElementById("book-goto-page-input");
+    if (gotoInput) {
+        gotoInput.max = book.total_pages;
+        gotoInput.value = lastPage;
+    }
+
+    // Toggle Workspace views
+    const libraryContainer = document.getElementById("book-library-container");
+    const viewerWorkspace = document.getElementById("book-viewer-workspace");
+    if (libraryContainer) libraryContainer.classList.add("hidden");
+    if (viewerWorkspace) viewerWorkspace.classList.remove("hidden");
+
+    redrawBookCanvas();
+    showToast("Book Loaded", `Opened "${book.title}" on page ${lastPage}`, "info");
+};
+
+// Close Book Viewer Workspace & return to Library Grid
+window.closeBookViewerAndReturnToLibrary = function() {
+    saveUserBookProgress();
+    saveBookPageAnnotationToCloud(bookState.currentPage);
+
+    bookState.activeBookFile = null;
+
+    const libraryContainer = document.getElementById("book-library-container");
+    const viewerWorkspace = document.getElementById("book-viewer-workspace");
+    if (libraryContainer) libraryContainer.classList.remove("hidden");
+    if (viewerWorkspace) viewerWorkspace.classList.add("hidden");
+
+    renderBookLibrary();
+};
+
+// Admin Permanent Book Deletion (DB + Storage + Local Cache)
+window.deleteAdminBook = async function(bookId, bookTitle) {
+    if (!confirm(`Are you sure you want to permanently delete "${bookTitle}"?\n\nThis will remove the book PDF and all associated student annotations permanently. This action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        // 1. Delete DB record from hawari_book_files
+        await supabaseRequest(`hawari_book_files?id=eq.${bookId}`, {
+            method: "DELETE"
+        });
+
+        // 2. Delete associated annotations
+        await supabaseRequest(`hawari_book_annotations?document_id=eq.${bookId}`, {
+            method: "DELETE"
+        });
+
+        // 3. Delete user progress
+        await supabaseRequest(`hawari_user_book_progress?book_id=eq.${bookId}`, {
+            method: "DELETE"
+        });
+
+        // 4. Remove from state.books and local storage cache
+        state.books = (state.books || []).filter(b => b.id !== bookId);
+        localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books));
+
+        // 5. If active book was deleted, clear active state
+        if (bookState.activeBookFile && bookState.activeBookFile.id === bookId) {
+            bookState.activeBookFile = null;
+        }
+
+        showToast("Book Deleted", `"${bookTitle}" was permanently deleted.`, "success");
+        renderBookLibrary();
+
+    } catch (e) {
+        console.error("[DeleteBook] Failed to delete book:", e);
+        showToast("Delete Failed", "Could not remove book record from database.", "danger");
+    }
+};
+
+window.openAdminAddBookModal = function() {
+    const modal = document.getElementById("modal-admin-add-book");
+    if (modal) modal.classList.remove("hidden");
+    initAddBookModalForm();
+};
+
+function initAddBookModalForm() {
+    const form = document.getElementById("modal-add-book-form");
+    if (!form || form.dataset.bound) return;
+    form.dataset.bound = "true";
+
+    form.onsubmit = async (e) => {
+        e.preventDefault();
+        const titleInput = document.getElementById("modal-book-title");
+        const categoryInput = document.getElementById("modal-book-category");
+        const pagesInput = document.getElementById("modal-book-total-pages");
+        const fileInput = document.getElementById("modal-book-pdf-file");
+
+        const title = titleInput ? titleInput.value.trim() : "";
+        const category = categoryInput ? categoryInput.value : "General";
+        const pages = pagesInput && pagesInput.value ? parseInt(pagesInput.value) : 100;
+        const file = fileInput ? fileInput.files[0] : null;
+
+        if (!title || !file) {
+            showToast("Missing Required Fields", "Please enter a title and select a PDF file.", "warning");
+            return;
+        }
+
+        const progressContainer = document.getElementById("modal-book-upload-progress");
+        const progressBar = document.getElementById("modal-book-upload-bar");
+        const progressText = document.getElementById("modal-book-upload-pct");
+
+        if (progressContainer) progressContainer.classList.remove("hidden");
+        if (progressBar) progressBar.style.width = "40%";
+        if (progressText) progressText.innerText = "40%";
+
+        try {
+            const fileExt = file.name.split('.').pop();
+            const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
+            const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+            const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+
+            let publicUrl = "";
+            try {
+                const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
+                    method: "POST",
+                    headers: {
+                        "apikey": anonKey,
+                        "Authorization": `Bearer ${anonKey}`,
+                        "Content-Type": file.type || "application/pdf"
+                    },
+                    body: file
+                });
+
+                if (uploadRes.ok) {
+                    publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
+                }
+            } catch (storageErr) {}
+
+            if (!publicUrl) {
+                publicUrl = URL.createObjectURL(file);
+            }
+
+            if (progressBar) progressBar.style.width = "80%";
+            if (progressText) progressText.innerText = "80%";
+
+            const bookPayload = {
+                id: `book_${Date.now()}`,
+                title: title,
+                category: category,
+                total_pages: pages,
+                storage_url: publicUrl,
+                group_name: state.activeGroup,
+                uploaded_at: new Date().toISOString()
+            };
+
+            await supabaseRequest("hawari_book_files", {
+                method: "POST",
+                headers: { "Prefer": "resolution=merge-duplicates" },
+                body: JSON.stringify(bookPayload)
+            });
+
+            if (!state.books) state.books = [];
+            state.books.unshift(bookPayload);
+            localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books));
+
+            if (progressBar) progressBar.style.width = "100%";
+            if (progressText) progressText.innerText = "100%";
+
+            showToast("Book Added", `Successfully added "${title}" to library`, "success");
+
+            setTimeout(() => {
+                if (progressContainer) progressContainer.classList.add("hidden");
+                const modal = document.getElementById("modal-admin-add-book");
+                if (modal) modal.classList.add("hidden");
+                form.reset();
+                renderBookLibrary();
+            }, 800);
+
+        } catch (err) {
+            console.error("[AddBook] Error uploading book:", err);
+            showToast("Upload Error", "Failed to add book.", "danger");
+            if (progressContainer) progressContainer.classList.add("hidden");
+        }
+    };
+}
+
 // Cloud JSON Annotation Syncing (Supabase Table: hawari_book_annotations)
 async function fetchBookCloudAnnotations() {
-    if (!state.currentUser || !state.activeGroup) return;
+    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
+    const docId = bookState.activeBookFile.id;
+    const email = state.currentUser.email;
+
+    const local = localStorage.getItem(`hawari_anns_${email}_${docId}`);
+    if (local) {
+        try {
+            bookState.annotations = JSON.parse(local);
+        } catch (e) {}
+    }
+
     try {
-        const query = `hawari_book_annotations?email=eq.${encodeURIComponent(state.currentUser.email)}&group_name=eq.${state.activeGroup}`;
+        const query = `hawari_book_annotations?email=eq.${encodeURIComponent(email)}&document_id=eq.${docId}`;
         const records = await supabaseRequest(query);
         if (Array.isArray(records) && records.length > 0) {
             records.forEach(row => {
@@ -27816,7 +28189,8 @@ async function fetchBookCloudAnnotations() {
                     bookState.annotations[row.page_number] = row.payload_json;
                 }
             });
-            console.log(`[BookSync] Fetched cloud annotations for ${records.length} pages.`);
+            localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
+            console.log(`[BookSync] Fetched cloud annotations for ${records.length} pages of ${docId}.`);
         }
     } catch (e) {
         console.warn("[BookSync] Cloud annotations fetch fallback:", e);
@@ -27824,13 +28198,16 @@ async function fetchBookCloudAnnotations() {
 }
 
 async function saveBookPageAnnotationToCloud(page) {
-    if (!state.currentUser || !state.activeGroup) return;
+    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
     const pageData = bookState.annotations[page] || [];
-    const docId = bookState.activeBookFile ? bookState.activeBookFile.id : "default_doc";
+    const docId = bookState.activeBookFile.id;
+    const email = state.currentUser.email;
+
+    localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
 
     const payload = {
-        id: `${state.currentUser.email}_${state.activeGroup}_${docId}_p${page}`,
-        email: state.currentUser.email,
+        id: `${email}_${state.activeGroup}_${docId}_p${page}`,
+        email: email,
         group_name: state.activeGroup,
         document_id: docId,
         page_number: page,
@@ -27844,7 +28221,7 @@ async function saveBookPageAnnotationToCloud(page) {
             headers: { "Prefer": "resolution=merge-duplicates" },
             body: JSON.stringify(payload)
         });
-        console.log(`[BookSync] Saved JSON annotations for page ${page} to cloud.`);
+        console.log(`[BookSync] Saved JSON annotations for page ${page} of ${docId} to cloud.`);
     } catch (e) {
         console.warn("[BookSync] Cloud annotation save fallback:", e);
     }
@@ -27903,96 +28280,9 @@ async function revokeBookAccess(email) {
     }
 }
 
-// Admin PDF Book File Upload
+// Legacy Admin Upload function wrapper calling modal upload form
 async function uploadAdminBookPdfFile(file, title, totalPages) {
-    if (!file) return;
-    const progressContainer = document.getElementById("admin-book-upload-progress");
-    const progressBar = document.getElementById("admin-book-upload-bar");
-    const progressText = document.getElementById("admin-book-upload-pct");
-
-    if (progressContainer) progressContainer.classList.remove("hidden");
-    if (progressBar) progressBar.style.width = "30%";
-    if (progressText) progressText.innerText = "30%";
-
-    try {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
-        const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-
-        let publicUrl = "";
-        try {
-            const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
-                method: "POST",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${anonKey}`,
-                    "Content-Type": file.type || "application/pdf"
-                },
-                body: file
-            });
-
-            if (uploadRes.ok) {
-                publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
-            } else {
-                console.warn("[BookUpload] Supabase Storage upload status:", uploadRes.status);
-            }
-        } catch (storageErr) {
-            console.warn("[BookUpload] Storage upload error, using local fallback:", storageErr);
-        }
-
-        // Object URL Fallback for preview
-        if (!publicUrl) {
-            publicUrl = URL.createObjectURL(file);
-        }
-
-        if (progressBar) progressBar.style.width = "70%";
-        if (progressText) progressText.innerText = "70%";
-
-        const bookPayload = {
-            id: `book_${Date.now()}`,
-            title: title || file.name || "Hawari Course Book",
-            storage_url: publicUrl,
-            total_pages: parseInt(totalPages) || 120,
-            group_name: state.activeGroup,
-            uploaded_at: new Date().toISOString()
-        };
-
-        try {
-            await supabaseRequest("hawari_book_files", {
-                method: "POST",
-                headers: { "Prefer": "resolution=merge-duplicates" },
-                body: JSON.stringify(bookPayload)
-            });
-        } catch (dbErr) {
-            console.warn("[BookUpload] Metadata table save fallback:", dbErr);
-        }
-
-        bookState.numPages = bookPayload.total_pages;
-        bookState.activeBookFile = bookPayload;
-        localStorage.setItem("hawari_active_book_" + state.activeGroup, JSON.stringify(bookPayload));
-
-        if (progressBar) progressBar.style.width = "100%";
-        if (progressText) progressText.innerText = "100%";
-
-        showToast("PDF Uploaded", `Successfully loaded "${bookPayload.title}" (${bookPayload.total_pages} pages)`, "success");
-
-        const titleLbl = document.getElementById("admin-active-book-title-lbl");
-        const pagesLbl = document.getElementById("admin-active-book-pages-lbl");
-        if (titleLbl) titleLbl.innerText = bookPayload.title;
-        if (pagesLbl) pagesLbl.innerText = bookPayload.total_pages;
-
-        setTimeout(() => {
-            if (progressContainer) progressContainer.classList.add("hidden");
-        }, 1200);
-
-        redrawBookCanvas();
-
-    } catch (e) {
-        console.error("[BookUpload] Upload failed:", e);
-        showToast("Upload Error", "Could not process PDF file.", "danger");
-        if (progressContainer) progressContainer.classList.add("hidden");
-    }
+    openAdminAddBookModal();
 }
 
 // Render Admin Hawari Book Student Access Control UI inside Admin Panel
@@ -28044,29 +28334,6 @@ function renderAdminBookAccessManager() {
             renderAdminBookAccessManager();
         };
     }
-
-    // Bind Admin Upload PDF Form
-    const uploadForm = document.getElementById("admin-upload-book-form");
-    if (uploadForm && !uploadForm.dataset.bound) {
-        uploadForm.dataset.bound = "true";
-        uploadForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const fileInput = document.getElementById("admin-book-pdf-file");
-            const titleInput = document.getElementById("admin-book-file-title");
-            const pagesInput = document.getElementById("admin-book-total-pages");
-
-            const file = fileInput ? fileInput.files[0] : null;
-            const title = titleInput ? titleInput.value.trim() : "Hawari Course Book";
-            const pages = pagesInput ? pagesInput.value : 120;
-
-            if (!file) {
-                showToast("File Required", "Please select a PDF book file to upload.", "warning");
-                return;
-            }
-
-            await uploadAdminBookPdfFile(file, title, pages);
-        };
-    }
 }
 
 window.revokeStudentBookAccess = async function(email) {
@@ -28075,16 +28342,10 @@ window.revokeStudentBookAccess = async function(email) {
     renderAdminBookAccessManager();
 };
 
-// Render Hawari Book View & Canvas Annotator Engine
+// Render Hawari Book View (Toggles Library Grid vs Reader Workspace)
 function renderHawariBookView() {
-    const workspaceContainer = document.getElementById("book-workspace-container");
-    const restrictedCard = document.getElementById("book-access-restricted-card");
-    const badge = document.getElementById("book-access-status-badge");
     const isAuth = isUserBookAuthorized(state.currentUser);
-
-    if (workspaceContainer) workspaceContainer.classList.remove("hidden");
-    if (restrictedCard) restrictedCard.classList.add("hidden");
-
+    const badge = document.getElementById("book-access-status-badge");
     if (badge) {
         if (isAuth) {
             badge.className = "badge badge-active";
@@ -28095,13 +28356,22 @@ function renderHawariBookView() {
         }
     }
 
-    // Initialize DRM anti-leak protection
     initBookDrmProtection();
 
-    // Fetch Cloud Annotations for logged-in user
-    fetchBookCloudAnnotations().then(() => {
-        redrawBookCanvas();
-    });
+    const libraryContainer = document.getElementById("book-library-container");
+    const viewerWorkspace = document.getElementById("book-viewer-workspace");
+
+    if (bookState.activeBookFile) {
+        if (libraryContainer) libraryContainer.classList.add("hidden");
+        if (viewerWorkspace) viewerWorkspace.classList.remove("hidden");
+        fetchBookCloudAnnotations().then(() => {
+            redrawBookCanvas();
+        });
+    } else {
+        if (libraryContainer) libraryContainer.classList.remove("hidden");
+        if (viewerWorkspace) viewerWorkspace.classList.add("hidden");
+        renderBookLibrary();
+    }
 
     // Bind all toolbar & reader controls
     bindBookToolbarEvents();
@@ -28124,9 +28394,6 @@ function bindBookToolbarEvents() {
     const btnRedo = document.getElementById("btn-book-redo");
     const btnDrawer = document.getElementById("btn-toggle-book-drawer");
     const btnRuler = document.getElementById("btn-toggle-ruler");
-    const stickerSelect = document.getElementById("book-sticker-select");
-    const btnAddBlank = document.getElementById("btn-add-blank-page");
-    const colorPicker = document.getElementById("book-custom-color-picker");
     const btnDeletePdf = document.getElementById("btn-admin-delete-book-pdf");
 
     if (btnDeletePdf && !btnDeletePdf.dataset.bound) {
@@ -28280,33 +28547,16 @@ function bindBookToolbarEvents() {
         };
     }
 
-    // Tools Selection & Mouse Pointer Cursor Toggle
-    const tools = ["pan", "pen", "highlighter", "text", "underline", "strikethrough", "circle", "rectangle", "arrow", "laser", "eraser"];
-    tools.forEach(t => {
-        const btn = document.getElementById(`btn-tool-${t}`);
-        if (btn && !btn.dataset.bound) {
-            btn.dataset.bound = "true";
-            btn.onclick = () => {
-                bookState.activeTool = t;
-                tools.forEach(tOther => {
-                    const b = document.getElementById(`btn-tool-${tOther}`);
-                    if (b) b.classList.remove("active");
-                });
-                btn.classList.add("active");
+    // Baseline Snapping Toggle Switch
+    const snapToggle = document.getElementById("snap-baseline-toggle");
+    if (snapToggle && !snapToggle.dataset.bound) {
+        snapToggle.dataset.bound = "true";
+        snapToggle.onchange = () => {
+            bookState.snapBaseline = snapToggle.checked;
+            showToast("Baseline Snapping", `Text auto-align to ruled lines is now ${bookState.snapBaseline ? 'ENABLED' : 'DISABLED'}.`, "info");
+        };
+    }
 
-                const viewport = document.getElementById("book-canvas-viewport");
-                if (viewport) {
-                    if (t === "laser" || t === "pen" || t === "highlighter" || t === "eraser") {
-                        viewport.classList.add("book-laser-cursor");
-                    } else {
-                        viewport.classList.remove("book-laser-cursor");
-                    }
-                }
-            };
-        }
-    });
-
-    // Color Palette
     // Tool Selection & Custom SVG Cursor Updating
     document.querySelectorAll(".book-tool-btn").forEach(btn => {
         if (!btn.dataset.bound) {
@@ -28359,6 +28609,7 @@ function bindBookToolbarEvents() {
     }
 
     // Medical Vector Sticker Stamp Selector
+    const stickerSelect = document.getElementById("book-vector-sticker-select");
     if (stickerSelect && !stickerSelect.dataset.bound) {
         stickerSelect.dataset.bound = "true";
         stickerSelect.onchange = () => {
@@ -28380,6 +28631,7 @@ function bindBookToolbarEvents() {
     }
 
     // Insert Scratchpad Page Template Picker Modal Trigger
+    const btnAddBlank = document.getElementById("btn-book-add-blank-page");
     if (btnAddBlank && !btnAddBlank.dataset.bound) {
         btnAddBlank.dataset.bound = "true";
         btnAddBlank.onclick = () => {
@@ -28390,7 +28642,7 @@ function bindBookToolbarEvents() {
         };
     }
 
-    // Initialize Global Keyboard Shortcuts (V, P, H, T, E, L, Ctrl+Z, Ctrl+Y, Delete)
+    // Initialize Global Keyboard Shortcuts
     initBookKeyboardShortcuts();
 
     // Initialize Floating PDF Text Selection Action Menu
@@ -28548,6 +28800,320 @@ async function deleteAdminBookPdfFile() {
 
 
 
+// Custom SVG Cursor Switcher
+function updateBookViewportCursor(toolId) {
+    const viewport = document.getElementById("book-canvas-viewport");
+    if (!viewport) return;
+
+    const cursorClasses = [
+        "book-cursor-grab", "book-cursor-grabbing", "book-cursor-pen",
+        "book-cursor-highlighter", "book-cursor-text", "book-cursor-eraser",
+        "book-cursor-laser", "book-cursor-ruler", "book-cursor-crosshair"
+    ];
+    cursorClasses.forEach(cls => viewport.classList.remove(cls));
+
+    const cursorMap = {
+        pan: "book-cursor-grab",
+        select: "book-cursor-grab",
+        lasso: "book-cursor-crosshair",
+        pen: "book-cursor-pen",
+        highlighter: "book-cursor-highlighter",
+        text: "book-cursor-text",
+        eraser: "book-cursor-eraser",
+        laser: "book-cursor-laser",
+        ruler: "book-cursor-ruler",
+        circle: "book-cursor-crosshair",
+        rectangle: "book-cursor-crosshair",
+        arrow: "book-cursor-crosshair",
+        line: "book-cursor-crosshair",
+        triangle: "book-cursor-crosshair"
+    };
+
+    const cls = cursorMap[toolId] || "book-cursor-grab";
+    viewport.classList.add(cls);
+}
+
+// Ruled Page Baseline Snapping Calculator
+function snapYToRuledLine(y, zoom) {
+    if (!bookState.snapBaseline) return y;
+    const pageTemplate = bookState.extraPages[bookState.currentPage];
+    if (pageTemplate !== "lined" && pageTemplate !== "cornell") return y;
+
+    const topMargin = 60;
+    const lineSpacing = 30;
+    if (y < topMargin) return y;
+
+    const lineIndex = Math.round((y - topMargin) / lineSpacing);
+    return topMargin + lineIndex * lineSpacing;
+}
+
+// Scratchpad Template Modal Actions
+window.selectScratchpadTemplate = function(type, el) {
+    bookState.selectedScratchpadTemplate = type;
+    document.querySelectorAll(".template-option-card").forEach(c => c.classList.remove("active"));
+    if (el) el.classList.add("active");
+};
+
+window.applySelectedScratchpadTemplate = function() {
+    const template = bookState.selectedScratchpadTemplate || "ruled";
+    const modal = document.getElementById("modal-scratchpad-template");
+    if (modal) modal.classList.add("hidden");
+
+    const templateMap = {
+        blank: "blank",
+        ruled: "lined",
+        grid: "grid",
+        dotted: "dotted",
+        cornell: "cornell"
+    };
+
+    const mappedType = templateMap[template] || "lined";
+    const page = bookState.currentPage;
+    bookState.extraPages[page] = mappedType;
+
+    redrawBookCanvas();
+    showToast("Template Applied", `Applied ${template.toUpperCase()} scratchpad template to Page ${page}`, "success");
+};
+
+// Vector Sticker Stamping
+function stampVectorStickerOnPage(badgeType) {
+    const page = bookState.currentPage;
+    if (!bookState.annotations[page]) bookState.annotations[page] = [];
+    saveHistoryState(page);
+
+    const badgeColorMap = {
+        "HIGH YIELD": "#ef4444",
+        "IMPORTANT": "#f59e0b",
+        "REMEMBER": "#8b5cf6",
+        "WARNING": "#dc2626",
+        "EXAM": "#2563eb",
+        "TIP": "#10b981",
+        "NOTE": "#06b6d4",
+        "REVIEW": "#6366f1",
+        "QUESTION": "#ec4899",
+        "DONE": "#22c55e"
+    };
+
+    const stickerObj = {
+        type: "sticker",
+        badgeType: badgeType,
+        text: badgeType,
+        note: "Double-click to edit note...",
+        color: badgeColorMap[badgeType] || "#2563eb",
+        x: 100,
+        y: 120,
+        width: 140,
+        height: 38
+    };
+
+    bookState.annotations[page].push(stickerObj);
+    saveBookPageAnnotationToCloud(page);
+    redrawBookCanvas();
+    showToast("Sticker Added", `Added ${badgeType} sticker. Double-click to edit inline!`, "success");
+}
+
+// Sticky Note Generator
+function addStickyNoteOnPage() {
+    const page = bookState.currentPage;
+    if (!bookState.annotations[page]) bookState.annotations[page] = [];
+    saveHistoryState(page);
+
+    const noteColors = ["#fef08a", "#bbf7d0", "#bfdbfe", "#fbcfe8", "#fed7aa"];
+    const randomBg = noteColors[Math.floor(Math.random() * noteColors.length)];
+
+    let yPos = 140;
+    if (bookState.extraPages[page] === "lined" || bookState.extraPages[page] === "cornell") {
+        yPos = snapYToRuledLine(yPos, bookState.zoom);
+    }
+
+    const noteObj = {
+        type: "note",
+        text: "Double-click to add clinical note...",
+        color: randomBg,
+        x: 140,
+        y: yPos,
+        width: 180,
+        height: 140
+    };
+
+    bookState.annotations[page].push(noteObj);
+    saveBookPageAnnotationToCloud(page);
+    redrawBookCanvas();
+    showToast("Sticky Note Added", "Added new sticky note. Double click to edit!", "info");
+}
+
+// Global Keyboard Shortcuts
+function initBookKeyboardShortcuts() {
+    if (window._bookShortcutsBound) return;
+    window._bookShortcutsBound = true;
+
+    window.addEventListener("keydown", (e) => {
+        if (state.activeView !== "hawari-book") return;
+        if (["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+
+        const key = e.key ? e.key.toLowerCase() : "";
+
+        if (key === "v") {
+            const btn = document.getElementById("btn-tool-select");
+            if (btn) btn.click();
+        } else if (key === "p") {
+            const btn = document.getElementById("btn-tool-pen");
+            if (btn) btn.click();
+        } else if (key === "h") {
+            const btn = document.getElementById("btn-tool-highlighter");
+            if (btn) btn.click();
+        } else if (key === "t") {
+            const btn = document.getElementById("btn-tool-text");
+            if (btn) btn.click();
+        } else if (key === "e") {
+            const btn = document.getElementById("btn-tool-eraser");
+            if (btn) btn.click();
+        } else if (key === "l") {
+            const btn = document.getElementById("btn-tool-laser");
+            if (btn) btn.click();
+        } else if (e.ctrlKey && key === "c") {
+            copySelectedAnnotation();
+        } else if (e.ctrlKey && key === "v") {
+            pasteSelectedAnnotation();
+        } else if (e.ctrlKey && key === "d") {
+            e.preventDefault();
+            duplicateSelectedAnnotation();
+        } else if (key === "delete" || key === "backspace") {
+            deleteSelectedAnnotation();
+        }
+    });
+}
+
+function copySelectedAnnotation() {
+    const page = bookState.currentPage;
+    const selectedIdx = bookState.selectedAnnotationIndex;
+    const annList = bookState.annotations[page];
+    if (annList && selectedIdx !== undefined && annList[selectedIdx]) {
+        bookState.clipboardAnnotation = JSON.parse(JSON.stringify(annList[selectedIdx]));
+        showToast("Copied", "Annotation copied to clipboard.", "info");
+    }
+}
+
+function pasteSelectedAnnotation() {
+    if (!bookState.clipboardAnnotation) return;
+    const page = bookState.currentPage;
+    if (!bookState.annotations[page]) bookState.annotations[page] = [];
+
+    saveHistoryState(page);
+    const newObj = JSON.parse(JSON.stringify(bookState.clipboardAnnotation));
+    newObj.x = (newObj.x || 100) + 20;
+    newObj.y = (newObj.y || 100) + 20;
+    if (newObj.fromX) { newObj.fromX += 20; newObj.toX += 20; }
+    if (newObj.fromY) { newObj.fromY += 20; newObj.toY += 20; }
+
+    bookState.annotations[page].push(newObj);
+    bookState.selectedAnnotationIndex = bookState.annotations[page].length - 1;
+    saveBookPageAnnotationToCloud(page);
+    redrawBookCanvas();
+    showToast("Pasted", "Annotation pasted.", "success");
+}
+
+function duplicateSelectedAnnotation() {
+    copySelectedAnnotation();
+    pasteSelectedAnnotation();
+}
+
+function deleteSelectedAnnotation() {
+    const page = bookState.currentPage;
+    const selectedIdx = bookState.selectedAnnotationIndex;
+    const annList = bookState.annotations[page];
+    if (annList && selectedIdx !== undefined && annList[selectedIdx]) {
+        saveHistoryState(page);
+        annList.splice(selectedIdx, 1);
+        bookState.selectedAnnotationIndex = null;
+        saveBookPageAnnotationToCloud(page);
+        redrawBookCanvas();
+        showToast("Deleted", "Deleted selected annotation.", "info");
+    }
+}
+
+// Floating PDF Text Selection Action Menu Listener
+function initPdfTextSelectionListener() {
+    const viewport = document.getElementById("book-canvas-viewport");
+    const menu = document.getElementById("pdf-text-select-menu");
+    if (!viewport || !menu || viewport.dataset.textSelectBound) return;
+    viewport.dataset.textSelectBound = "true";
+
+    document.addEventListener("selectionchange", () => {
+        if (state.activeView !== "hawari-book") return;
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().trim() : "";
+        if (text.length > 0) {
+            const range = sel.getRangeAt(0);
+            const rect = range.getBoundingClientRect();
+            const vpRect = viewport.getBoundingClientRect();
+
+            if (rect.top >= vpRect.top && rect.bottom <= vpRect.bottom) {
+                menu.style.top = `${Math.max(10, rect.top - vpRect.top - 45)}px`;
+                menu.style.left = `${Math.max(10, rect.left - vpRect.left + (rect.width / 2) - 100)}px`;
+                menu.classList.remove("hidden");
+                menu.dataset.selectedText = text;
+                return;
+            }
+        }
+        menu.classList.add("hidden");
+    });
+}
+
+window.pdfTextActionHighlight = function() {
+    const menu = document.getElementById("pdf-text-select-menu");
+    const text = menu ? menu.dataset.selectedText : "";
+    if (text) {
+        showToast("Text Highlighted", `Highlighted: "${text.substring(0, 25)}..."`, "success");
+        if (menu) menu.classList.add("hidden");
+    }
+};
+
+window.pdfTextActionAddNote = function() {
+    const menu = document.getElementById("pdf-text-select-menu");
+    const text = menu ? menu.dataset.selectedText : "";
+    if (text) {
+        addStickyNoteOnPage();
+        const page = bookState.currentPage;
+        const list = bookState.annotations[page];
+        if (list && list.length > 0) {
+            list[list.length - 1].text = text;
+            redrawBookCanvas();
+        }
+        if (menu) menu.classList.add("hidden");
+    }
+};
+
+window.pdfTextActionCreateFlashcard = function() {
+    const menu = document.getElementById("pdf-text-select-menu");
+    const text = menu ? menu.dataset.selectedText : "";
+    const modal = document.getElementById("modal-create-flashcard");
+    const front = document.getElementById("fc-new-front");
+    if (front && text) front.value = text;
+    if (modal) modal.classList.remove("hidden");
+    if (menu) menu.classList.add("hidden");
+};
+
+window.pdfTextActionGenerateMcq = function() {
+    const menu = document.getElementById("pdf-text-select-menu");
+    const text = menu ? menu.dataset.selectedText : "";
+    if (text) {
+        showToast("AI MCQ Generator", `Generating MCQ from text: "${text.substring(0, 30)}..."`, "info");
+        if (menu) menu.classList.add("hidden");
+    }
+};
+
+window.pdfTextActionCopy = function() {
+    const menu = document.getElementById("pdf-text-select-menu");
+    const text = menu ? menu.dataset.selectedText : "";
+    if (text) {
+        navigator.clipboard.writeText(text);
+        showToast("Copied", "Text copied to clipboard.", "info");
+        if (menu) menu.classList.add("hidden");
+    }
+};
+
+// Canvas Drawing Engine with Selection Handles & Smooth Curves
 function initBookCanvasDrawing() {
     const animCanvas = document.getElementById("book-annotation-canvas");
     if (!animCanvas || animCanvas.dataset.drawingBound) return;
@@ -28555,6 +29121,7 @@ function initBookCanvasDrawing() {
 
     let lastX = 0;
     let lastY = 0;
+    let currentStrokePoints = [];
 
     const getCoords = (e) => {
         const rect = animCanvas.getBoundingClientRect();
@@ -28563,14 +29130,13 @@ function initBookCanvasDrawing() {
         let x = (clientX - rect.left) / bookState.zoom;
         let y = (clientY - rect.top) / bookState.zoom;
 
-        // Virtual Ruler Straight-Line Snapping Check
         const ruler = document.getElementById("book-ruler-widget");
         if (ruler && !ruler.classList.contains("hidden")) {
             const rRect = ruler.getBoundingClientRect();
             const canvasRect = animCanvas.getBoundingClientRect();
             const rulerTopCanvas = (rRect.top - canvasRect.top) / bookState.zoom;
             if (Math.abs(y - rulerTopCanvas) < 25) {
-                y = rulerTopCanvas; // Snap straight line along ruler top edge!
+                y = rulerTopCanvas;
             }
         }
         return { x, y };
@@ -28585,6 +29151,29 @@ function initBookCanvasDrawing() {
         lastY = coords.y;
         startX = coords.x;
         startY = coords.y;
+        currentStrokePoints = [{ x: coords.x, y: coords.y }];
+
+        if (tool === "select") {
+            // Check if user clicked an existing object
+            const page = bookState.currentPage;
+            const annList = bookState.annotations[page] || [];
+            let hitIdx = null;
+
+            for (let i = annList.length - 1; i >= 0; i--) {
+                const a = annList[i];
+                const bbox = getAnnotationBBox(a);
+                if (coords.x >= bbox.x && coords.x <= bbox.x + bbox.width &&
+                    coords.y >= bbox.y && coords.y <= bbox.y + bbox.height) {
+                    hitIdx = i;
+                    break;
+                }
+            }
+
+            bookState.selectedAnnotationIndex = hitIdx;
+            redrawBookCanvas();
+            if (hitIdx !== null) isDrawingShape = true;
+            return;
+        }
 
         if (tool === "laser") {
             laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
@@ -28593,20 +29182,21 @@ function initBookCanvasDrawing() {
         }
 
         const page = bookState.currentPage;
-        if (!bookState.annotations[page]) {
-            bookState.annotations[page] = [];
-        }
+        if (!bookState.annotations[page]) bookState.annotations[page] = [];
 
         saveHistoryState(page);
 
         if (tool === "text") {
-            const textContent = prompt("Enter custom text annotation:", "");
+            let snappedY = coords.y;
+            snappedY = snapYToRuledLine(snappedY, bookState.zoom);
+
+            const textContent = prompt("Enter text annotation:", "");
             if (textContent && textContent.trim()) {
                 const textObj = {
                     type: "text",
                     text: textContent.trim(),
                     x: coords.x,
-                    y: coords.y,
+                    y: snappedY,
                     color: bookState.activeColor,
                     size: 16
                 };
@@ -28627,13 +29217,33 @@ function initBookCanvasDrawing() {
 
         const coords = getCoords(e);
 
+        if (tool === "select" && bookState.selectedAnnotationIndex !== null) {
+            const page = bookState.currentPage;
+            const target = bookState.annotations[page][bookState.selectedAnnotationIndex];
+            if (target) {
+                const dx = coords.x - lastX;
+                const dy = coords.y - lastY;
+
+                target.x = (target.x || 0) + dx;
+                target.y = (target.y || 0) + dy;
+                if (target.fromX !== undefined) { target.fromX += dx; target.toX += dx; }
+                if (target.fromY !== undefined) { target.fromY += dy; target.toY += dy; }
+
+                lastX = coords.x;
+                lastY = coords.y;
+                redrawBookCanvas();
+            }
+            return;
+        }
+
         if (tool === "laser") {
             laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
             return;
         }
 
         if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
-            // Pointer Pressure Sensitivity scaling (for Stylus Tablets)
+            currentStrokePoints.push({ x: coords.x, y: coords.y });
+
             const pressure = (e.pressure && e.pressure > 0) ? e.pressure : 0.5;
             const sizeMult = tool === "pen" ? (pressure * 1.6) : 1.0;
             const baseSize = tool === "highlighter" ? 18 : (tool === "eraser" ? 24 : bookState.strokeSize);
@@ -28646,8 +29256,10 @@ function initBookCanvasDrawing() {
                 fromX: lastX,
                 fromY: lastY,
                 toX: coords.x,
-                toY: coords.y
+                toY: coords.y,
+                points: [...currentStrokePoints]
             };
+
             bookState.annotations[bookState.currentPage].push(stroke);
             drawSingleStroke(animCanvas.getContext("2d"), stroke);
             lastX = coords.x;
@@ -28679,7 +29291,7 @@ function initBookCanvasDrawing() {
             const shapeObj = {
                 type: tool,
                 color: bookState.activeColor,
-                size: tool === "highlighter" ? 18 : 3,
+                size: 3,
                 x: startX,
                 y: startY,
                 toX: endCoords.x,
@@ -28696,7 +29308,34 @@ function initBookCanvasDrawing() {
         }
     };
 
-    // Use PointerEvents to support Stylus Pen pressure sensitivity
+    // Double click on Canvas inline text/sticker/note editor
+    animCanvas.addEventListener("dblclick", (e) => {
+        const coords = getCoords(e);
+        const page = bookState.currentPage;
+        const annList = bookState.annotations[page] || [];
+
+        for (let i = annList.length - 1; i >= 0; i--) {
+            const a = annList[i];
+            if (a.type === "text" || a.type === "sticker" || a.type === "note") {
+                const bbox = getAnnotationBBox(a);
+                if (coords.x >= bbox.x && coords.x <= bbox.x + bbox.width &&
+                    coords.y >= bbox.y && coords.y <= bbox.y + bbox.height) {
+                    
+                    const newText = prompt("Edit content:", a.note || a.text || "");
+                    if (newText !== null) {
+                        saveHistoryState(page);
+                        if (a.type === "sticker") a.note = newText;
+                        else a.text = newText;
+                        saveBookPageAnnotationToCloud(page);
+                        redrawBookCanvas();
+                        showToast("Text Updated", "Updated annotation text.", "success");
+                    }
+                    break;
+                }
+            }
+        }
+    });
+
     animCanvas.addEventListener("pointerdown", startDraw);
     animCanvas.addEventListener("pointermove", drawMove);
     animCanvas.addEventListener("pointerup", stopDraw);
@@ -28706,66 +29345,12 @@ function initBookCanvasDrawing() {
     animCanvas.addEventListener("touchend", stopDraw);
 }
 
-function stampStickerOnPage(stickerSymbol) {
-    const page = bookState.currentPage;
-    if (!bookState.annotations[page]) bookState.annotations[page] = [];
-
-    saveHistoryState(page);
-
-    const noteText = prompt(`Enter optional note inside sticker ${stickerSymbol}:`, "");
-
-    const stickerObj = {
-        type: "sticker",
-        text: stickerSymbol,
-        note: noteText ? noteText.trim() : "",
-        x: 120,
-        y: 160,
-        size: 32
-    };
-
-    bookState.annotations[page].push(stickerObj);
-    saveBookPageAnnotationToCloud(page);
-    redrawBookCanvas();
-    showToast("Sticker Placed", `Stamped ${stickerSymbol} sticker on page ${page}`, "success");
-}
-
-function saveHistoryState(page) {
-    if (!bookState.historyStack[page]) {
-        bookState.historyStack[page] = { undo: [], redo: [] };
-    }
-    const currentAnn = JSON.parse(JSON.stringify(bookState.annotations[page] || []));
-    bookState.historyStack[page].undo.push(currentAnn);
-    bookState.historyStack[page].redo = []; // Clear redo stack on new stroke
-}
-
-function undoBookPageAction() {
-    const page = bookState.currentPage;
-    const stack = bookState.historyStack[page];
-    if (stack && stack.undo.length > 0) {
-        const currentAnn = JSON.parse(JSON.stringify(bookState.annotations[page] || []));
-        stack.redo.push(currentAnn);
-
-        const previousAnn = stack.undo.pop();
-        bookState.annotations[page] = previousAnn;
-        saveBookPageAnnotationToCloud(page);
-        redrawBookCanvas();
-        showToast("Undo", "Reverted last annotation change", "info");
-    }
-}
-
-function redoBookPageAction() {
-    const page = bookState.currentPage;
-    const stack = bookState.historyStack[page];
-    if (stack && stack.redo.length > 0) {
-        const currentAnn = JSON.parse(JSON.stringify(bookState.annotations[page] || []));
-        stack.undo.push(currentAnn);
-
-        const nextAnn = stack.redo.pop();
-        bookState.annotations[page] = nextAnn;
-        saveBookPageAnnotationToCloud(page);
-        redrawBookCanvas();
-        showToast("Redo", "Restored annotation change", "info");
-    }
+function getAnnotationBBox(a) {
+    if (a.type === "sticker") return { x: a.x || 100, y: a.y || 120, width: a.width || 140, height: a.height || 38 };
+    if (a.type === "note") return { x: a.x || 140, y: a.y || 140, width: a.width || 180, height: a.height || 140 };
+    if (a.type === "text") return { x: a.x || 50, y: (a.y || 50) - 16, width: Math.max(100, (a.text || "").length * 9), height: 24 };
+    if (a.type === "rectangle" || a.type === "circle") return { x: Math.min(a.x, a.toX || a.x), y: Math.min(a.y, a.toY || a.y), width: Math.abs(a.width || 50), height: Math.abs(a.height || 50) };
+    return { x: (a.x || a.fromX || 0) - 10, y: (a.y || a.fromY || 0) - 10, width: Math.abs((a.toX || 50) - (a.fromX || 0)) + 20, height: Math.abs((a.toY || 50) - (a.fromY || 0)) + 20 };
 }
 
 function drawSingleStroke(ctx, s) {
@@ -28773,13 +29358,24 @@ function drawSingleStroke(ctx, s) {
     ctx.beginPath();
 
     if (s.type === "highlighter") {
-        ctx.moveTo(s.fromX, s.fromY);
-        ctx.lineTo(s.toX, s.toY);
-        ctx.strokeStyle = s.color;
+        if (s.points && s.points.length > 1) {
+            ctx.moveTo(s.points[0].x, s.points[0].y);
+            for (let i = 1; i < s.points.length - 1; i++) {
+                const xc = (s.points[i].x + s.points[i + 1].x) / 2;
+                const yc = (s.points[i].y + s.points[i + 1].y) / 2;
+                ctx.quadraticCurveTo(s.points[i].x, s.points[i].y, xc, yc);
+            }
+            ctx.lineTo(s.points[s.points.length - 1].x, s.points[s.points.length - 1].y);
+        } else {
+            ctx.moveTo(s.fromX, s.fromY);
+            ctx.lineTo(s.toX, s.toY);
+        }
+        ctx.strokeStyle = s.color || "#fde047";
         ctx.globalAlpha = 0.35;
         ctx.lineWidth = s.size || 18;
         ctx.lineCap = "square";
         ctx.stroke();
+
     } else if (s.type === "eraser") {
         ctx.moveTo(s.fromX, s.fromY);
         ctx.lineTo(s.toX, s.toY);
@@ -28787,32 +29383,47 @@ function drawSingleStroke(ctx, s) {
         ctx.lineWidth = s.size || 24;
         ctx.lineCap = "round";
         ctx.stroke();
+
     } else if (s.type === "pen" || !s.type) {
-        ctx.moveTo(s.fromX, s.fromY);
-        ctx.lineTo(s.toX, s.toY);
-        ctx.strokeStyle = s.color;
+        if (s.points && s.points.length > 1) {
+            ctx.moveTo(s.points[0].x, s.points[0].y);
+            for (let i = 1; i < s.points.length - 1; i++) {
+                const xc = (s.points[i].x + s.points[i + 1].x) / 2;
+                const yc = (s.points[i].y + s.points[i + 1].y) / 2;
+                ctx.quadraticCurveTo(s.points[i].x, s.points[i].y, xc, yc);
+            }
+            ctx.lineTo(s.points[s.points.length - 1].x, s.points[s.points.length - 1].y);
+        } else {
+            ctx.moveTo(s.fromX, s.fromY);
+            ctx.lineTo(s.toX, s.toY);
+        }
+        ctx.strokeStyle = s.color || "#2563eb";
         ctx.globalAlpha = 1.0;
         ctx.lineWidth = s.size || 4;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.stroke();
+
     } else if (s.type === "underline") {
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(s.toX, s.y);
         ctx.strokeStyle = s.color;
         ctx.lineWidth = 3;
         ctx.stroke();
+
     } else if (s.type === "strikethrough") {
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(s.toX, s.y);
         ctx.strokeStyle = s.color;
         ctx.lineWidth = 3;
         ctx.stroke();
+
     } else if (s.type === "rectangle") {
         ctx.rect(s.x, s.y, s.width, s.height);
         ctx.strokeStyle = s.color;
         ctx.lineWidth = 3;
         ctx.stroke();
+
     } else if (s.type === "circle") {
         const radiusX = Math.abs(s.width) / 2;
         const radiusY = Math.abs(s.height) / 2;
@@ -28822,23 +29433,24 @@ function drawSingleStroke(ctx, s) {
         ctx.strokeStyle = s.color;
         ctx.lineWidth = 3;
         ctx.stroke();
+
     } else if (s.type === "arrow") {
         drawCanvasArrow(ctx, s.x, s.y, s.toX, s.toY, s.color);
+
     } else if (s.type === "text") {
         ctx.fillStyle = s.color || "#1e293b";
         ctx.font = `bold ${s.size || 16}px Inter, sans-serif`;
         ctx.fillText(s.text, s.x, s.y);
+
     } else if (s.type === "sticker") {
-        // Render Professional Graphical Vector Sticker Badge
-        const w = s.width || 130;
-        const h = s.height || 36;
-        const radius = 18;
+        const w = s.width || 140;
+        const h = s.height || 38;
+        const radius = 19;
         const color = s.color || "#ef4444";
 
         ctx.save();
         ctx.translate(s.x, s.y);
 
-        // Badge pill background
         ctx.beginPath();
         ctx.roundRect(0, 0, w, h, radius);
         ctx.fillStyle = color;
@@ -28847,28 +29459,24 @@ function drawSingleStroke(ctx, s) {
         ctx.shadowOffsetY = 3;
         ctx.fill();
 
-        // White inner border ring
         ctx.lineWidth = 1.5;
         ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
         ctx.stroke();
 
-        // White text badge title
         ctx.fillStyle = "#ffffff";
         ctx.font = "900 12px Inter, sans-serif";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.fillText((s.badgeType || s.text || "STICKER").toUpperCase(), 14, h / 2);
 
-        // Note subtext if present
-        if (s.note && s.note !== "Click to edit text...") {
+        if (s.note && s.note !== "Double-click to edit note...") {
             ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
             ctx.font = "500 10px Inter, sans-serif";
-            ctx.fillText(s.note, 85, h / 2);
+            ctx.fillText(s.note.substring(0, 12), 85, h / 2);
         }
         ctx.restore();
 
     } else if (s.type === "note") {
-        // Render Professional Editable Sticky Note
         const w = s.width || 180;
         const h = s.height || 140;
         const bg = s.color || "#fef08a";
@@ -28876,7 +29484,6 @@ function drawSingleStroke(ctx, s) {
         ctx.save();
         ctx.translate(s.x, s.y);
 
-        // Soft Drop Shadow
         ctx.fillStyle = bg;
         ctx.shadowColor = "rgba(0, 0, 0, 0.18)";
         ctx.shadowBlur = 12;
@@ -28884,24 +29491,20 @@ function drawSingleStroke(ctx, s) {
         ctx.fillRect(0, 0, w, h);
         ctx.shadowColor = "transparent";
 
-        // Top Header Pin Bar
         ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
         ctx.fillRect(0, 0, w, 24);
 
-        // Header Pin Icon Dot
         ctx.beginPath();
         ctx.arc(w / 2, 12, 4, 0, 2 * Math.PI);
         ctx.fillStyle = "#ef4444";
         ctx.fill();
 
-        // Sticky Note Content Text
         ctx.fillStyle = "#1e293b";
         ctx.font = "500 13px Outfit, sans-serif";
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        
-        // Multi-line text wrapper
-        const lines = (s.text || "Click to add note...").split("\n");
+
+        const lines = (s.text || "Double-click to add clinical note...").split("\n");
         lines.forEach((line, idx) => {
             if (idx < 6) ctx.fillText(line, 12, 32 + idx * 18);
         });
@@ -29092,7 +29695,6 @@ function redrawBookCanvas() {
     if (totalPagesEl) totalPagesEl.innerText = bookState.numPages;
     if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
 
-    // 10-Page Free Preview Check
     const isAuth = isUserBookAuthorized(state.currentUser);
     if (bookState.currentPage > 10 && !isAuth) {
         if (lockOverlay) lockOverlay.classList.remove("hidden");
@@ -29126,14 +29728,12 @@ function redrawBookCanvas() {
     const pdfCtx = pdfCanvas.getContext("2d");
     const animCtx = animCanvas.getContext("2d");
 
-    // Draw Page Background (Check if Blank/Ruled/Grid/Dotted/Cornell Scratchpad page)
     pdfCtx.fillStyle = "#ffffff";
     pdfCtx.fillRect(0, 0, scaledWidth, scaledHeight);
 
     const pageTemplate = bookState.extraPages[bookState.currentPage];
 
     if (pageTemplate === "lined") {
-        // Ruled notebook page
         pdfCtx.strokeStyle = "#cbd5e1";
         pdfCtx.lineWidth = 1;
         for (let lineY = 60 * bookState.zoom; lineY < scaledHeight; lineY += 30 * bookState.zoom) {
@@ -29142,7 +29742,6 @@ function redrawBookCanvas() {
             pdfCtx.lineTo(scaledWidth, lineY);
             pdfCtx.stroke();
         }
-        // Vertical red margin line
         pdfCtx.strokeStyle = "#fca5a5";
         pdfCtx.lineWidth = 2;
         pdfCtx.beginPath();
@@ -29155,7 +29754,6 @@ function redrawBookCanvas() {
         pdfCtx.fillText(`RULED SCRATCHPAD - PAGE ${bookState.currentPage}`, 75 * bookState.zoom, 40 * bookState.zoom);
 
     } else if (pageTemplate === "grid") {
-        // Graph paper grid
         pdfCtx.strokeStyle = "#e2e8f0";
         pdfCtx.lineWidth = 1;
         const step = 25 * bookState.zoom;
@@ -29170,7 +29768,6 @@ function redrawBookCanvas() {
         pdfCtx.fillText(`GRID GRAPH PAPER - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
 
     } else if (pageTemplate === "dotted") {
-        // Dot matrix paper
         pdfCtx.fillStyle = "#94a3b8";
         const step = 25 * bookState.zoom;
         for (let dx = 25 * bookState.zoom; dx < scaledWidth; dx += step) {
@@ -29185,28 +29782,24 @@ function redrawBookCanvas() {
         pdfCtx.fillText(`DOTTED JOURNAL - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
 
     } else if (pageTemplate === "cornell") {
-        // Cornell Notes layout
         pdfCtx.strokeStyle = "#94a3b8";
         pdfCtx.lineWidth = 2;
         pdfCtx.strokeRect(20 * bookState.zoom, 20 * bookState.zoom, scaledWidth - 40 * bookState.zoom, 50 * bookState.zoom);
-        
+
         pdfCtx.fillStyle = "#1e293b";
         pdfCtx.font = `bold ${Math.round(15 * bookState.zoom)}px Outfit, sans-serif`;
         pdfCtx.fillText(`CORNELL NOTES | Topic: _____________________ | Date: ____/____/2026`, 35 * bookState.zoom, 50 * bookState.zoom);
 
-        // Left Cue Column Line
         pdfCtx.beginPath();
         pdfCtx.moveTo(200 * bookState.zoom, 70 * bookState.zoom);
         pdfCtx.lineTo(200 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
         pdfCtx.stroke();
 
-        // Horizontal Summary Line
         pdfCtx.beginPath();
         pdfCtx.moveTo(20 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
         pdfCtx.lineTo(scaledWidth - 20 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
         pdfCtx.stroke();
 
-        // Ruled lines inside Notes & Cue areas
         pdfCtx.strokeStyle = "#e2e8f0";
         pdfCtx.lineWidth = 1;
         for (let lineY = 100 * bookState.zoom; lineY < scaledHeight - 160 * bookState.zoom; lineY += 30 * bookState.zoom) {
@@ -29220,12 +29813,10 @@ function redrawBookCanvas() {
         pdfCtx.fillText(`SUMMARY (2-3 sentences overview)`, 30 * bookState.zoom, scaledHeight - 140 * bookState.zoom);
 
     } else if (pageTemplate === "blank") {
-        // Plain blank page
         pdfCtx.fillStyle = "#64748b";
         pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
         pdfCtx.fillText(`BLANK SCRATCHPAD - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
     } else {
-        // Draw Normal Book Page Content
         pdfCtx.fillStyle = "#3A1C36";
         pdfCtx.font = `bold ${Math.round(22 * bookState.zoom)}px Outfit, sans-serif`;
         pdfCtx.fillText(`HAWARI CLINICAL COURSE - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 50 * bookState.zoom);
@@ -29235,7 +29826,7 @@ function redrawBookCanvas() {
 
         pdfCtx.fillStyle = "#5C3357";
         pdfCtx.font = `${Math.round(14 * bookState.zoom)}px Inter, sans-serif`;
-        
+
         const sampleText = [
             "Infection Control & Medical Microbiology Key Principles:",
             "1. Standard Precautions: Applied to all patients regardless of suspected or confirmed infection status.",
@@ -29253,9 +29844,8 @@ function redrawBookCanvas() {
         });
     }
 
-    // Restore saved strokes & shapes for current page
     const pageStrokes = bookState.annotations[bookState.currentPage] || [];
-    pageStrokes.forEach(s => {
+    pageStrokes.forEach((s, idx) => {
         const scaledStroke = {
             ...s,
             fromX: (s.fromX || 0) * bookState.zoom,
@@ -29268,7 +29858,40 @@ function redrawBookCanvas() {
             height: (s.height || 0) * bookState.zoom,
             size: (s.size || 4) * bookState.zoom
         };
+        if (s.points) {
+            scaledStroke.points = s.points.map(pt => ({ x: pt.x * bookState.zoom, y: pt.y * bookState.zoom }));
+        }
+
         drawSingleStroke(animCtx, scaledStroke);
+
+        // Draw Selection Handles Overlay if selected
+        if (bookState.selectedAnnotationIndex === idx) {
+            const bbox = getAnnotationBBox(scaledStroke);
+            animCtx.save();
+            animCtx.strokeStyle = "#2563eb";
+            animCtx.lineWidth = 2;
+            animCtx.setLineDash([4, 4]);
+            animCtx.strokeRect(bbox.x - 4, bbox.y - 4, bbox.width + 8, bbox.height + 8);
+            animCtx.setLineDash([]);
+
+            // Draw Corner & Handle Knobs
+            const knobs = [
+                { x: bbox.x - 4, y: bbox.y - 4 },
+                { x: bbox.x + bbox.width + 4, y: bbox.y - 4 },
+                { x: bbox.x - 4, y: bbox.y + bbox.height + 4 },
+                { x: bbox.x + bbox.width + 4, y: bbox.y + bbox.height + 4 }
+            ];
+            knobs.forEach(k => {
+                animCtx.fillStyle = "#ffffff";
+                animCtx.strokeStyle = "#2563eb";
+                animCtx.lineWidth = 2;
+                animCtx.beginPath();
+                animCtx.arc(k.x, k.y, 4, 0, 2 * Math.PI);
+                animCtx.fill();
+                animCtx.stroke();
+            });
+            animCtx.restore();
+        }
     });
 }
 

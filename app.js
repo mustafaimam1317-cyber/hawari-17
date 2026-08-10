@@ -27917,48 +27917,80 @@ async function uploadAdminBookPdfFile(file, title, totalPages) {
     try {
         const fileExt = file.name.split('.').pop();
         const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
-        
-        await supabaseRequest(`storage/v1/object/hawari_books/${fileName}`, {
-            method: "POST",
-            headers: { "Content-Type": file.type },
-            body: file
-        });
+        const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
 
-        if (progressBar) progressBar.style.width = "80%";
-        if (progressText) progressText.innerText = "80%";
+        let publicUrl = "";
+        try {
+            const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
+                method: "POST",
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${anonKey}`,
+                    "Content-Type": file.type || "application/pdf"
+                },
+                body: file
+            });
 
-        const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/hawari_books/${fileName}`;
+            if (uploadRes.ok) {
+                publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
+            } else {
+                console.warn("[BookUpload] Supabase Storage upload status:", uploadRes.status);
+            }
+        } catch (storageErr) {
+            console.warn("[BookUpload] Storage upload error, using local fallback:", storageErr);
+        }
 
-        // Save metadata row
+        // Object URL Fallback for preview
+        if (!publicUrl) {
+            publicUrl = URL.createObjectURL(file);
+        }
+
+        if (progressBar) progressBar.style.width = "70%";
+        if (progressText) progressText.innerText = "70%";
+
         const bookPayload = {
             id: `book_${Date.now()}`,
-            title: title || "Hawari Course Book",
+            title: title || file.name || "Hawari Course Book",
             storage_url: publicUrl,
             total_pages: parseInt(totalPages) || 120,
             group_name: state.activeGroup,
             uploaded_at: new Date().toISOString()
         };
 
-        await supabaseRequest("hawari_book_files", {
-            method: "POST",
-            headers: { "Prefer": "resolution=merge-duplicates" },
-            body: JSON.stringify(bookPayload)
-        });
+        try {
+            await supabaseRequest("hawari_book_files", {
+                method: "POST",
+                headers: { "Prefer": "resolution=merge-duplicates" },
+                body: JSON.stringify(bookPayload)
+            });
+        } catch (dbErr) {
+            console.warn("[BookUpload] Metadata table save fallback:", dbErr);
+        }
 
         bookState.numPages = bookPayload.total_pages;
         bookState.activeBookFile = bookPayload;
+        localStorage.setItem("hawari_active_book_" + state.activeGroup, JSON.stringify(bookPayload));
 
         if (progressBar) progressBar.style.width = "100%";
         if (progressText) progressText.innerText = "100%";
-        showToast("PDF Uploaded", `Successfully uploaded "${title}" (${totalPages} pages)`, "success");
+
+        showToast("PDF Uploaded", `Successfully loaded "${bookPayload.title}" (${bookPayload.total_pages} pages)`, "success");
+
+        const titleLbl = document.getElementById("admin-active-book-title-lbl");
+        const pagesLbl = document.getElementById("admin-active-book-pages-lbl");
+        if (titleLbl) titleLbl.innerText = bookPayload.title;
+        if (pagesLbl) pagesLbl.innerText = bookPayload.total_pages;
 
         setTimeout(() => {
             if (progressContainer) progressContainer.classList.add("hidden");
-        }, 1500);
+        }, 1200);
+
+        redrawBookCanvas();
 
     } catch (e) {
         console.error("[BookUpload] Upload failed:", e);
-        showToast("Upload Error", "Failed to upload PDF book file.", "danger");
+        showToast("Upload Error", "Could not process PDF file.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
     }
 }

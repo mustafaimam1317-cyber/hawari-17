@@ -17,6 +17,15 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="style.css">
+
+    <!-- PDF.js Renderer Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+    </script>
+
 </head>
 <body class="light-theme">
     
@@ -1562,10 +1571,7 @@
                                         <label for="admin-book-pdf-file" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">PDF File Document</label>
                                         <input type="file" id="admin-book-pdf-file" accept=".pdf,application/pdf" style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
-                                    <div class="input-group" style="margin-bottom: 15px;">
-                                        <label for="admin-book-total-pages" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Total Pages Count</label>
-                                        <input type="number" id="admin-book-total-pages" value="120" min="1" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                    </div>
+                                    
                                     <div id="admin-book-upload-progress" class="hidden" style="margin-bottom: 15px;">
                                         <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
                                             <span>Uploading Book PDF...</span>
@@ -2391,10 +2397,7 @@
                                 <option value="General">General</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label style="font-size: 0.82rem; font-weight: 600; margin-bottom: 4px; display: block; color: var(--text-primary);">Total Pages</label>
-                            <input type="number" id="modal-book-total-pages" class="form-input" min="1" placeholder="e.g. 85" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                        </div>
+                        
                     </div>
 
                     <div class="form-group" style="margin-bottom: 20px;">

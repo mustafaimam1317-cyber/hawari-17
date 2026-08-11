@@ -1,4 +1,61 @@
 
+async function ensurePdfJsLoaded() {
+    if (window.pdfjsLib) return window.pdfjsLib;
+    return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        script.onload = () => {
+            if (window.pdfjsLib) {
+                window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+                resolve(window.pdfjsLib);
+            } else {
+                reject(new Error("pdfjsLib not available after script load"));
+            }
+        };
+        script.onerror = () => reject(new Error("Failed to load PDF.js CDN script"));
+        document.head.appendChild(script);
+    });
+}
+
+async function loadRealBookPdfDocument(bookFile) {
+    if (!bookFile || !bookFile.storage_url) return null;
+    console.log("[PDFViewer] Fetching real PDF document from Storage:", bookFile.storage_url);
+
+    try {
+        const pdfjs = await ensurePdfJsLoaded();
+        const jwtToken = await getValidSupabaseAccessToken();
+
+        let fetchUrl = bookFile.storage_url;
+        if (!fetchUrl.startsWith("http")) {
+            const cleanPath = fetchUrl.replace(/.*\/hawari_books\//, "");
+            fetchUrl = `https://sueksolsletlhunpbtix.supabase.co/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
+        }
+
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+        const headers = { "apikey": anonKey };
+        if (jwtToken) {
+            headers["Authorization"] = `Bearer ${jwtToken}`;
+        }
+
+        const res = await fetch(fetchUrl, { headers });
+        if (!res.ok) {
+            console.error("[PDFViewer] HTTP error fetching PDF file:", res.status);
+            return null;
+        }
+
+        const pdfArrayBuffer = await res.arrayBuffer();
+        const pdfDoc = await pdfjs.getDocument({ data: pdfArrayBuffer }).promise;
+        console.log("[PDFViewer] REAL PDF loaded successfully! Total pages:", pdfDoc.numPages);
+        bookState.pdfDoc = pdfDoc;
+        bookState.numPages = pdfDoc.numPages;
+        return pdfDoc;
+    } catch (e) {
+        console.error("[PDFViewer] Error loading PDF document:", e);
+        return null;
+    }
+}
+
+
 function escapeHTML(str) {
     if (str === null || str === undefined) return "";
     return String(str)
@@ -28061,24 +28118,41 @@ function updateBookWatermark() {
 
 // Fetch list of books from Supabase / localStorage
 async function fetchBookLibraryData() {
+    console.log("[BookLibrary] Fetching book files for group:", state.activeGroup);
     try {
         const query = `hawari_book_files?group_name=eq.${state.activeGroup}&order=uploaded_at.desc`;
-        const cloudBooks = await supabaseRequest(query);
-        if (Array.isArray(cloudBooks)) {
-            state.books = cloudBooks;
+        const books = await supabaseRequest(query);
+
+        const listEl = document.getElementById("admin-book-library-list");
+        const emptyEl = document.getElementById("admin-book-library-empty");
+        const activeTitleEl = document.getElementById("admin-active-book-title-lbl");
+        const activePagesEl = document.getElementById("admin-active-book-pages-lbl");
+
+        if (books && Array.isArray(books) && books.length > 0) {
+            const activeBook = books[0];
+            bookState.activeBookFile = activeBook;
+            bookState.numPages = activeBook.total_pages || 1;
+            
+            if (activeTitleEl) activeTitleEl.innerText = activeBook.title;
+            if (activePagesEl) activePagesEl.innerText = activeBook.total_pages || 1;
+            if (emptyEl) emptyEl.classList.add("hidden");
+
+            // Auto-load real PDF into viewer
+            loadRealBookPdfDocument(activeBook).then(() => {
+                redrawBookCanvas();
+            });
         } else {
-            const local = localStorage.getItem("hawari_books_" + state.activeGroup);
-            state.books = local ? JSON.parse(local) : [];
+            bookState.activeBookFile = null;
+            bookState.pdfDoc = null;
+            bookState.numPages = 0;
+            if (activeTitleEl) activeTitleEl.innerText = "لا يوجد كتاب نشط حاليًا";
+            if (activePagesEl) activePagesEl.innerText = "0";
+            if (emptyEl) emptyEl.classList.remove("hidden");
+            redrawBookCanvas();
         }
     } catch (e) {
-        console.warn("[BookLibrary] Cloud fetch fallback:", e);
-        const local = localStorage.getItem("hawari_books_" + state.activeGroup);
-        state.books = local ? JSON.parse(local) : [];
+        console.error("[BookLibrary] Exception fetching book library data:", e);
     }
-    try {
-        localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books || []));
-    } catch(err){}
-    return state.books;
 }
 
 // Save user reading progress for active book
@@ -28611,7 +28685,7 @@ async function revokeBookAccess(email) {
     }
 }
 
-async function processBookPdfUpload({ title, pages, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
+async function processBookPdfUpload({ title, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
     console.log("[BookUpload] START");
 
     // 1. Verify user session exists
@@ -28626,21 +28700,17 @@ async function processBookPdfUpload({ title, pages, file, progressContainer, pro
     }
 
     // 2. Retrieve & validate real Supabase JWT access token
-    const jwtToken = await getValidSupabaseJwt();
+    const jwtToken = await getValidSupabaseAccessToken();
     const hasToken = !!jwtToken;
     console.log("[Auth] Access token present:", hasToken);
 
     if (hasToken) {
-        console.log("[Auth] JWT length:", jwtToken.length);
         const decoded = parseJwtPayload(jwtToken);
         if (decoded) {
             console.log("[Auth] Decoded JWT: jwt_email =", decoded.email || "none", "| jwt_role =", decoded.role || "none", "| jwt_sub =", decoded.sub || "none");
-        } else {
-            console.log("[Auth] Decoded JWT: payload unparseable");
         }
     }
 
-    // Explicit guard: If no valid Supabase access_token exists, STOP upload
     if (!jwtToken || jwtToken.trim() === "") {
         console.error("[BookUpload] FAILED: No valid Supabase access_token exists");
         showToast("جلسة غير صالحة", "جلسة Supabase غير صالحة. يرجى تسجيل الدخول مرة أخرى.", "danger");
@@ -28656,10 +28726,26 @@ async function processBookPdfUpload({ title, pages, file, progressContainer, pro
     }
 
     if (progressContainer) progressContainer.classList.remove("hidden");
-    if (progressBar) progressBar.style.width = "20%";
-    if (progressText) progressText.innerText = "20%";
+    if (progressBar) progressBar.style.width = "15%";
+    if (progressText) progressText.innerText = "15%";
 
     try {
+        // Auto-detect actual numPages from PDF file using PDF.js
+        console.log("[BookUpload] Auto-detecting page count from PDF file...");
+        let detectedPages = 1;
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdfjs = await ensurePdfJsLoaded();
+            const tempPdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+            detectedPages = tempPdf.numPages || 1;
+            console.log("[BookUpload] Detected total pages count:", detectedPages);
+        } catch (pdfErr) {
+            console.warn("[BookUpload] Could not parse page count from PDF file, using default 1:", pdfErr.message);
+        }
+
+        if (progressBar) progressBar.style.width = "40%";
+        if (progressText) progressText.innerText = "40%";
+
         const fileExt = file.name.split('.').pop();
         const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
         const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
@@ -28678,80 +28764,72 @@ async function processBookPdfUpload({ title, pages, file, progressContainer, pro
 
         console.log("[BookUpload] Storage response status:", uploadRes.status);
         if (!uploadRes.ok) {
-            const txt = await uploadRes.text();
-            console.error("[BookUpload] FAILED: Storage upload error:", uploadRes.status, txt);
-            showToast("Storage Upload Error", `Failed to upload PDF file to storage (${uploadRes.status})`, "danger");
+            const errJson = await uploadRes.json().catch(() => ({}));
+            console.error("[BookUpload] FAILED: Storage upload error:", uploadRes.status, errJson);
+            showToast("Upload Error", `Storage upload failed (${uploadRes.status}): ${errJson.message || errJson.error || 'AccessDenied'}`, "danger");
             if (progressContainer) progressContainer.classList.add("hidden");
             return false;
         }
 
-        const publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`;
-        if (progressBar) progressBar.style.width = "60%";
-        if (progressText) progressText.innerText = "60%";
+        if (progressBar) progressBar.style.width = "75%";
+        if (progressText) progressText.innerText = "75%";
 
-        console.log("[BookUpload] DB insert request");
-        const bookPayload = {
-            id: generateUuidV4(),
-            title: title,
-            total_pages: pages,
-            storage_url: publicUrl,
-            group_name: state.activeGroup,
+        const storageUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
+        const bookId = generateUuidV4();
+
+        const dbPayload = {
+            id: bookId,
+            title: title.trim(),
+            total_pages: detectedPages,
+            storage_url: storageUrl,
+            group_name: state.activeGroup || "infection",
             uploaded_at: new Date().toISOString()
         };
 
+        console.log("[BookUpload] DB insert request");
         const dbRes = await supabaseRequest("hawari_book_files", {
             method: "POST",
             headers: { "Prefer": "resolution=merge-duplicates" },
-            body: JSON.stringify(bookPayload)
+            body: JSON.stringify(dbPayload)
         });
 
-        console.log("[BookUpload] DB response:", dbRes);
-
-        if (dbRes && dbRes.success === false) {
-            console.error("[BookUpload] FAILED: Database insert failed:", dbRes.error || dbRes.status);
-            // Delete newly uploaded orphan Storage object
+        if (dbRes && dbRes.error) {
+            console.error("[BookUpload] FAILED: Database insert failed:", dbRes.error);
+            showToast("Database Error", `Database insert failed: ${dbRes.error.message || JSON.stringify(dbRes.error)}`, "danger");
+            
+            // Clean up orphan storage file if DB insert fails
             try {
                 await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
                     method: "DELETE",
                     headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken}` }
                 });
                 console.log("[BookUpload] Orphan storage object deleted successfully.");
-            } catch(delErr){
-                console.warn("[BookUpload] Could not delete orphan storage file:", delErr);
+            } catch (delErr) {
+                console.error("[BookUpload] Could not delete orphan storage file:", delErr);
             }
-            showToast("Database Error", dbRes.error || "Could not save book record to database", "danger");
+
             if (progressContainer) progressContainer.classList.add("hidden");
             return false;
         }
 
-        if (progressBar) progressBar.style.width = "85%";
-        if (progressText) progressText.innerText = "85%";
-
-        await fetchBookLibraryData();
-        await renderBookLibrary();
+        console.log("[BookUpload] DB response: success");
+        console.log("[BookUpload] SUCCESS");
 
         if (progressBar) progressBar.style.width = "100%";
         if (progressText) progressText.innerText = "100%";
 
-        console.log("[BookUpload] SUCCESS");
-        showToast("Book Added", `تم رفع الكتاب "${title}" بنجاح`, "success");
+        showToast("Success", "Book uploaded successfully!", "success");
 
-        setTimeout(() => {
-            if (progressContainer) progressContainer.classList.add("hidden");
-            if (modalToClose) {
-                const mEl = document.getElementById(modalToClose);
-                if (mEl) mEl.classList.add("hidden");
-            }
-            if (formToReset) {
-                const fEl = document.getElementById(formToReset);
-                if (fEl) fEl.reset();
-            }
-        }, 800);
+        if (modalToClose) modalToClose.classList.add("hidden");
+        if (formToReset) formToReset.reset();
+        if (progressContainer) setTimeout(() => progressContainer.classList.add("hidden"), 1000);
+
+        // Refresh book library & load real PDF into viewer
+        await fetchBookLibraryData();
         return true;
-
-    } catch (err) {
-        console.error("[BookUpload] FAILED: Exception during upload:", err);
-        showToast("Upload Error", "Failed to add book.", "danger");
+    } catch (e) {
+        console.error("[BookUpload] FAILED: Exception during upload:", e);
+        showToast("Upload Exception", e.message || "An unexpected error occurred during upload.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
         return false;
     }
@@ -30196,7 +30274,7 @@ function renderBookDrawerBookmarks() {
 }
 
 // Redraw canvas pages & overlays
-function redrawBookCanvas() {
+async function redrawBookCanvas() {
     const pageNumInput = document.getElementById("book-goto-page-input");
     const totalPagesEl = document.getElementById("book-total-pages-num");
     const zoomPctEl = document.getElementById("book-zoom-percentage");
@@ -30221,189 +30299,59 @@ function redrawBookCanvas() {
 
     if (!pdfCanvas || !animCanvas) return;
 
-    const baseWidth = 720;
-    const baseHeight = 980;
-    const scaledWidth = Math.round(baseWidth * bookState.zoom);
-    const scaledHeight = Math.round(baseHeight * bookState.zoom);
-
-    if (stack) {
-        stack.style.width = scaledWidth + "px";
-        stack.style.height = scaledHeight + "px";
+    // Load PDF Document if not loaded yet
+    if (!bookState.pdfDoc && bookState.activeBookFile) {
+        await loadRealBookPdfDocument(bookState.activeBookFile);
     }
 
-    pdfCanvas.width = scaledWidth;
-    pdfCanvas.height = scaledHeight;
-    animCanvas.width = scaledWidth;
-    animCanvas.height = scaledHeight;
+    if (bookState.pdfDoc) {
+        try {
+            const pageNum = Math.max(1, Math.min(bookState.currentPage, bookState.pdfDoc.numPages));
+            const page = await bookState.pdfDoc.getPage(pageNum);
+            const scale = bookState.zoom || 1.0;
+            const viewport = page.getViewport({ scale: scale });
 
-    const pdfCtx = pdfCanvas.getContext("2d");
-    const animCtx = animCanvas.getContext("2d");
-
-    pdfCtx.fillStyle = "#ffffff";
-    pdfCtx.fillRect(0, 0, scaledWidth, scaledHeight);
-
-    const pageTemplate = bookState.extraPages[bookState.currentPage];
-
-    if (pageTemplate === "lined") {
-        pdfCtx.strokeStyle = "#cbd5e1";
-        pdfCtx.lineWidth = 1;
-        for (let lineY = 60 * bookState.zoom; lineY < scaledHeight; lineY += 30 * bookState.zoom) {
-            pdfCtx.beginPath();
-            pdfCtx.moveTo(0, lineY);
-            pdfCtx.lineTo(scaledWidth, lineY);
-            pdfCtx.stroke();
-        }
-        pdfCtx.strokeStyle = "#fca5a5";
-        pdfCtx.lineWidth = 2;
-        pdfCtx.beginPath();
-        pdfCtx.moveTo(60 * bookState.zoom, 0);
-        pdfCtx.lineTo(60 * bookState.zoom, scaledHeight);
-        pdfCtx.stroke();
-
-        pdfCtx.fillStyle = "#64748b";
-        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`RULED SCRATCHPAD - PAGE ${bookState.currentPage}`, 75 * bookState.zoom, 40 * bookState.zoom);
-
-    } else if (pageTemplate === "grid") {
-        pdfCtx.strokeStyle = "#e2e8f0";
-        pdfCtx.lineWidth = 1;
-        const step = 25 * bookState.zoom;
-        for (let gx = 0; gx < scaledWidth; gx += step) {
-            pdfCtx.beginPath(); pdfCtx.moveTo(gx, 0); pdfCtx.lineTo(gx, scaledHeight); pdfCtx.stroke();
-        }
-        for (let gy = 0; gy < scaledHeight; gy += step) {
-            pdfCtx.beginPath(); pdfCtx.moveTo(0, gy); pdfCtx.lineTo(scaledWidth, gy); pdfCtx.stroke();
-        }
-        pdfCtx.fillStyle = "#64748b";
-        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`GRID GRAPH PAPER - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
-
-    } else if (pageTemplate === "dotted") {
-        pdfCtx.fillStyle = "#94a3b8";
-        const step = 25 * bookState.zoom;
-        for (let dx = 25 * bookState.zoom; dx < scaledWidth; dx += step) {
-            for (let dy = 25 * bookState.zoom; dy < scaledHeight; dy += step) {
-                pdfCtx.beginPath();
-                pdfCtx.arc(dx, dy, 1.5 * bookState.zoom, 0, 2 * Math.PI);
-                pdfCtx.fill();
+            if (stack) {
+                stack.style.width = viewport.width + "px";
+                stack.style.height = viewport.height + "px";
             }
+
+            pdfCanvas.width = viewport.width;
+            pdfCanvas.height = viewport.height;
+            animCanvas.width = viewport.width;
+            animCanvas.height = viewport.height;
+
+            const pdfCtx = pdfCanvas.getContext("2d");
+            pdfCtx.clearRect(0, 0, viewport.width, viewport.height);
+
+            await page.render({ canvasContext: pdfCtx, viewport: viewport }).promise;
+            console.log(`[PDFViewer] Rendered REAL PDF page ${pageNum} / ${bookState.pdfDoc.numPages}`);
+        } catch (renderErr) {
+            console.error("[PDFViewer] Error rendering real PDF page:", renderErr);
         }
-        pdfCtx.fillStyle = "#64748b";
-        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`DOTTED JOURNAL - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
-
-    } else if (pageTemplate === "cornell") {
-        pdfCtx.strokeStyle = "#94a3b8";
-        pdfCtx.lineWidth = 2;
-        pdfCtx.strokeRect(20 * bookState.zoom, 20 * bookState.zoom, scaledWidth - 40 * bookState.zoom, 50 * bookState.zoom);
-
-        pdfCtx.fillStyle = "#1e293b";
-        pdfCtx.font = `bold ${Math.round(15 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`CORNELL NOTES | Topic: _____________________ | Date: ____/____/2026`, 35 * bookState.zoom, 50 * bookState.zoom);
-
-        pdfCtx.beginPath();
-        pdfCtx.moveTo(200 * bookState.zoom, 70 * bookState.zoom);
-        pdfCtx.lineTo(200 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
-        pdfCtx.stroke();
-
-        pdfCtx.beginPath();
-        pdfCtx.moveTo(20 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
-        pdfCtx.lineTo(scaledWidth - 20 * bookState.zoom, scaledHeight - 160 * bookState.zoom);
-        pdfCtx.stroke();
-
-        pdfCtx.strokeStyle = "#e2e8f0";
-        pdfCtx.lineWidth = 1;
-        for (let lineY = 100 * bookState.zoom; lineY < scaledHeight - 160 * bookState.zoom; lineY += 30 * bookState.zoom) {
-            pdfCtx.beginPath(); pdfCtx.moveTo(20 * bookState.zoom, lineY); pdfCtx.lineTo(scaledWidth - 20 * bookState.zoom, lineY); pdfCtx.stroke();
-        }
-
-        pdfCtx.fillStyle = "#64748b";
-        pdfCtx.font = `bold ${Math.round(12 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`CUE COLUMN (Keywords / Questions)`, 30 * bookState.zoom, 92 * bookState.zoom);
-        pdfCtx.fillText(`MAIN CLINICAL NOTES`, 215 * bookState.zoom, 92 * bookState.zoom);
-        pdfCtx.fillText(`SUMMARY (2-3 sentences overview)`, 30 * bookState.zoom, scaledHeight - 140 * bookState.zoom);
-
-    } else if (pageTemplate === "blank") {
-        pdfCtx.fillStyle = "#64748b";
-        pdfCtx.font = `bold ${Math.round(14 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`BLANK SCRATCHPAD - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 40 * bookState.zoom);
     } else {
-        pdfCtx.fillStyle = "#3A1C36";
-        pdfCtx.font = `bold ${Math.round(22 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`HAWARI COURSE BOOK - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 50 * bookState.zoom);
+        // Simple loading fallback
+        const baseWidth = 720;
+        const baseHeight = 980;
+        const scaledWidth = Math.round(baseWidth * bookState.zoom);
+        const scaledHeight = Math.round(baseHeight * bookState.zoom);
 
-        pdfCtx.fillStyle = "#9B71B2";
-        pdfCtx.fillRect(30 * bookState.zoom, 65 * bookState.zoom, scaledWidth - 60 * bookState.zoom, 3 * bookState.zoom);
+        if (stack) {
+            stack.style.width = scaledWidth + "px";
+            stack.style.height = scaledHeight + "px";
+        }
+        pdfCanvas.width = scaledWidth;
+        pdfCanvas.height = scaledHeight;
+        animCanvas.width = scaledWidth;
+        animCanvas.height = scaledHeight;
 
-        pdfCtx.fillStyle = "#5C3357";
-        pdfCtx.font = `${Math.round(14 * bookState.zoom)}px Inter, sans-serif`;
-
-        const sampleText = [
-            "Infection Control & Medical Microbiology Key Principles:",
-            "1. Standard Precautions: Applied to all patients regardless of suspected or confirmed infection status.",
-            "2. Hand Hygiene: Perform before and after patient contact, after touching blood or bodily fluids.",
-            "3. Personal Protective Equipment (PPE): Gloves, gowns, masks, and eye protection based on exposure risk.",
-            "4. Environmental Cleaning: Disinfection of high-touch surfaces with approved hospital germicides.",
-            "5. Clinical Dermatology Notes: Assess primary lesions (macules, papules, plaques, vesicles) systematically.",
-            "6. Antimicrobial Stewardship: Optimize antibiotic prescribing to mitigate multidrug-resistant organisms."
-        ];
-
-        let yOffset = 110;
-        sampleText.forEach(line => {
-            pdfCtx.fillText(line, 35 * bookState.zoom, yOffset * bookState.zoom);
-            yOffset += 45;
-        });
+        const pdfCtx = pdfCanvas.getContext("2d");
+        pdfCtx.fillStyle = "#ffffff";
+        pdfCtx.fillRect(0, 0, scaledWidth, scaledHeight);
+        pdfCtx.fillStyle = "#475569";
+        pdfCtx.font = "bold 16px Outfit, sans-serif";
+        pdfCtx.fillText("Loading Real PDF Document...", 40, 50);
     }
-
-    const pageStrokes = bookState.annotations[bookState.currentPage] || [];
-    pageStrokes.forEach((s, idx) => {
-        const scaledStroke = {
-            ...s,
-            fromX: (s.fromX || 0) * bookState.zoom,
-            fromY: (s.fromY || 0) * bookState.zoom,
-            toX: (s.toX || 0) * bookState.zoom,
-            toY: (s.toY || 0) * bookState.zoom,
-            x: (s.x || 0) * bookState.zoom,
-            y: (s.y || 0) * bookState.zoom,
-            width: (s.width || 0) * bookState.zoom,
-            height: (s.height || 0) * bookState.zoom,
-            size: (s.size || 4) * bookState.zoom
-        };
-        if (s.points) {
-            scaledStroke.points = s.points.map(pt => ({ x: pt.x * bookState.zoom, y: pt.y * bookState.zoom }));
-        }
-
-        drawSingleStroke(animCtx, scaledStroke);
-
-        // Draw Selection Handles Overlay if selected
-        if (bookState.selectedAnnotationIndex === idx) {
-            const bbox = getAnnotationBBox(scaledStroke);
-            animCtx.save();
-            animCtx.strokeStyle = "#2563eb";
-            animCtx.lineWidth = 2;
-            animCtx.setLineDash([4, 4]);
-            animCtx.strokeRect(bbox.x - 4, bbox.y - 4, bbox.width + 8, bbox.height + 8);
-            animCtx.setLineDash([]);
-
-            // Draw Corner & Handle Knobs
-            const knobs = [
-                { x: bbox.x - 4, y: bbox.y - 4 },
-                { x: bbox.x + bbox.width + 4, y: bbox.y - 4 },
-                { x: bbox.x - 4, y: bbox.y + bbox.height + 4 },
-                { x: bbox.x + bbox.width + 4, y: bbox.y + bbox.height + 4 }
-            ];
-            knobs.forEach(k => {
-                animCtx.fillStyle = "#ffffff";
-                animCtx.strokeStyle = "#2563eb";
-                animCtx.lineWidth = 2;
-                animCtx.beginPath();
-                animCtx.arc(k.x, k.y, 4, 0, 2 * Math.PI);
-                animCtx.fill();
-                animCtx.stroke();
-            });
-            animCtx.restore();
-        }
-    });
 }
 
 

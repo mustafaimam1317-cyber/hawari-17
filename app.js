@@ -1,3 +1,40 @@
+
+function parseJwtPayload(token) {
+    if (!token || typeof token !== "string") return null;
+    try {
+        const parts = token.split(".");
+        if (parts.length !== 3) return null;
+        const base64Url = parts[1];
+        const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        const jsonPayload = decodeURIComponent(atob(base64).split("").map(c => {
+            return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(""));
+        return JSON.parse(jsonPayload);
+    } catch (e) {
+        return null;
+    }
+}
+
+async function getValidSupabaseJwt() {
+    if (!state.currentUser || !state.currentUser.email) return null;
+    const email = state.currentUser.email.toLowerCase();
+
+    if (state.currentUser.token) return state.currentUser.token;
+    if (state.currentUser.access_token) return state.currentUser.access_token;
+    if (window.supabaseSession && window.supabaseSession.access_token) return window.supabaseSession.access_token;
+
+    const group = state.activeGroup || "infection";
+    const cachedToken = localStorage.getItem(`hawari_jwt_${email}_${group}`) || localStorage.getItem("hawari_jwt_token");
+    if (cachedToken) {
+        const decoded = parseJwtPayload(cachedToken);
+        if (decoded && decoded.exp && (decoded.exp * 1000 > Date.now() + 60000)) {
+            state.currentUser.token = cachedToken;
+            return cachedToken;
+        }
+    }
+    return null;
+}
+
 // ================= SEED QUESTIONS DATABASE =================
 const SEED_QUESTIONS = [
     {
@@ -28366,9 +28403,37 @@ async function revokeBookAccess(email) {
 
 async function processBookPdfUpload({ title, pages, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
     console.log("[BookUpload] START");
-    if (!state.currentUser || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
+
+    // 1. Verify user session exists
+    const hasSession = !!(state.currentUser && state.currentUser.email);
+    console.log("[Auth] Session detected:", hasSession);
+
+    if (!hasSession || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
         console.error("[BookUpload] FAILED: Admin session invalid or missing");
         showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
+    }
+
+    // 2. Retrieve & validate real Supabase JWT access token
+    const jwtToken = await getValidSupabaseJwt();
+    const hasToken = !!jwtToken;
+    console.log("[Auth] Access token present:", hasToken);
+
+    if (hasToken) {
+        console.log("[Auth] JWT length:", jwtToken.length);
+        const decoded = parseJwtPayload(jwtToken);
+        if (decoded) {
+            console.log("[Auth] Decoded JWT: jwt_email =", decoded.email || "none", "| jwt_role =", decoded.role || "none", "| jwt_sub =", decoded.sub || "none");
+        } else {
+            console.log("[Auth] Decoded JWT: payload unparseable");
+        }
+    }
+
+    // Explicit guard: If no valid Supabase access_token exists, STOP upload
+    if (!jwtToken || jwtToken.trim() === "") {
+        console.error("[BookUpload] FAILED: No valid Supabase access_token exists");
+        showToast("جلسة غير صالحة", "جلسة Supabase غير صالحة. يرجى تسجيل الدخول مرة أخرى.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
         return false;
     }
@@ -28390,17 +28455,12 @@ async function processBookPdfUpload({ title, pages, file, progressContainer, pro
         const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
         const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
 
-        let bearerToken = anonKey;
-        if (state.currentUser && state.currentUser.token) bearerToken = state.currentUser.token;
-        else if (state.currentUser && state.currentUser.access_token) bearerToken = state.currentUser.access_token;
-        else if (window.supabaseSession && window.supabaseSession.access_token) bearerToken = window.supabaseSession.access_token;
-
         console.log("[BookUpload] Storage request");
         const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
             method: "POST",
             headers: {
                 "apikey": anonKey,
-                "Authorization": `Bearer ${bearerToken}`,
+                "Authorization": `Bearer ${jwtToken}`,
                 "Content-Type": file.type || "application/pdf"
             },
             body: file
@@ -28443,7 +28503,7 @@ async function processBookPdfUpload({ title, pages, file, progressContainer, pro
             try {
                 await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
                     method: "DELETE",
-                    headers: { "apikey": anonKey, "Authorization": `Bearer ${bearerToken}` }
+                    headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken}` }
                 });
                 console.log("[BookUpload] Orphan storage object deleted successfully.");
             } catch(delErr){

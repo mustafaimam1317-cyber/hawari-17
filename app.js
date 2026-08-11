@@ -109,7 +109,7 @@ async function getValidSupabaseAccessToken() {
 }
 
 async function loginToSupabaseAuth(email, password) {
-    console.log("[Auth] Login started");
+    console.log("[AUTH-TRACE] GoTrue login function called");
     const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
     const cleanEmail = email.trim().toLowerCase();
@@ -121,25 +121,16 @@ async function loginToSupabaseAuth(email, password) {
             body: JSON.stringify({ email: cleanEmail, password: password })
         });
         let data = await res.json();
+        console.log("[AUTH-TRACE] GoTrue HTTP status:", res.status);
 
-        // If credentials invalid, attempt signup to onboard account to Supabase GoTrue Auth
         if (!data || !data.access_token) {
-            console.log("[Auth] GoTrue password login returned:", data.msg || data.error_description || "no token");
-            console.log("[Auth] Attempting GoTrue signup for email:", cleanEmail);
-            const signupRes = await fetch(`${url.replace(/\/$/, '')}/auth/v1/signup`, {
-                method: "POST",
-                headers: { "apikey": anonKey, "Content-Type": "application/json" },
-                body: JSON.stringify({ email: cleanEmail, password: password })
-            });
-            const signupData = await signupRes.json();
-            if (signupData && signupData.access_token) {
-                data = signupData;
-            }
+            console.log("[AUTH-TRACE] Primary GoTrue password login returned:", data.msg || data.error_description || "no token");
         }
 
-        console.log("[Auth] Supabase Auth response received");
-        const hasToken = !!(data && data.access_token);
-        console.log("[Auth] Real access_token present:", hasToken);
+        console.log("[AUTH-TRACE] GoTrue response has access_token:", !!(data && data.access_token));
+        console.log("[AUTH-TRACE] GoTrue response has refresh_token:", !!(data && data.refresh_token));
+        console.log("[AUTH-TRACE] GoTrue user id:", data && data.user ? data.user.id : null);
+        console.log("[AUTH-TRACE] GoTrue user email:", data && data.user ? data.user.email : null);
 
         if (data && data.access_token) {
             const expiresAt = Date.now() + ((data.expires_in || 3600) * 1000);
@@ -151,22 +142,19 @@ async function loginToSupabaseAuth(email, password) {
             };
             saveSupabaseSession(sessionObj);
 
-            if (data.user) {
-                console.log("[Auth] Supabase user id:", data.user.id || "none");
-                console.log("[Auth] Supabase user email:", data.user.email || cleanEmail);
-            }
-
             const decoded = parseJwtPayload(data.access_token);
             if (decoded) {
-                console.log("[Auth] JWT payload: jwt.sub =", decoded.sub, "| jwt.email =", decoded.email, "| jwt.role =", decoded.role, "| jwt.exp =", decoded.exp);
+                console.log("[AUTH-TRACE] JWT payload: jwt.sub =", decoded.sub, "| jwt.email =", decoded.email, "| jwt.role =", decoded.role, "| jwt.aud =", decoded.aud, "| jwt.exp =", decoded.exp);
             }
             return sessionObj;
         } else {
-            console.warn("[Auth] Could not acquire Supabase Auth token for:", cleanEmail);
+            const errMsg = data.msg || data.error_description || "Invalid login credentials";
+            console.warn("[AUTH-TRACE] Could not acquire Supabase Auth token for:", cleanEmail, "| Error:", errMsg);
+            showToast("Supabase Auth Warning", `Application profile exists, but Supabase Auth credentials are not valid (${errMsg}).`, "warning");
             return null;
         }
     } catch (e) {
-        console.error("[Auth] Login exception:", e);
+        console.error("[AUTH-TRACE] Login exception:", e);
         return null;
     }
 }
@@ -20611,7 +20599,16 @@ async function selectCourseTrack(groupName) {
 
     // Check auth status
     if (state.currentUser) {
-        enterWorkspace();
+        const activeSession = await getSupabaseSession();
+                console.log("[AUTH-TRACE] localStorage hawari_supabase_session exists:", !!localStorage.getItem("hawari_supabase_session"));
+                console.log("[AUTH-TRACE] session access_token exists:", !!(activeSession && activeSession.access_token));
+                console.log("[AUTH-TRACE] session refresh_token exists:", !!(activeSession && activeSession.refresh_token));
+                console.log("[AUTH-TRACE] session user id:", activeSession && activeSession.user ? activeSession.user.id : null);
+                console.log("[AUTH-TRACE] session user email:", activeSession && activeSession.user ? activeSession.user.email : null);
+                console.log("[AUTH-TRACE] window.supabaseSession exists:", !!window.supabaseSession);
+                console.log("[AUTH-TRACE] state.currentUser access_token exists:", !!(state.currentUser && state.currentUser.token));
+                console.log("[AUTH-TRACE] FINAL AUTH STATE READY:", !!(activeSession && activeSession.access_token));
+                enterWorkspace();
     } else {
         showLandingPage();
     }
@@ -21674,7 +21671,9 @@ function initAuthFlow() {
 
                 sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
                 sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
+                console.log("[AUTH-TRACE] custom login success");
                 state.currentUser = user;
+                await loginToSupabaseAuth(currentAuthenticatingEmail, password);
                 await loginToSupabaseAuth(currentAuthenticatingEmail, password);
 
                 try {
@@ -30369,3 +30368,44 @@ function redrawBookCanvas() {
 
 
 
+
+
+window.testRealSupabaseSession = async function() {
+    console.log("=== Running testRealSupabaseSession ===");
+    const session = await getSupabaseSession();
+    const hasSession = !!session;
+    const token = session ? session.access_token : null;
+    const hasToken = !!token;
+    console.log("[AUTH-TEST] Session:", hasSession);
+    console.log("[AUTH-TEST] Token:", hasToken);
+
+    if (!token) {
+        console.error("[AUTH-TEST] Failed: No active Supabase access_token");
+        return false;
+    }
+
+    const decoded = parseJwtPayload(token);
+    if (decoded) {
+        console.log("[AUTH-TEST] JWT role:", decoded.role);
+        console.log("[AUTH-TEST] JWT email:", decoded.email);
+        console.log("[AUTH-TEST] JWT sub:", decoded.sub);
+        console.log("[AUTH-TEST] JWT aud:", decoded.aud);
+        console.log("[AUTH-TEST] JWT exp:", new Date(decoded.exp * 1000).toISOString());
+    }
+
+    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    try {
+        const restRes = await fetch(`${url.replace(/\/$/, '')}/rest/v1/hawari_users?select=email&limit=1`, {
+            headers: {
+                "apikey": anonKey,
+                "Authorization": `Bearer ${token}`
+            }
+        });
+        console.log("[AUTH-TEST] Authenticated REST request status:", restRes.status);
+        return restRes.status === 200;
+    } catch (e) {
+        console.error("[AUTH-TEST] Exception:", e);
+        return false;
+    }
+};

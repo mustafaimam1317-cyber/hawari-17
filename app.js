@@ -28293,10 +28293,17 @@ async function fetchBookAccessList() {
 
 async function grantBookAccess(email) {
     console.log("[BookAccess] Grant started");
+    if (!state.currentUser || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
+        console.error("[Auth] Admin session invalid or missing.");
+        showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
+        return false;
+    }
+    console.log("[Auth] session detected for admin:", state.currentUser.email);
+
     const cleanEmail = email.trim().toLowerCase();
     console.log("[BookAccess] Email normalized:", cleanEmail);
     if (!cleanEmail) {
-        console.error("[BookAccess] FAILED: Email is empty");
+        console.error("[BookAccess] Grant failed: Email is empty");
         return false;
     }
 
@@ -28318,7 +28325,7 @@ async function grantBookAccess(email) {
         console.log("[BookAccess] Insert response:", res);
 
         if (res && res.success === false) {
-            console.error("[BookAccess] FAILED:", res.error || res.status);
+            console.error("[BookAccess] Grant failed:", res.error || res.status);
             showToast("Grant Failed", res.error || "Could not grant access on server", "danger");
             return false;
         }
@@ -28333,7 +28340,7 @@ async function grantBookAccess(email) {
         console.log("[BookAccess] Grant completed");
         return true;
     } catch (e) {
-        console.error("[BookAccess] FAILED with exception:", e);
+        console.error("[BookAccess] Grant failed with exception:", e);
         showToast("Grant Error", "Could not complete access request", "danger");
         return false;
     }

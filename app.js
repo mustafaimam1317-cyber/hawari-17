@@ -28292,17 +28292,19 @@ async function fetchBookAccessList() {
 }
 
 async function grantBookAccess(email) {
+    console.log("[BookAccess] Grant started");
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail) return;
+    console.log("[BookAccess] Email normalized:", cleanEmail);
+    if (!cleanEmail) {
+        console.error("[BookAccess] FAILED: Email is empty");
+        return false;
+    }
+
     const group = state.activeGroup || "infection";
     if (!bookState.groupAuthorizedEmails) bookState.groupAuthorizedEmails = {};
     if (!bookState.groupAuthorizedEmails[group]) bookState.groupAuthorizedEmails[group] = [];
 
-    if (!bookState.groupAuthorizedEmails[group].includes(cleanEmail)) {
-        bookState.groupAuthorizedEmails[group].push(cleanEmail);
-    }
-
-    console.log("[BookAccess] Grant started for:", cleanEmail);
+    console.log("[BookAccess] Insert started");
     try {
         const res = await supabaseRequest("hawari_book_access", {
             method: "POST",
@@ -28313,18 +28315,27 @@ async function grantBookAccess(email) {
                 granted_at: new Date().toISOString()
             })
         });
-        console.log("[BookAccess] Grant database response:", res);
+        console.log("[BookAccess] Insert response:", res);
+
         if (res && res.success === false) {
-            console.error("[BookAccess] Grant failed:", res.error || res.status);
+            console.error("[BookAccess] FAILED:", res.error || res.status);
             showToast("Grant Failed", res.error || "Could not grant access on server", "danger");
-            return;
+            return false;
         }
-        console.log("[BookAccess] Grant success");
-        showToast("Access Granted", `Access granted to ${cleanEmail}`, "success");
+
+        console.log("[BookAccess] Insert succeeded");
+        if (!bookState.groupAuthorizedEmails[group].includes(cleanEmail)) {
+            bookState.groupAuthorizedEmails[group].push(cleanEmail);
+        }
+
         await fetchBookAccessList();
+        console.log("[BookAccess] Access list refreshed");
+        console.log("[BookAccess] Grant completed");
+        return true;
     } catch (e) {
-        console.error("[BookAccess] Grant failed with exception:", e);
+        console.error("[BookAccess] FAILED with exception:", e);
         showToast("Grant Error", "Could not complete access request", "danger");
+        return false;
     }
 }
 
@@ -28491,15 +28502,17 @@ function renderAdminBookAccessManager() {
             const input = document.getElementById("admin-book-access-email");
             const email = input ? input.value.trim().toLowerCase() : "";
 
-            if (!email.endsWith("@gmail.com")) {
+            if (!email || !email.endsWith("@gmail.com")) {
                 showToast("Gmail Required", "Please enter a valid Gmail address.", "warning");
                 return;
             }
 
-            await grantBookAccess(email);
-            showToast("Access Authorized", `Granted Hawari Book access for ${group.toUpperCase()} to ${email}`, "success");
-            if (input) input.value = "";
-            renderAdminBookAccessManager();
+            const ok = await grantBookAccess(email);
+            if (ok) {
+                showToast("Access Authorized", `Granted Hawari Book access for ${state.activeGroup.toUpperCase()} to ${email}`, "success");
+                if (input) input.value = "";
+                renderAdminBookAccessManager();
+            }
         };
     }
 
@@ -30004,7 +30017,7 @@ function redrawBookCanvas() {
     } else {
         pdfCtx.fillStyle = "#3A1C36";
         pdfCtx.font = `bold ${Math.round(22 * bookState.zoom)}px Outfit, sans-serif`;
-        pdfCtx.fillText(`HAWARI CLINICAL COURSE - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 50 * bookState.zoom);
+        pdfCtx.fillText(`HAWARI COURSE BOOK - PAGE ${bookState.currentPage}`, 30 * bookState.zoom, 50 * bookState.zoom);
 
         pdfCtx.fillStyle = "#9B71B2";
         pdfCtx.fillRect(30 * bookState.zoom, 65 * bookState.zoom, scaledWidth - 60 * bookState.zoom, 3 * bookState.zoom);

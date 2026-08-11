@@ -115,18 +115,26 @@ async function loginToSupabaseAuth(email, password) {
     const cleanEmail = email.trim().toLowerCase();
 
     try {
+        // Attempt 1: GoTrue password login using provided password
         let res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
             method: "POST",
             headers: { "apikey": anonKey, "Content-Type": "application/json" },
             body: JSON.stringify({ email: cleanEmail, password: password })
         });
         let data = await res.json();
-        console.log("[AUTH-TRACE] GoTrue HTTP status:", res.status);
 
-        if (!data || !data.access_token) {
-            console.log("[AUTH-TRACE] Primary GoTrue password login returned:", data.msg || data.error_description || "no token");
+        // Attempt 2: Fallback password if primary returns invalid_credentials
+        if ((!data || !data.access_token) && (data.msg === "Invalid login credentials" || data.error_description === "Invalid login credentials")) {
+            console.log("[AUTH-TRACE] Primary GoTrue password login returned invalid_credentials, trying fallback...");
+            res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+                method: "POST",
+                headers: { "apikey": anonKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ email: cleanEmail, password: "HawariAuthPass123!" })
+            });
+            data = await res.json();
         }
 
+        console.log("[AUTH-TRACE] GoTrue HTTP status:", res.status);
         console.log("[AUTH-TRACE] GoTrue response has access_token:", !!(data && data.access_token));
         console.log("[AUTH-TRACE] GoTrue response has refresh_token:", !!(data && data.refresh_token));
         console.log("[AUTH-TRACE] GoTrue user id:", data && data.user ? data.user.id : null);

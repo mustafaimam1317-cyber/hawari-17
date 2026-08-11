@@ -1,4 +1,36 @@
 
+window.handleAdminBookUploadForm = async function(event) {
+    if (event) event.preventDefault();
+    console.log("[BookUpload] Submit button clicked!");
+    
+    const titleInput = document.getElementById("admin-book-file-title");
+    const fileInput = document.getElementById("admin-book-pdf-file");
+    const progressContainer = document.getElementById("admin-book-upload-progress");
+    const progressBar = document.getElementById("admin-book-upload-bar");
+    const progressText = document.getElementById("admin-book-upload-pct");
+    const form = document.getElementById("admin-upload-book-form");
+
+    const title = titleInput ? titleInput.value.trim() : "";
+    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+
+    if (!title || !file) {
+        showToast("بيانات ناقصة", "يرجى كتابة عنوان الكتاب واختيار ملف الـ PDF.", "warning");
+        return false;
+    }
+
+    const success = await processBookPdfUpload({
+        title,
+        file,
+        progressContainer,
+        progressBar,
+        progressText,
+        formToReset: form
+    });
+    
+    return success;
+};
+
+
 // Safe local progress tracking fallback for missing hawari_user_book_progress table
 async function saveBookReadingProgress(email, bookId, page, totalPages) {
     if (!email || !bookId) return;

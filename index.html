@@ -656,14 +656,7 @@
                     <!-- Filter & Search Bar -->
                     <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 24px; background: var(--bg-secondary); padding: 12px 16px; border-radius: 14px; border: 1px solid var(--border-color);">
                         <div style="display: flex; gap: 8px; flex-wrap: wrap;" id="book-library-category-filters">
-                            <button class="btn btn-secondary btn-sm active" data-cat="all" onclick="filterBookLibrary('all', this)">All Books</button>
-                            <button class="btn btn-secondary btn-sm" data-cat="Infection" onclick="filterBookLibrary('Infection', this)">Infection</button>
-                            <button class="btn btn-secondary btn-sm" data-cat="Dermatology" onclick="filterBookLibrary('Dermatology', this)">Dermatology</button>
-                            <button class="btn btn-secondary btn-sm" data-cat="Pharmacology" onclick="filterBookLibrary('Pharmacology', this)">Pharmacology</button>
-                        </div>
-                        <div class="search-input-wrapper" style="width: 240px;">
-                            <i class="fa-solid fa-magnifying-glass search-icon"></i>
-                            <input type="text" id="book-library-search-input" onkeyup="searchBookLibrary(this.value)" placeholder="Search books..." style="padding: 6px 10px 6px 28px; font-size: 0.82rem; border-radius: 8px;">
+                            <button class="btn btn-secondary btn-sm active" data-cat="all" onclick="filterBookLibrary('all', this)"><i class="fa-solid fa-book"></i> Hawari Book</button>
                         </div>
                     </div>
 
@@ -1544,7 +1537,7 @@
                             <div class="grid-card">
                                 <h3><i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-color);"></i> Upload PDF Book</h3>
                                 <p class="section-desc">Upload course PDF document to Supabase cloud storage for students.</p>
-                                <form id="admin-upload-book-form">
+                                <form id="admin-upload-book-form" onsubmit="handleAdminBookUploadForm(event);">
                                     <div class="input-group" style="margin-bottom: 12px;">
                                         <label for="admin-book-file-title" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Book Title</label>
                                         <input type="text" id="admin-book-file-title" placeholder="e.g. Infection Course Book 2026" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
@@ -1604,8 +1597,6 @@
                             </div>
                         </div>
                         </div>
-                    </div>
-                </div>
             </section>
         </main>
     </div>

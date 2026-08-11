@@ -30393,9 +30393,15 @@ function redrawBookCanvas() {
 
 window.testRealSupabaseSession = async function() {
     console.log("=== Running testRealSupabaseSession ===");
-    const session = await getSupabaseSession();
+    let session = window.supabaseSession;
+    if (!session) {
+        try {
+            const raw = localStorage.getItem("hawari_supabase_session");
+            if (raw) session = JSON.parse(raw);
+        } catch (e) {}
+    }
     const hasSession = !!session;
-    const token = session ? session.access_token : null;
+    const token = session ? session.access_token : (state.currentUser ? (state.currentUser.token || state.currentUser.access_token) : null);
     const hasToken = !!token;
     console.log("[AUTH-TEST] Session:", hasSession);
     console.log("[AUTH-TEST] Token:", hasToken);

@@ -1,4 +1,16 @@
 
+function generateUuidV4() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c) {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+
+
 // ============================================================================
 // SUPABASE AUTH SESSION ENGINE (Real GoTrue JWT Access Token Management)
 // ============================================================================
@@ -28398,7 +28410,7 @@ function initAddBookModalForm() {
             if (progressText) progressText.innerText = "80%";
 
             const bookPayload = {
-                id: `book_${Date.now()}`,
+                id: generateUuidV4(),
                 title: title,
                 category: category,
                 total_pages: pages,
@@ -28672,7 +28684,7 @@ async function processBookPdfUpload({ title, pages, file, progressContainer, pro
 
         console.log("[BookUpload] DB insert request");
         const bookPayload = {
-            id: `book_${Date.now()}`,
+            id: generateUuidV4(),
             title: title,
             total_pages: pages,
             storage_url: publicUrl,

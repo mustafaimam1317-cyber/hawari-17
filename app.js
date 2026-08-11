@@ -1,4 +1,9 @@
 
+// ============================================================================
+// SUPABASE AUTH SESSION ENGINE (Real GoTrue JWT Access Token Management)
+// ============================================================================
+const SUPABASE_SESSION_STORAGE_KEY = "hawari_supabase_session";
+
 function parseJwtPayload(token) {
     if (!token || typeof token !== "string") return null;
     try {
@@ -14,6 +19,160 @@ function parseJwtPayload(token) {
         return null;
     }
 }
+
+function getStoredSupabaseSession() {
+    try {
+        const raw = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
+function saveSupabaseSession(sessionData) {
+    if (!sessionData || !sessionData.access_token) return;
+    window.supabaseSession = sessionData;
+    if (state.currentUser) {
+        state.currentUser.token = sessionData.access_token;
+        state.currentUser.access_token = sessionData.access_token;
+    }
+    localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(sessionData));
+}
+
+function clearSupabaseSession() {
+    window.supabaseSession = null;
+    if (state.currentUser) {
+        delete state.currentUser.token;
+        delete state.currentUser.access_token;
+    }
+    localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
+}
+
+async function refreshSupabaseSession(refreshToken) {
+    if (!refreshToken) return null;
+    console.log("[Auth] Session refresh: started");
+    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+
+    try {
+        const res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=refresh_token`, {
+            method: "POST",
+            headers: { "apikey": anonKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        const data = await res.json();
+        if (data && data.access_token) {
+            console.log("[Auth] Session refresh: success");
+            const expiresAt = Date.now() + ((data.expires_in || 3600) * 1000);
+            const sessionObj = {
+                access_token: data.access_token,
+                refresh_token: data.refresh_token || refreshToken,
+                expires_at: expiresAt,
+                user: data.user || { email: state.currentUser ? state.currentUser.email : "" }
+            };
+            saveSupabaseSession(sessionObj);
+            return data.access_token;
+        } else {
+            console.warn("[Auth] Session refresh: failure");
+            clearSupabaseSession();
+            return null;
+        }
+    } catch (e) {
+        console.error("[Auth] Session refresh error:", e);
+        return null;
+    }
+}
+
+async function getValidSupabaseSession() {
+    const session = getStoredSupabaseSession() || window.supabaseSession;
+    if (!session || !session.access_token) return null;
+
+    // Check expiry (buffer 60 seconds)
+    if (session.expires_at && session.expires_at < Date.now() + 60000) {
+        if (session.refresh_token) {
+            const newToken = await refreshSupabaseSession(session.refresh_token);
+            if (newToken) return getStoredSupabaseSession();
+        }
+        clearSupabaseSession();
+        return null;
+    }
+    return session;
+}
+
+async function getValidSupabaseAccessToken() {
+    const session = await getValidSupabaseSession();
+    if (session && session.access_token) {
+        return session.access_token;
+    }
+    return null;
+}
+
+async function loginToSupabaseAuth(email, password) {
+    console.log("[Auth] Login started");
+    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const cleanEmail = email.trim().toLowerCase();
+
+    try {
+        let res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+            method: "POST",
+            headers: { "apikey": anonKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ email: cleanEmail, password: password })
+        });
+        let data = await res.json();
+
+        // If credentials invalid, attempt signup to onboard account to Supabase GoTrue Auth
+        if (!data || !data.access_token) {
+            console.log("[Auth] GoTrue password login returned:", data.msg || data.error_description || "no token");
+            console.log("[Auth] Attempting GoTrue signup for email:", cleanEmail);
+            const signupRes = await fetch(`${url.replace(/\/$/, '')}/auth/v1/signup`, {
+                method: "POST",
+                headers: { "apikey": anonKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ email: cleanEmail, password: password })
+            });
+            const signupData = await signupRes.json();
+            if (signupData && signupData.access_token) {
+                data = signupData;
+            }
+        }
+
+        console.log("[Auth] Supabase Auth response received");
+        const hasToken = !!(data && data.access_token);
+        console.log("[Auth] Real access_token present:", hasToken);
+
+        if (data && data.access_token) {
+            const expiresAt = Date.now() + ((data.expires_in || 3600) * 1000);
+            const sessionObj = {
+                access_token: data.access_token,
+                refresh_token: data.refresh_token || "",
+                expires_at: expiresAt,
+                user: data.user || { id: data.user ? data.user.id : "", email: cleanEmail }
+            };
+            saveSupabaseSession(sessionObj);
+
+            if (data.user) {
+                console.log("[Auth] Supabase user id:", data.user.id || "none");
+                console.log("[Auth] Supabase user email:", data.user.email || cleanEmail);
+            }
+
+            const decoded = parseJwtPayload(data.access_token);
+            if (decoded) {
+                console.log("[Auth] JWT payload: jwt.sub =", decoded.sub, "| jwt.email =", decoded.email, "| jwt.role =", decoded.role, "| jwt.exp =", decoded.exp);
+            }
+            return sessionObj;
+        } else {
+            console.warn("[Auth] Could not acquire Supabase Auth token for:", cleanEmail);
+            return null;
+        }
+    } catch (e) {
+        console.error("[Auth] Login exception:", e);
+        return null;
+    }
+}
+
+
+
 
 async function getValidSupabaseJwt() {
     if (!state.currentUser || !state.currentUser.email) return null;
@@ -20319,6 +20478,7 @@ function loadStateFromStorage() {
                 console.warn("[Auth] Stored current user not found in database. Resetting session.");
                 state.currentUser = null;
                 localStorage.removeItem(getGroupKey(STORAGE_KEYS.CURRENT_USER));
+    clearSupabaseSession();
                 state.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
                 state.tests = [];
                 state.notebookNotes = [];
@@ -20857,39 +21017,49 @@ async function supabaseRequest(path, options = {}) {
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
     if (!url || !anonKey) {
         console.warn("Supabase credentials missing.");
-        return null;
+        return { success: false, status: 0, error: "Credentials missing" };
     }
+
+    const bearerToken = await getValidSupabaseAccessToken();
+    if (!bearerToken) {
+        console.warn(`[SupabaseRequest] Blocked ${options.method || "GET"} ${path}: No valid Supabase access_token JWT available.`);
+        return { success: false, status: 401, error: "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى." };
+    }
+
     const headers = {
         "apikey": anonKey,
-        "Authorization": `Bearer ${anonKey}`,
+        "Authorization": `Bearer ${bearerToken}`,
         "Content-Type": "application/json",
         ...options.headers
     };
+
+    const method = options.method || "GET";
     try {
         const response = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
             ...options,
             headers
         });
+
         if (!response.ok) {
             const errText = await response.text();
-            if (errText) console.error(`Supabase request to ${path} failed:`, errText);
-            return null;
+            console.error(`[SupabaseRequest] FAILED ${method} ${path} (${response.status}):`, errText);
+            return { success: false, status: response.status, error: errText || `HTTP ${response.status}` };
         }
-        if (options.method === "DELETE" || response.status === 204) {
-            return true;
+        if (method === "DELETE" || response.status === 204) {
+            return { success: true, data: true };
         }
         const text = await response.text();
         if (!text || text.trim() === "") {
-            return [];
+            return { success: true, data: [] };
         }
         try {
             return JSON.parse(text);
         } catch (jsonErr) {
-            return [];
+            return { success: true, data: [] };
         }
     } catch (e) {
-        console.error(`Supabase request to ${path} error:`, e);
-        return null;
+        console.error(`[SupabaseRequest] Exception ${method} ${path}:`, e);
+        return { success: false, status: 0, error: e.message };
     }
 }
 
@@ -21505,6 +21675,7 @@ function initAuthFlow() {
                 sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
                 sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
                 state.currentUser = user;
+                await loginToSupabaseAuth(currentAuthenticatingEmail, password);
 
                 try {
                     // Force sync cloud progress to avoid overwriting newer progress from other devices

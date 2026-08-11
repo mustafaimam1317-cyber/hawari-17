@@ -115,7 +115,7 @@ async function loginToSupabaseAuth(email, password) {
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-        // Attempt 1: GoTrue password login using provided password
+        // Official GoTrue password login
         let res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
             method: "POST",
             headers: { "apikey": anonKey, "Content-Type": "application/json" },
@@ -123,15 +123,27 @@ async function loginToSupabaseAuth(email, password) {
         });
         let data = await res.json();
 
-        // Attempt 2: Fallback password if primary returns invalid_credentials
-        if ((!data || !data.access_token) && (data.msg === "Invalid login credentials" || data.error_description === "Invalid login credentials")) {
-            console.log("[AUTH-TRACE] Primary GoTrue password login returned invalid_credentials, trying fallback...");
-            res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
-                method: "POST",
-                headers: { "apikey": anonKey, "Content-Type": "application/json" },
-                body: JSON.stringify({ email: cleanEmail, password: "HawariAuthPass123!" })
-            });
-            data = await res.json();
+        // If auth fails due to sync requirement, attempt auth-sync edge function
+        if (!data || !data.access_token) {
+            console.log("[AUTH-TRACE] GoTrue password login returned:", data.msg || data.error_description || "no token");
+            try {
+                const syncRes = await fetch(`${url.replace(/\/$/, '')}/functions/v1/auth-sync`, {
+                    method: "POST",
+                    headers: { "apikey": anonKey, "Content-Type": "application/json" },
+                    body: JSON.stringify({ email: cleanEmail, password: password })
+                });
+                if (syncRes.ok) {
+                    console.log("[AUTH-TRACE] Auth-sync function completed, retrying GoTrue login...");
+                    res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+                        method: "POST",
+                        headers: { "apikey": anonKey, "Content-Type": "application/json" },
+                        body: JSON.stringify({ email: cleanEmail, password: password })
+                    });
+                    data = await res.json();
+                }
+            } catch (syncErr) {
+                console.warn("[AUTH-TRACE] Auth-sync edge function unavailable:", syncErr.message);
+            }
         }
 
         console.log("[AUTH-TRACE] GoTrue HTTP status:", res.status);
@@ -27842,7 +27854,8 @@ async function uploadFileToSupabase(file, courseId, contentId, progressCallback)
         const xhr = new XMLHttpRequest();
         xhr.open("POST", uploadUrl, true);
         xhr.setRequestHeader("apikey", anonKey);
-        xhr.setRequestHeader("Authorization", `Bearer ${anonKey}`);
+        const token = (state.currentUser && state.currentUser.token) ? state.currentUser.token : anonKey;
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
         xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
         
         xhr.upload.onprogress = (e) => {
@@ -28366,7 +28379,7 @@ function initAddBookModalForm() {
                     method: "POST",
                     headers: {
                         "apikey": anonKey,
-                        "Authorization": `Bearer ${anonKey}`,
+                        "Authorization": `Bearer ${bearerToken || anonKey}`,
                         "Content-Type": file.type || "application/pdf"
                     },
                     body: file

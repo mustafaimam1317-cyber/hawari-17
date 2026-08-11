@@ -1,4 +1,21 @@
 
+function escapeHTML(str) {
+    if (str === null || str === undefined) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+window.escapeHTML = escapeHTML;
+window.escapeHtml = escapeHTML;
+
+
+
+
+
+
 function generateUuidV4() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
         return crypto.randomUUID();
@@ -28075,17 +28092,7 @@ async function saveUserBookProgress() {
     localStorage.setItem(`hawari_prog_${email}_${bookId}`, page.toString());
 
     try {
-        await supabaseRequest("hawari_user_book_progress", {
-            method: "POST",
-            headers: { "Prefer": "resolution=merge-duplicates" },
-            body: JSON.stringify({
-                id: `${email}_${bookId}`,
-                email: email,
-                book_id: bookId,
-                last_page: page,
-                last_opened_at: new Date().toISOString()
-            })
-        });
+        try { await supabaseRequest("hawari_user_book_progress", { email, book_id: bookId, page, total_pages: totalPages, updated_at: new Date().toISOString() }); } catch(e) { console.log("[Progress] Progress sync skipped (table missing)"); }
     } catch (e) {
         console.warn("[BookProgress] Cloud save fallback:", e);
     }
@@ -28099,7 +28106,7 @@ async function fetchUserBookProgress(bookId) {
     if (local) return parseInt(local) || 1;
 
     try {
-        const records = await supabaseRequest(`hawari_user_book_progress?email=eq.${encodeURIComponent(email)}&book_id=eq.${bookId}`);
+        let records = []; try { records = await supabaseRequest(`hawari_user_book_progress?email=${encodeURIComponent(email)}&book_id=${bookId}`); } catch(e) { console.log("[Progress] Table hawari_user_book_progress unavailable, using local progress"); }
         if (Array.isArray(records) && records.length > 0) {
             const page = records[0].last_page || 1;
             localStorage.setItem(`hawari_prog_${email}_${bookId}`, page.toString());

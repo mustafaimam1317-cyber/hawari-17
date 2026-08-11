@@ -1458,24 +1458,6 @@
                             </form>
                         </div>
 
-                        <!-- Hawari Book Student Access Authorization Manager -->
-                        <div class="grid-card" style="margin-top: 24px; border: 1px solid var(--primary-color);">
-                            <h3><i class="fa-solid fa-book-open-reader" style="color: var(--primary-color);"></i> Hawari Book Student Access Control</h3>
-                            <p class="section-desc">Grant or revoke per-student access to the interactive Hawari PDF Course Book.</p>
-                            <form id="admin-book-access-form" onsubmit="event.preventDefault();">
-                                <div class="input-group">
-                                    <label for="admin-book-access-email"><i class="fa-regular fa-envelope"></i> Student Gmail Address</label>
-                                    <input type="email" id="admin-book-access-email" placeholder="e.g. student@gmail.com" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary);">
-                                </div>
-                                <button type="submit" class="btn btn-success btn-block" style="margin-top: 12px; padding: 10px;">
-                                    <i class="fa-solid fa-key"></i> Authorize Hawari Book Access
-                                </button>
-                            </form>
-
-                            <h4 style="margin-top: 20px; font-size: 0.95rem; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">Authorized Students List (<span id="admin-book-authorized-count">0</span>)</h4>
-                            <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 180px; overflow-y: auto;">
-                                <!-- Dynamic authorized student emails list -->
-                            </div>
                         </div>
 
                         <!-- Users Management Panel -->
@@ -1600,26 +1582,27 @@
                             </div>
                         </div>
 
-                        <!-- Col 2: Independent Student Subscriptions Table -->
+                        <!-- FULL GRANT ACCESS MANAGER -->
                         <div class="grid-card">
                             <div class="card-header-flex" style="margin-bottom: 15px;">
-                                <h3>Student Book Access Subscriptions</h3>
-                                <span class="badge badge-primary">Authorized: <span id="admin-book-authorized-count">0</span></span>
+                                <h3><i class="fa-solid fa-key" style="color: var(--primary-color);"></i> FULL GRANT ACCESS</h3>
+                                <span class="badge badge-primary">Granted Users: <span id="admin-book-authorized-count">0</span></span>
                             </div>
-                            <p class="section-desc" style="margin-bottom: 15px;">Manage student book subscriptions independently. Unsubscribed students only get the first 10 pages for free.</p>
+                            <p class="section-desc" style="margin-bottom: 15px;">Grant full access to all book pages. Un-granted students can only access pages 1 to 10.</p>
                             
                             <!-- Direct Grant Form -->
-                            <form id="admin-book-access-form" style="display: flex; gap: 10px; margin-bottom: 20px;">
+                            <form id="admin-book-access-form" style="display: flex; gap: 10px; margin-bottom: 20px;" onsubmit="event.preventDefault();">
                                 <input type="email" id="admin-book-access-email" placeholder="student@gmail.com" required style="flex-grow: 1; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 <button type="submit" class="btn btn-success" style="padding: 10px 18px; white-space: nowrap;">
-                                    <i class="fa-solid fa-user-plus"></i> Grant Full Access
+                                    <i class="fa-solid fa-key"></i> Full Grant
                                 </button>
                             </form>
 
-                            <!-- Authorized List -->
+                            <!-- Granted Users List -->
                             <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto;">
-                                <!-- Dynamic rows -->
+                                <!-- Dynamic rows with Revoke buttons -->
                             </div>
+                        </div>
                         </div>
                     </div>
                 </div>

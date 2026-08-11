@@ -1,4 +1,18 @@
 
+// Safe local progress tracking fallback for missing hawari_user_book_progress table
+async function saveBookReadingProgress(email, bookId, page, totalPages) {
+    if (!email || !bookId) return;
+    try {
+        await supabaseRequest("hawari_user_book_progress", {
+            method: "POST",
+            body: JSON.stringify({ email, book_id: bookId, page, total_pages: totalPages, updated_at: new Date().toISOString() })
+        });
+    } catch (e) {
+        console.log("[Progress] Progress sync skipped (table missing)");
+    }
+}
+
+
 async function ensurePdfJsLoaded() {
     if (window.pdfjsLib) return window.pdfjsLib;
     return new Promise((resolve, reject) => {
@@ -28042,895 +28056,136 @@ let bookState = {
 };
 
 // Check if a user email is authorized for Hawari Book access
+
+// Centralized Access Level Calculator
+function getBookAccessLevel(user) {
+    if (!user || !user.email) return { isFullGrant: false, maxPage: 10 };
+    
+    const cleanEmail = user.email.trim().toLowerCase();
+    const isAdmin = user.role === "admin" || cleanEmail === "mustafaimam1317@gmail.com" || cleanEmail === "mustafa172004@gmail.com";
+    
+    let isGranted = false;
+    if (Array.isArray(state.grantedBookUsers)) {
+        isGranted = state.grantedBookUsers.some(e => String(e).trim().toLowerCase() === cleanEmail);
+    }
+
+    if (isAdmin || isGranted) {
+        return { isFullGrant: true, maxPage: bookState.numPages || 9999 };
+    }
+    return { isFullGrant: false, maxPage: Math.min(10, bookState.numPages || 10) };
+}
+
 function isUserBookAuthorized(user) {
-    if (!user) return false;
-    if (user.role === "admin" || user.email === "mustafaimam1317@gmail.com") return true;
-    const email = user.email ? user.email.toLowerCase() : "";
-    return bookState.authorizedEmails.includes(email);
+    return getBookAccessLevel(user).isFullGrant;
 }
 
-// DRM Protection & Anti-Piracy Event Listeners
-function initBookDrmProtection() {
-    const bookView = document.getElementById("hawari-book-view");
-    const viewport = document.getElementById("book-canvas-viewport");
-    if (!bookView || bookView.dataset.drmBound) return;
-    bookView.dataset.drmBound = "true";
-
-    // 1. Context Menu & Selection Blocker
-    bookView.addEventListener("contextmenu", (e) => e.preventDefault());
-    bookView.addEventListener("copy", (e) => e.preventDefault());
-    bookView.addEventListener("cut", (e) => e.preventDefault());
-    bookView.addEventListener("dragstart", (e) => e.preventDefault());
-
-    // 2. Keyboard Shortcut Blocker (Ctrl+P, Ctrl+S, Ctrl+U, F12, PrintScreen)
-    window.addEventListener("keydown", (e) => {
-        if (!state.activeView || state.activeView !== "hawari-book") return;
-        const key = e.key ? e.key.toLowerCase() : "";
-        if (
-            (e.ctrlKey && (key === "p" || key === "s" || key === "u")) ||
-            (e.ctrlKey && e.shiftKey && key === "i") ||
-            key === "f12" ||
-            key === "printscreen"
-        ) {
-            e.preventDefault();
-            e.stopPropagation();
-            showToast("Action Blocked", "Printing, saving, or inspecting Hawari Book content is disabled.", "danger");
-            return false;
-        }
-
-        // Undo / Redo Shortcuts
-        if (e.ctrlKey && key === "z") {
-            e.preventDefault();
-            undoBookPageAction();
-        } else if (e.ctrlKey && key === "y") {
-            e.preventDefault();
-            redoBookPageAction();
-        }
-    });
-
-    // 3. Screen Protection Auto-Blur on Window Focus Loss
-    window.addEventListener("blur", () => {
-        if (state.activeView === "hawari-book" && viewport) {
-            viewport.classList.add("canvas-blurred");
-        }
-    });
-    window.addEventListener("focus", () => {
-        if (viewport) {
-            viewport.classList.remove("canvas-blurred");
-        }
-    });
-
-    // 4. Populate Floating Student Email Watermark
-    updateBookWatermark();
-}
-
-function updateBookWatermark() {
-    const watermarkEl = document.getElementById("book-watermark-overlay");
-    if (!watermarkEl) return;
-    const email = state.currentUser ? state.currentUser.email : "STUDENT-ACCESS";
-    
-    let html = "";
-    for (let i = 0; i < 18; i++) {
-        html += `<span style="padding: 20px; font-weight:700;">${escapeHTML(email)}</span>`;
-    }
-    watermarkEl.innerHTML = html;
-}
-
-// Fetch list of books from Supabase / localStorage
-async function fetchBookLibraryData() {
-    console.log("[BookLibrary] Fetching book files for group:", state.activeGroup);
+// Fetch Granted Users List from Supabase Table hawari_book_access
+async function fetchGrantedUsersList() {
     try {
-        const query = `hawari_book_files?group_name=eq.${state.activeGroup}&order=uploaded_at.desc`;
-        const books = await supabaseRequest(query);
-
-        const listEl = document.getElementById("admin-book-library-list");
-        const emptyEl = document.getElementById("admin-book-library-empty");
-        const activeTitleEl = document.getElementById("admin-active-book-title-lbl");
-        const activePagesEl = document.getElementById("admin-active-book-pages-lbl");
-
-        if (books && Array.isArray(books) && books.length > 0) {
-            const activeBook = books[0];
-            bookState.activeBookFile = activeBook;
-            bookState.numPages = activeBook.total_pages || 1;
-            
-            if (activeTitleEl) activeTitleEl.innerText = activeBook.title;
-            if (activePagesEl) activePagesEl.innerText = activeBook.total_pages || 1;
-            if (emptyEl) emptyEl.classList.add("hidden");
-
-            // Auto-load real PDF into viewer
-            loadRealBookPdfDocument(activeBook).then(() => {
-                redrawBookCanvas();
-            });
+        const rows = await supabaseRequest("hawari_book_access?select=email,status");
+        if (rows && Array.isArray(rows)) {
+            state.grantedBookUsers = rows.map(r => r.email).filter(Boolean);
         } else {
-            bookState.activeBookFile = null;
-            bookState.pdfDoc = null;
-            bookState.numPages = 0;
-            if (activeTitleEl) activeTitleEl.innerText = "لا يوجد كتاب نشط حاليًا";
-            if (activePagesEl) activePagesEl.innerText = "0";
-            if (emptyEl) emptyEl.classList.remove("hidden");
-            redrawBookCanvas();
+            state.grantedBookUsers = state.grantedBookUsers || [];
         }
     } catch (e) {
-        console.error("[BookLibrary] Exception fetching book library data:", e);
+        console.warn("[FullGrant] Could not fetch hawari_book_access table:", e.message);
+        state.grantedBookUsers = state.grantedBookUsers || [];
     }
+    renderGrantedUsersList();
 }
 
-// Save user reading progress for active book
-async function saveUserBookProgress() {
-    if (!state.currentUser || !bookState.activeBookFile) return;
-    const bookId = bookState.activeBookFile.id;
-    const email = state.currentUser.email;
-    const page = bookState.currentPage || 1;
+function renderGrantedUsersList() {
+    const listEl = document.getElementById("admin-book-authorized-list");
+    const countEl = document.getElementById("admin-book-authorized-count");
+    if (countEl) countEl.innerText = state.grantedBookUsers.length;
+    if (!listEl) return;
 
-    bookState.userProgressMap[bookId] = page;
-    localStorage.setItem(`hawari_prog_${email}_${bookId}`, page.toString());
-
-    try {
-        try { await supabaseRequest("hawari_user_book_progress", { email, book_id: bookId, page, total_pages: totalPages, updated_at: new Date().toISOString() }); } catch(e) { console.log("[Progress] Progress sync skipped (table missing)"); }
-    } catch (e) {
-        console.warn("[BookProgress] Cloud save fallback:", e);
-    }
-}
-
-// Fetch user reading progress for a book
-async function fetchUserBookProgress(bookId) {
-    if (!state.currentUser) return 1;
-    const email = state.currentUser.email;
-    const local = localStorage.getItem(`hawari_prog_${email}_${bookId}`);
-    if (local) return parseInt(local) || 1;
-
-    try {
-        let records = []; try { records = await supabaseRequest(`hawari_user_book_progress?email=${encodeURIComponent(email)}&book_id=${bookId}`); } catch(e) { console.log("[Progress] Table hawari_user_book_progress unavailable, using local progress"); }
-        if (Array.isArray(records) && records.length > 0) {
-            const page = records[0].last_page || 1;
-            localStorage.setItem(`hawari_prog_${email}_${bookId}`, page.toString());
-            return page;
-        }
-    } catch (e) {
-        console.warn("[BookProgress] Cloud fetch fallback:", e);
-    }
-    return 1;
-}
-
-// Render Book Library Grid View
-async function renderBookLibrary(filterCategory = "all", searchQuery = "") {
-    const gridEl = document.getElementById("book-library-grid");
-    const emptyEl = document.getElementById("book-library-empty");
-    if (!gridEl) return;
-
-    await fetchBookLibraryData();
-
-    let booksList = state.books || [];
-    
-    // Apply category filter
-    if (filterCategory && filterCategory !== "all") {
-        // Category filter removed (hawari_book_files uses 6 valid columns only)
-    }
-
-    // Apply search filter
-    if (searchQuery && searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        booksList = booksList.filter(b => (b.title || "").toLowerCase().includes(q));
-    }
-
-    gridEl.innerHTML = "";
-
-    if (booksList.length === 0) {
-        gridEl.classList.add("hidden");
-        if (emptyEl) emptyEl.classList.remove("hidden");
+    listEl.innerHTML = "";
+    if (state.grantedBookUsers.length === 0) {
+        listEl.innerHTML = '<div style="padding: 15px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No Full Grant users added yet.</div>';
         return;
     }
 
-    gridEl.classList.remove("hidden");
-    if (emptyEl) emptyEl.classList.add("hidden");
-
-    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com");
-
-    for (const book of booksList) {
-        const lastPage = await fetchUserBookProgress(book.id);
-        const totalPages = book.total_pages || 1;
-        const pct = Math.min(100, Math.round((lastPage / totalPages) * 100));
-
-        let gradient = "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)";
-        if (book.group_name === "infection") gradient = "linear-gradient(135deg, #1e40af 0%, #1e1b4b 100%)";
-        else if (book.group_name === "dermatology") gradient = "linear-gradient(135deg, #9d174d 0%, #4c0519 100%)";
-        else if (book.category === "Pharmacology") gradient = "linear-gradient(135deg, #065f46 0%, #022c22 100%)";
-
-        const card = document.createElement("div");
-        card.className = "hawari-book-card";
-        card.innerHTML = `
-            <div class="book-card-cover" style="background: ${gradient};">
-                <span class="book-cover-badge">${escapeHTML((book.group_name || "Course").toUpperCase())}</span>
-                <div>
-                    <h4 class="book-cover-title">${escapeHTML(book.title)}</h4>
-                    <span style="font-size: 0.78rem; opacity: 0.85;"><i class="fa-solid fa-file-pdf"></i> ${totalPages} Pages</span>
-                </div>
-            </div>
-            <div class="book-card-body">
-                <div>
-                    <div class="book-card-meta">
-                        <span><i class="fa-solid fa-bookmark" style="color: var(--primary-color);"></i> ${lastPage > 1 ? `Page ${lastPage} of ${totalPages}` : "Not Started"}</span>
-                        <span>${pct}%</span>
-                    </div>
-                    <div class="book-card-progress-bar">
-                        <div class="book-card-progress-fill" style="width: ${pct}%;"></div>
-                    </div>
-                </div>
-                <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">
-                    <button class="btn btn-primary" style="flex: 1; padding: 8px 12px; font-size: 0.85rem;" onclick="openBook('${book.id}')">
-                        <i class="fa-solid fa-book-open"></i> ${lastPage > 1 ? `Continue (p.${lastPage})` : "Open Book"}
-                    </button>
-                    ${isAdmin ? `
-                        <button class="btn btn-danger btn-icon" style="padding: 8px 10px;" title="Delete Book Permanently" onclick="deleteAdminBook('${book.id}', '${escapeHTML(book.title)}')">
-                            <i class="fa-solid fa-trash-can"></i>
-                        </button>
-                    ` : ""}
-                </div>
+    state.grantedBookUsers.forEach(email => {
+        const row = document.createElement("div");
+        row.className = "flex-between";
+        row.style.cssText = "padding: 10px 14px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px;";
+        row.innerHTML = `
+            <span style="font-weight: 500; font-size: 0.85rem;"><i class="fa-solid fa-user-check" style="color: var(--color-success); margin-right: 6px;"></i> ${escapeHTML(email)}</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="badge badge-success" style="font-size: 0.7rem;">FULL GRANT</span>
+                <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem;" onclick="revokeStudentBookAccess('${escapeHTML(email)}')">
+                    <i class="fa-solid fa-user-xmark"></i> Revoke
+                </button>
             </div>
         `;
-        gridEl.appendChild(card);
-    }
+        listEl.appendChild(row);
+    });
 }
 
-window.filterBookLibrary = function(cat, btnEl) {
-    const btns = document.querySelectorAll("#book-library-category-filters button");
-    btns.forEach(b => b.classList.remove("active"));
-    if (btnEl) btnEl.classList.add("active");
-    const searchVal = document.getElementById("book-library-search-input")?.value || "";
-    renderBookLibrary(cat, searchVal);
-};
-
-window.searchBookLibrary = function(q) {
-    const activeCatBtn = document.querySelector("#book-library-category-filters button.active");
-    const cat = activeCatBtn ? activeCatBtn.dataset.cat : "all";
-    renderBookLibrary(cat, q);
-};
-
-// Open specific book in Book Viewer Workspace
-
-// Helper to request a short-lived signed URL for a private PDF course book (300s TTL)
-async function getSignedBookUrl(filePath, expiresIn = 300) {
+async function grantBookAccess(email) {
+    if (!email) return false;
+    const cleanEmail = email.trim().toLowerCase();
+    
     try {
-        const cleanUrl = (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, '');
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-        
-        // Extract relative file path if legacy URL format was passed
-        let targetPath = filePath || "";
-        if (targetPath.includes("/hawari_books/")) {
-            targetPath = targetPath.split("/hawari_books/").pop();
-        } else if (targetPath.startsWith("http://") || targetPath.startsWith("https://")) {
-            targetPath = targetPath.split("/").pop();
-        }
-
-        console.log("[Security] Requesting signed URL for path:", targetPath);
-
-        const response = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${targetPath}`, {
-            method: "POST",
-            headers: {
-                "apikey": anonKey,
-                "Authorization": `Bearer ${(state.currentUser && state.currentUser.token) ? state.currentUser.token : anonKey}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ expiresIn })
-        });
-
-        if (!response.ok) {
-            console.warn("[Security] Signed URL generation rejected by server RLS:", response.status);
-            return null;
-        }
-
-        const data = await response.json();
-        if (data && data.signedURL) {
-            return `${cleanUrl}${data.signedURL}`;
-        }
-        return null;
-    } catch (err) {
-        console.error("[Security] Error fetching signed URL:", err);
-        return null;
-    }
-}
-
-window.openBook = async function(bookId) {
-    const book = (state.books || []).find(b => b.id === bookId);
-    if (!book) return;
-
-    // Set active book
-    bookState.activeBookFile = book;
-    bookState.numPages = book.total_pages || 1;
-    bookState.annotations = {}; // CLEAR memory to prevent annotations bleeding between books!
-
-    // Fetch user progress for this book
-    const lastPage = await fetchUserBookProgress(bookId);
-    bookState.currentPage = lastPage;
-
-    // Fetch annotations scoped to this book
-    await fetchBookCloudAnnotations();
-
-    // Update UI elements
-    const titleEl = document.getElementById("book-viewer-title");
-    if (titleEl) titleEl.innerText = book.title;
-
-    const totalPagesEl = document.getElementById("book-total-pages-num");
-    if (totalPagesEl) totalPagesEl.innerText = book.total_pages;
-
-    const gotoInput = document.getElementById("book-goto-page-input");
-    if (gotoInput) {
-        gotoInput.max = book.total_pages;
-        gotoInput.value = lastPage;
-    }
-
-    // Toggle Workspace views
-    const libraryContainer = document.getElementById("book-library-container");
-    const viewerWorkspace = document.getElementById("book-viewer-workspace");
-    if (libraryContainer) libraryContainer.classList.add("hidden");
-    if (viewerWorkspace) viewerWorkspace.classList.remove("hidden");
-
-    redrawBookCanvas();
-    showToast("Book Loaded", `Opened "${book.title}" on page ${lastPage}`, "info");
-};
-
-// Close Book Viewer Workspace & return to Library Grid
-window.closeBookViewerAndReturnToLibrary = function() {
-    saveUserBookProgress();
-    saveBookPageAnnotationToCloud(bookState.currentPage);
-
-    bookState.activeBookFile = null;
-
-    const libraryContainer = document.getElementById("book-library-container");
-    const viewerWorkspace = document.getElementById("book-viewer-workspace");
-    if (libraryContainer) libraryContainer.classList.remove("hidden");
-    if (viewerWorkspace) viewerWorkspace.classList.add("hidden");
-
-    renderBookLibrary();
-};
-
-// Admin Permanent Book Deletion (DB + Storage + Local Cache)
-window.deleteAdminBook = async function(bookId, bookTitle) {
-    if (!confirm(`Are you sure you want to permanently delete "${bookTitle}"?\n\nThis will remove the book PDF and all associated student annotations permanently. This action cannot be undone.`)) {
-        return;
-    }
-
-    try {
-        // 1. Delete DB record from hawari_book_files
-        await supabaseRequest(`hawari_book_files?id=eq.${bookId}`, {
-            method: "DELETE"
-        });
-
-        // 2. Delete associated annotations
-        await supabaseRequest(`hawari_book_annotations?document_id=eq.${bookId}`, {
-            method: "DELETE"
-        });
-
-        // 3. Delete user progress
-        await supabaseRequest(`hawari_user_book_progress?book_id=eq.${bookId}`, {
-            method: "DELETE"
-        });
-
-        // 4. Remove from state.books and local storage cache
-        state.books = (state.books || []).filter(b => b.id !== bookId);
-        localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books));
-
-        // 5. If active book was deleted, clear active state
-        if (bookState.activeBookFile && bookState.activeBookFile.id === bookId) {
-            bookState.activeBookFile = null;
-        }
-
-        showToast("Book Deleted", `"${bookTitle}" was permanently deleted.`, "success");
-        renderBookLibrary();
-
-    } catch (e) {
-        console.error("[DeleteBook] Failed to delete book:", e);
-        showToast("Delete Failed", "Could not remove book record from database.", "danger");
-    }
-};
-
-window.openAdminAddBookModal = function() {
-    const modal = document.getElementById("modal-admin-add-book");
-    if (modal) modal.classList.remove("hidden");
-    initAddBookModalForm();
-};
-
-function initAddBookModalForm() {
-    const form = document.getElementById("modal-add-book-form");
-    if (!form || form.dataset.bound) return;
-    form.dataset.bound = "true";
-
-    form.onsubmit = async (e) => {
-        e.preventDefault();
-        const titleInput = document.getElementById("modal-book-title");
-        const categoryInput = document.getElementById("modal-book-category");
-        const pagesInput = document.getElementById("modal-book-total-pages");
-        const fileInput = document.getElementById("modal-book-pdf-file");
-
-        const title = titleInput ? titleInput.value.trim() : "";
-        const category = categoryInput ? categoryInput.value : "General";
-        const pages = pagesInput && pagesInput.value ? parseInt(pagesInput.value) : 100;
-        const file = fileInput ? fileInput.files[0] : null;
-
-        if (!title || !file) {
-            showToast("Missing Required Fields", "Please enter a title and select a PDF file.", "warning");
-            return;
-        }
-
-        const progressContainer = document.getElementById("modal-book-upload-progress");
-        const progressBar = document.getElementById("modal-book-upload-bar");
-        const progressText = document.getElementById("modal-book-upload-pct");
-
-        if (progressContainer) progressContainer.classList.remove("hidden");
-        if (progressBar) progressBar.style.width = "40%";
-        if (progressText) progressText.innerText = "40%";
-
-        try {
-            const fileExt = file.name.split('.').pop();
-            const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
-            const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-            const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-
-            let publicUrl = "";
-            try {
-                const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
-                    method: "POST",
-                    headers: {
-                        "apikey": anonKey,
-                        "Authorization": `Bearer ${bearerToken || anonKey}`,
-                        "Content-Type": file.type || "application/pdf"
-                    },
-                    body: file
-                });
-
-                if (uploadRes.ok) {
-                    publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
-                }
-            } catch (storageErr) {}
-
-            if (!publicUrl) {
-                publicUrl = URL.createObjectURL(file);
-            }
-
-            if (progressBar) progressBar.style.width = "80%";
-            if (progressText) progressText.innerText = "80%";
-
-            const bookPayload = {
-                id: generateUuidV4(),
-                title: title,
-                category: category,
-                total_pages: pages,
-                storage_url: publicUrl,
-                group_name: state.activeGroup,
-                uploaded_at: new Date().toISOString()
-            };
-
-            await supabaseRequest("hawari_book_files", {
-                method: "POST",
-                headers: { "Prefer": "resolution=merge-duplicates" },
-                body: JSON.stringify(bookPayload)
-            });
-
-            if (!state.books) state.books = [];
-            state.books.unshift(bookPayload);
-            localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books));
-
-            if (progressBar) progressBar.style.width = "100%";
-            if (progressText) progressText.innerText = "100%";
-
-            showToast("Book Added", `Successfully added "${title}" to library`, "success");
-
-            setTimeout(() => {
-                if (progressContainer) progressContainer.classList.add("hidden");
-                const modal = document.getElementById("modal-admin-add-book");
-                if (modal) modal.classList.add("hidden");
-                form.reset();
-                renderBookLibrary();
-            }, 800);
-
-        } catch (err) {
-            console.error("[AddBook] Error uploading book:", err);
-            showToast("Upload Error", "Failed to add book.", "danger");
-            if (progressContainer) progressContainer.classList.add("hidden");
-        }
-    };
-}
-
-// Cloud JSON Annotation Syncing (Supabase Table: hawari_book_annotations)
-async function fetchBookCloudAnnotations() {
-    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
-    const docId = bookState.activeBookFile.id;
-    const email = state.currentUser.email;
-
-    const local = localStorage.getItem(`hawari_anns_${email}_${docId}`);
-    if (local) {
-        try {
-            bookState.annotations = JSON.parse(local);
-        } catch (e) {}
-    }
-
-    try {
-        const query = `hawari_book_annotations?email=eq.${encodeURIComponent(email)}&document_id=eq.${docId}`;
-        const records = await supabaseRequest(query);
-        if (Array.isArray(records) && records.length > 0) {
-            records.forEach(row => {
-                if (row.page_number && row.payload_json) {
-                    bookState.annotations[row.page_number] = row.payload_json;
-                }
-            });
-            localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
-            console.log(`[BookSync] Fetched cloud annotations for ${records.length} pages of ${docId}.`);
-        }
-    } catch (e) {
-        console.warn("[BookSync] Cloud annotations fetch fallback:", e);
-    }
-}
-
-async function saveBookPageAnnotationToCloud(page) {
-    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
-    const pageData = bookState.annotations[page] || [];
-    const docId = bookState.activeBookFile.id;
-    const email = state.currentUser.email;
-
-    localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
-
-    const payload = {
-        id: `${email}_${state.activeGroup}_${docId}_p${page}`,
-        email: email,
-        group_name: state.activeGroup,
-        document_id: docId,
-        page_number: page,
-        payload_json: pageData,
-        updated_at: new Date().toISOString()
-    };
-
-    try {
-        await supabaseRequest("hawari_book_annotations", {
+        const payload = {
+            email: cleanEmail,
+            status: "active",
+            granted_at: new Date().toISOString()
+        };
+        const dbRes = await supabaseRequest("hawari_book_access", {
             method: "POST",
             headers: { "Prefer": "resolution=merge-duplicates" },
             body: JSON.stringify(payload)
         });
-        console.log(`[BookSync] Saved JSON annotations for page ${page} of ${docId} to cloud.`);
-    } catch (e) {
-        console.warn("[BookSync] Cloud annotation save fallback:", e);
-    }
-}
-
-// Fetch Hawari Book authorized student emails list from Supabase
-async function fetchBookAccessList() {
-    const group = state.activeGroup || "infection";
-    if (!bookState.groupAuthorizedEmails) bookState.groupAuthorizedEmails = {};
-    try {
-        console.log("[BookAccess] Fetching access list...");
-    const rows = await supabaseRequest(`hawari_book_access?select=email,status`);
-        if (Array.isArray(rows)) {
-            const activeEmails = rows
-                .filter(r => r.status !== "revoked")
-                .map(r => r.email.toLowerCase());
-            bookState.groupAuthorizedEmails[group] = Array.from(new Set(activeEmails));
-        } else {
-            bookState.groupAuthorizedEmails[group] = bookState.groupAuthorizedEmails[group] || [];
-        }
-    } catch (e) {
-        console.warn("[BookAccess] Cloud fetch fallback:", e);
-        bookState.groupAuthorizedEmails[group] = bookState.groupAuthorizedEmails[group] || [];
-    }
-}
-
-async function grantBookAccess(email) {
-    console.log("[BookAccess] Grant started");
-    if (!state.currentUser || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
-        console.error("[Auth] Admin session invalid or missing.");
-        showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
-        return false;
-    }
-    console.log("[Auth] session detected for admin:", state.currentUser.email);
-
-    const cleanEmail = email.trim().toLowerCase();
-    console.log("[BookAccess] Email normalized:", cleanEmail);
-    if (!cleanEmail) {
-        console.error("[BookAccess] Grant failed: Email is empty");
-        return false;
-    }
-
-    const group = state.activeGroup || "infection";
-    if (!bookState.groupAuthorizedEmails) bookState.groupAuthorizedEmails = {};
-    if (!bookState.groupAuthorizedEmails[group]) bookState.groupAuthorizedEmails[group] = [];
-
-    console.log("[BookAccess] Insert started");
-    try {
-        const res = await supabaseRequest("hawari_book_access", {
-            method: "POST",
-            headers: { "Prefer": "resolution=merge-duplicates" },
-            body: JSON.stringify({
-                email: cleanEmail,
-                status: "active",
-                granted_at: new Date().toISOString()
-            })
-        });
-        console.log("[BookAccess] Insert response:", res);
-
-        if (res && res.success === false) {
-            console.error("[BookAccess] Grant failed:", res.error || res.status);
-            showToast("Grant Failed", res.error || "Could not grant access on server", "danger");
-            return false;
-        }
-
-        console.log("[BookAccess] Insert succeeded");
-        if (!bookState.groupAuthorizedEmails[group].includes(cleanEmail)) {
-            bookState.groupAuthorizedEmails[group].push(cleanEmail);
-        }
-
-        await fetchBookAccessList();
-        console.log("[BookAccess] Access list refreshed");
-        console.log("[BookAccess] Grant completed");
-        return true;
-    } catch (e) {
-        console.error("[BookAccess] Grant failed with exception:", e);
-        showToast("Grant Error", "Could not complete access request", "danger");
-        return false;
-    }
-}
-
-async function revokeBookAccess(email) {
-    const cleanEmail = email.trim().toLowerCase();
-    const group = state.activeGroup || "infection";
-    if (!bookState.groupAuthorizedEmails) bookState.groupAuthorizedEmails = {};
-    if (bookState.groupAuthorizedEmails[group]) {
-        bookState.groupAuthorizedEmails[group] = bookState.groupAuthorizedEmails[group].filter(e => e !== cleanEmail);
-    }
-
-    try {
-        await supabaseRequest(`hawari_book_access?email=eq.${encodeURIComponent(cleanEmail)}&group_name=eq.${encodeURIComponent(group)}`, {
-            method: "PATCH",
-            body: JSON.stringify({ status: "revoked" })
-        });
-    } catch (e) {
-        console.warn("[BookAccess] Cloud revoke fallback:", e);
-    }
-}
-
-async function processBookPdfUpload({ title, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
-    console.log("[BookUpload] START");
-
-    // 1. Verify user session exists
-    const hasSession = !!(state.currentUser && state.currentUser.email);
-    console.log("[Auth] Session detected:", hasSession);
-
-    if (!hasSession || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
-        console.error("[BookUpload] FAILED: Admin session invalid or missing");
-        showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
-        if (progressContainer) progressContainer.classList.add("hidden");
-        return false;
-    }
-
-    // 2. Retrieve & validate real Supabase JWT access token
-    const jwtToken = await getValidSupabaseAccessToken();
-    const hasToken = !!jwtToken;
-    console.log("[Auth] Access token present:", hasToken);
-
-    if (hasToken) {
-        const decoded = parseJwtPayload(jwtToken);
-        if (decoded) {
-            console.log("[Auth] Decoded JWT: jwt_email =", decoded.email || "none", "| jwt_role =", decoded.role || "none", "| jwt_sub =", decoded.sub || "none");
-        }
-    }
-
-    if (!jwtToken || jwtToken.trim() === "") {
-        console.error("[BookUpload] FAILED: No valid Supabase access_token exists");
-        showToast("جلسة غير صالحة", "جلسة Supabase غير صالحة. يرجى تسجيل الدخول مرة أخرى.", "danger");
-        if (progressContainer) progressContainer.classList.add("hidden");
-        return false;
-    }
-
-    if (!title || !file) {
-        console.error("[BookUpload] FAILED: Missing title or file");
-        showToast("Missing Required Fields", "Please enter a title and select a PDF file.", "warning");
-        if (progressContainer) progressContainer.classList.add("hidden");
-        return false;
-    }
-
-    if (progressContainer) progressContainer.classList.remove("hidden");
-    if (progressBar) progressBar.style.width = "15%";
-    if (progressText) progressText.innerText = "15%";
-
-    try {
-        // Auto-detect actual numPages from PDF file using PDF.js
-        console.log("[BookUpload] Auto-detecting page count from PDF file...");
-        let detectedPages = 1;
-        try {
-            const arrayBuffer = await file.arrayBuffer();
-            const pdfjs = await ensurePdfJsLoaded();
-            const tempPdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-            detectedPages = tempPdf.numPages || 1;
-            console.log("[BookUpload] Detected total pages count:", detectedPages);
-        } catch (pdfErr) {
-            console.warn("[BookUpload] Could not parse page count from PDF file, using default 1:", pdfErr.message);
-        }
-
-        if (progressBar) progressBar.style.width = "40%";
-        if (progressText) progressText.innerText = "40%";
-
-        const fileExt = file.name.split('.').pop();
-        const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
-        const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-
-        console.log("[BookUpload] Storage request");
-        const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
-            method: "POST",
-            headers: {
-                "apikey": anonKey,
-                "Authorization": `Bearer ${jwtToken}`,
-                "Content-Type": file.type || "application/pdf"
-            },
-            body: file
-        });
-
-        console.log("[BookUpload] Storage response status:", uploadRes.status);
-        if (!uploadRes.ok) {
-            const errJson = await uploadRes.json().catch(() => ({}));
-            console.error("[BookUpload] FAILED: Storage upload error:", uploadRes.status, errJson);
-            showToast("Upload Error", `Storage upload failed (${uploadRes.status}): ${errJson.message || errJson.error || 'AccessDenied'}`, "danger");
-            if (progressContainer) progressContainer.classList.add("hidden");
-            return false;
-        }
-
-        if (progressBar) progressBar.style.width = "75%";
-        if (progressText) progressText.innerText = "75%";
-
-        const storageUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
-        const bookId = generateUuidV4();
-
-        const dbPayload = {
-            id: bookId,
-            title: title.trim(),
-            total_pages: detectedPages,
-            storage_url: storageUrl,
-            group_name: state.activeGroup || "infection",
-            uploaded_at: new Date().toISOString()
-        };
-
-        console.log("[BookUpload] DB insert request");
-        const dbRes = await supabaseRequest("hawari_book_files", {
-            method: "POST",
-            headers: { "Prefer": "resolution=merge-duplicates" },
-            body: JSON.stringify(dbPayload)
-        });
 
         if (dbRes && dbRes.error) {
-            console.error("[BookUpload] FAILED: Database insert failed:", dbRes.error);
-            showToast("Database Error", `Database insert failed: ${dbRes.error.message || JSON.stringify(dbRes.error)}`, "danger");
-            
-            // Clean up orphan storage file if DB insert fails
-            try {
-                await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
-                    method: "DELETE",
-                    headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken}` }
-                });
-                console.log("[BookUpload] Orphan storage object deleted successfully.");
-            } catch (delErr) {
-                console.error("[BookUpload] Could not delete orphan storage file:", delErr);
-            }
-
-            if (progressContainer) progressContainer.classList.add("hidden");
+            console.error("[FullGrant] Grant failed:", dbRes.error);
+            showToast("Grant Error", `Could not grant access: ${dbRes.error.message || JSON.stringify(dbRes.error)}`, "danger");
             return false;
         }
 
-        console.log("[BookUpload] DB response: success");
-        console.log("[BookUpload] SUCCESS");
-
-        if (progressBar) progressBar.style.width = "100%";
-        if (progressText) progressText.innerText = "100%";
-
-        showToast("Success", "Book uploaded successfully!", "success");
-
-        if (modalToClose) modalToClose.classList.add("hidden");
-        if (formToReset) formToReset.reset();
-        if (progressContainer) setTimeout(() => progressContainer.classList.add("hidden"), 1000);
-
-        // Refresh book library & load real PDF into viewer
-        await fetchBookLibraryData();
+        showToast("Full Grant Applied", `Full grant access granted to ${cleanEmail}`, "success");
+        if (!state.grantedBookUsers.includes(cleanEmail)) {
+            state.grantedBookUsers.push(cleanEmail);
+        }
+        renderGrantedUsersList();
+        redrawBookCanvas();
         return true;
     } catch (e) {
-        console.error("[BookUpload] FAILED: Exception during upload:", e);
-        showToast("Upload Exception", e.message || "An unexpected error occurred during upload.", "danger");
-        if (progressContainer) progressContainer.classList.add("hidden");
+        console.error("[FullGrant] Exception during grant:", e);
+        showToast("Error", e.message || "Failed to grant access", "danger");
         return false;
-    }
-}
-
-async function uploadAdminBookPdfFile(file, title, totalPages) {
-    const progressContainer = document.getElementById("admin-book-upload-progress");
-    const progressBar = document.getElementById("admin-book-upload-bar");
-    const progressText = document.getElementById("admin-book-upload-pct");
-    const form = document.getElementById("admin-upload-book-form");
-
-    await processBookPdfUpload({
-        title,
-        // Category field removed
-        pages: totalPages,
-        file,
-        progressContainer,
-        progressBar,
-        progressText,
-        modalToClose: null,
-        formToReset: form
-    });
-}
-
-function renderAdminBookAccessManager() {
-    const listEl = document.getElementById("admin-book-authorized-list");
-    const countEl = document.getElementById("admin-book-authorized-count");
-    if (!listEl) return;
-
-    const group = state.activeGroup || "infection";
-
-    fetchBookAccessList().then(() => {
-        const groupEmails = (bookState.groupAuthorizedEmails && bookState.groupAuthorizedEmails[group]) || [];
-        const list = groupEmails.filter(e => e !== "mustafaimam1317@gmail.com");
-        if (countEl) countEl.innerText = list.length;
-        listEl.innerHTML = "";
-
-        if (list.length === 0) {
-            listEl.innerHTML = `<span class="text-muted" style="padding: 10px; font-size: 0.85rem; display: block; text-align: center;">No student emails authorized for full access in ${group.toUpperCase()} course.</span>`;
-            return;
-        }
-
-        list.forEach(email => {
-            const item = document.createElement("div");
-            item.style.cssText = "display: flex; align-items: center; justify-content: space-between; background: var(--bg-primary); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 0.88rem;";
-            item.innerHTML = `
-                <span><i class="fa-solid fa-user-check" style="color: var(--color-success); margin-right: 6px;"></i> ${escapeHTML(email)}</span>
-                <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem;" onclick="revokeStudentBookAccess('${escapeHTML(email)}')">
-                    <i class="fa-solid fa-user-xmark"></i> Revoke Access
-                </button>
-            `;
-            listEl.appendChild(item);
-        });
-    });
-
-    const accessForm = document.getElementById("admin-book-access-form");
-    if (accessForm && !accessForm.dataset.bound) {
-        accessForm.dataset.bound = "true";
-        accessForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const input = document.getElementById("admin-book-access-email");
-            const email = input ? input.value.trim().toLowerCase() : "";
-
-            if (!email || !email.endsWith("@gmail.com")) {
-                showToast("Gmail Required", "Please enter a valid Gmail address.", "warning");
-                return;
-            }
-
-            const ok = await grantBookAccess(email);
-            if (ok) {
-                showToast("Access Authorized", `Granted Hawari Book access for ${state.activeGroup.toUpperCase()} to ${email}`, "success");
-                if (input) input.value = "";
-                renderAdminBookAccessManager();
-            }
-        };
-    }
-
-    // Bind Admin Upload Form in Hawari Book Control Tab
-    const uploadForm = document.getElementById("admin-upload-book-form");
-    if (uploadForm && !uploadForm.dataset.bound) {
-        uploadForm.dataset.bound = "true";
-        uploadForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const titleInput = document.getElementById("admin-book-file-title");
-            const fileInput = document.getElementById("admin-book-pdf-file");
-            const pagesInput = document.getElementById("admin-book-total-pages");
-
-            const title = titleInput ? titleInput.value.trim() : "";
-            const file = fileInput ? fileInput.files[0] : null;
-            const pages = pagesInput ? parseInt(pagesInput.value) : 120;
-
-            await uploadAdminBookPdfFile(file, title, pages);
-        };
     }
 }
 
 window.revokeStudentBookAccess = async function(email) {
-    await revokeBookAccess(email);
-    showToast("Access Revoked", `Revoked Hawari Book access for ${email}`, "info");
-    renderAdminBookAccessManager();
+    if (!email) return;
+    const cleanEmail = email.trim().toLowerCase();
+    
+    try {
+        await supabaseRequest(`hawari_book_access?email=eq.${encodeURIComponent(cleanEmail)}`, {
+            method: "DELETE"
+        });
+
+        state.grantedBookUsers = state.grantedBookUsers.filter(e => e.toLowerCase() !== cleanEmail);
+        showToast("Access Revoked", `Full grant access revoked for ${cleanEmail}`, "info");
+        renderGrantedUsersList();
+        
+        // Immediately enforce page 10 limit if revoked user is active
+        if (state.currentUser && state.currentUser.email.toLowerCase() === cleanEmail) {
+            if (bookState.currentPage > 10) {
+                bookState.currentPage = 10;
+            }
+        }
+        redrawBookCanvas();
+    } catch (e) {
+        console.error("[FullGrant] Exception during revoke:", e);
+        showToast("Error", e.message || "Failed to revoke access", "danger");
+    }
 };
+
 
 function renderHawariBookView() {
     const isAuth = isUserBookAuthorized(state.currentUser);
@@ -30280,12 +29535,21 @@ async function redrawBookCanvas() {
     const zoomPctEl = document.getElementById("book-zoom-percentage");
     const lockOverlay = document.getElementById("book-page-lock-overlay");
 
+    const accessInfo = getBookAccessLevel(state.currentUser);
+    const maxPage = accessInfo.isFullGrant ? (bookState.numPages || 9999) : Math.min(10, bookState.numPages || 10);
+
+    // Enforce maxPage bounds strictly
+    if (bookState.currentPage > maxPage) {
+        bookState.currentPage = maxPage;
+        showToast("صفحات غير متاحة", "أول 10 صفحات متاحة للمشتركين. للحصول على الكتاب كاملًا تواصل مع الإدارة.", "warning");
+    }
+
     if (pageNumInput) pageNumInput.value = bookState.currentPage;
     if (totalPagesEl) totalPagesEl.innerText = bookState.numPages;
     if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
 
-    const isAuth = isUserBookAuthorized(state.currentUser);
-    if (bookState.currentPage > 10 && !isAuth) {
+    // Show lock overlay if normal student exceeds page 10
+    if (bookState.currentPage >= 10 && !accessInfo.isFullGrant) {
         if (lockOverlay) lockOverlay.classList.remove("hidden");
     } else {
         if (lockOverlay) lockOverlay.classList.add("hidden");
@@ -30299,6 +29563,28 @@ async function redrawBookCanvas() {
 
     if (!pdfCanvas || !animCanvas) return;
 
+    // Apply strict copy & screenshot protection on canvas stack
+    if (stack && !stack.dataset.protected) {
+        stack.dataset.protected = "true";
+        stack.style.userSelect = "none";
+        stack.style.webkitUserSelect = "none";
+        stack.style.webkitTouchCallout = "none";
+        
+        stack.addEventListener("contextmenu", e => e.preventDefault());
+        stack.addEventListener("dragstart", e => e.preventDefault());
+        stack.addEventListener("selectstart", e => e.preventDefault());
+        
+        window.addEventListener("keydown", e => {
+            const viewerVisible = !document.getElementById("book-viewer-workspace")?.classList.contains("hidden");
+            if (viewerVisible) {
+                if ((e.ctrlKey || e.metaKey) && ['s', 'p', 'u', 'c'].includes(e.key.toLowerCase())) {
+                    e.preventDefault();
+                    showToast("حماية المحتوى", "نسخ أو طباعة كتاب Hawari غير متاح لحماية حقوق الطبع.", "warning");
+                }
+            }
+        });
+    }
+
     // Load PDF Document if not loaded yet
     if (!bookState.pdfDoc && bookState.activeBookFile) {
         await loadRealBookPdfDocument(bookState.activeBookFile);
@@ -30307,6 +29593,13 @@ async function redrawBookCanvas() {
     if (bookState.pdfDoc) {
         try {
             const pageNum = Math.max(1, Math.min(bookState.currentPage, bookState.pdfDoc.numPages));
+            
+            // SECURITY GUARD: If page exceeds maxPage for normal student, DO NOT render PDF page
+            if (pageNum > maxPage) {
+                console.warn("[PDFViewer] Page access blocked beyond maxPage:", maxPage);
+                return;
+            }
+
             const page = await bookState.pdfDoc.getPage(pageNum);
             const scale = bookState.zoom || 1.0;
             const viewport = page.getViewport({ scale: scale });
@@ -30330,7 +29623,6 @@ async function redrawBookCanvas() {
             console.error("[PDFViewer] Error rendering real PDF page:", renderErr);
         }
     } else {
-        // Simple loading fallback
         const baseWidth = 720;
         const baseHeight = 980;
         const scaledWidth = Math.round(baseWidth * bookState.zoom);

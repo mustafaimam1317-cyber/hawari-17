@@ -27883,13 +27883,13 @@ async function renderBookLibrary(filterCategory = "all", searchQuery = "") {
     
     // Apply category filter
     if (filterCategory && filterCategory !== "all") {
-        booksList = booksList.filter(b => b.category === filterCategory);
+        // Category filter removed (hawari_book_files uses 6 valid columns only)
     }
 
     // Apply search filter
     if (searchQuery && searchQuery.trim()) {
         const q = searchQuery.trim().toLowerCase();
-        booksList = booksList.filter(b => (b.title || "").toLowerCase().includes(q) || (b.category || "").toLowerCase().includes(q));
+        booksList = booksList.filter(b => (b.title || "").toLowerCase().includes(q));
     }
 
     gridEl.innerHTML = "";
@@ -27911,15 +27911,15 @@ async function renderBookLibrary(filterCategory = "all", searchQuery = "") {
         const pct = Math.min(100, Math.round((lastPage / totalPages) * 100));
 
         let gradient = "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)";
-        if (book.category === "Infection") gradient = "linear-gradient(135deg, #1e40af 0%, #1e1b4b 100%)";
-        else if (book.category === "Dermatology") gradient = "linear-gradient(135deg, #9d174d 0%, #4c0519 100%)";
+        if (book.group_name === "infection") gradient = "linear-gradient(135deg, #1e40af 0%, #1e1b4b 100%)";
+        else if (book.group_name === "dermatology") gradient = "linear-gradient(135deg, #9d174d 0%, #4c0519 100%)";
         else if (book.category === "Pharmacology") gradient = "linear-gradient(135deg, #065f46 0%, #022c22 100%)";
 
         const card = document.createElement("div");
         card.className = "hawari-book-card";
         card.innerHTML = `
             <div class="book-card-cover" style="background: ${gradient};">
-                <span class="book-cover-badge">${escapeHTML(book.category || "General")}</span>
+                <span class="book-cover-badge">${escapeHTML((book.group_name || "Course").toUpperCase())}</span>
                 <div>
                     <h4 class="book-cover-title">${escapeHTML(book.title)}</h4>
                     <span style="font-size: 0.78rem; opacity: 0.85;"><i class="fa-solid fa-file-pdf"></i> ${totalPages} Pages</span>
@@ -28364,90 +28364,126 @@ async function revokeBookAccess(email) {
     }
 }
 
-async function processBookPdfUpload({ title, category, pages, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
+async function processBookPdfUpload({ title, pages, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
+    console.log("[BookUpload] START");
+    if (!state.currentUser || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
+        console.error("[BookUpload] FAILED: Admin session invalid or missing");
+        showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
+    }
+
     if (!title || !file) {
+        console.error("[BookUpload] FAILED: Missing title or file");
         showToast("Missing Required Fields", "Please enter a title and select a PDF file.", "warning");
-        return;
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
     }
 
     if (progressContainer) progressContainer.classList.remove("hidden");
-    if (progressBar) progressBar.style.width = "30%";
-    if (progressText) progressText.innerText = "30%";
-
-    const group = state.activeGroup || "infection";
-    const defaultCat = group === "dermatology" ? "Dermatology" : "Infection";
+    if (progressBar) progressBar.style.width = "20%";
+    if (progressText) progressText.innerText = "20%";
 
     try {
         const fileExt = file.name.split('.').pop();
-        const bookId = "book_" + Date.now();
-const relativeStoragePath = `${group}/${bookId}.${fileExt}`;
-const fileName = relativeStoragePath;
+        const fileName = `hawari_book_${state.activeGroup}_${Date.now()}.${fileExt}`;
         const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
         const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
 
-        let publicUrl = "";
-        try {
-            const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
-                method: "POST",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${anonKey}`,
-                    "Content-Type": file.type || "application/pdf"
-                },
-                body: file
-            });
+        let bearerToken = anonKey;
+        if (state.currentUser && state.currentUser.token) bearerToken = state.currentUser.token;
+        else if (state.currentUser && state.currentUser.access_token) bearerToken = state.currentUser.access_token;
+        else if (window.supabaseSession && window.supabaseSession.access_token) bearerToken = window.supabaseSession.access_token;
 
-            if (uploadRes.ok) {
-                publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/public/hawari_books/${fileName}`;
-            }
-        } catch (storageErr) {}
+        console.log("[BookUpload] Storage request");
+        const uploadRes = await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
+            method: "POST",
+            headers: {
+                "apikey": anonKey,
+                "Authorization": `Bearer ${bearerToken}`,
+                "Content-Type": file.type || "application/pdf"
+            },
+            body: file
+        });
 
-        if (!publicUrl) {
-            publicUrl = URL.createObjectURL(file);
+        console.log("[BookUpload] Storage response status:", uploadRes.status);
+        if (!uploadRes.ok) {
+            const txt = await uploadRes.text();
+            console.error("[BookUpload] FAILED: Storage upload error:", uploadRes.status, txt);
+            showToast("Storage Upload Error", `Failed to upload PDF file to storage (${uploadRes.status})`, "danger");
+            if (progressContainer) progressContainer.classList.add("hidden");
+            return false;
         }
 
-        if (progressBar) progressBar.style.width = "75%";
-        if (progressText) progressText.innerText = "75%";
+        const publicUrl = `${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`;
+        if (progressBar) progressBar.style.width = "60%";
+        if (progressText) progressText.innerText = "60%";
 
+        console.log("[BookUpload] DB insert request");
         const bookPayload = {
             id: `book_${Date.now()}`,
             title: title,
-            category: category || defaultCat,
-            total_pages: pages || 100,
+            total_pages: pages,
             storage_url: publicUrl,
-            group_name: group,
+            group_name: state.activeGroup,
             uploaded_at: new Date().toISOString()
         };
 
-        await supabaseRequest("hawari_book_files", {
+        const dbRes = await supabaseRequest("hawari_book_files", {
             method: "POST",
             headers: { "Prefer": "resolution=merge-duplicates" },
             body: JSON.stringify(bookPayload)
         });
 
-        if (!state.books) state.books = [];
-        state.books.unshift(bookPayload);
-        localStorage.setItem("hawari_books_" + group, JSON.stringify(state.books));
+        console.log("[BookUpload] DB response:", dbRes);
+
+        if (dbRes && dbRes.success === false) {
+            console.error("[BookUpload] FAILED: Database insert failed:", dbRes.error || dbRes.status);
+            // Delete newly uploaded orphan Storage object
+            try {
+                await fetch(`${url.replace(/\/$/, '')}/storage/v1/object/hawari_books/${fileName}`, {
+                    method: "DELETE",
+                    headers: { "apikey": anonKey, "Authorization": `Bearer ${bearerToken}` }
+                });
+                console.log("[BookUpload] Orphan storage object deleted successfully.");
+            } catch(delErr){
+                console.warn("[BookUpload] Could not delete orphan storage file:", delErr);
+            }
+            showToast("Database Error", dbRes.error || "Could not save book record to database", "danger");
+            if (progressContainer) progressContainer.classList.add("hidden");
+            return false;
+        }
+
+        if (progressBar) progressBar.style.width = "85%";
+        if (progressText) progressText.innerText = "85%";
+
+        await fetchBookLibraryData();
+        await renderBookLibrary();
 
         if (progressBar) progressBar.style.width = "100%";
         if (progressText) progressText.innerText = "100%";
 
-        showToast("Book Uploaded Successfully", `Successfully added "${title}" to ${group.toUpperCase()} course library!`, "success");
+        console.log("[BookUpload] SUCCESS");
+        showToast("Book Added", `تم رفع الكتاب "${title}" بنجاح`, "success");
 
         setTimeout(() => {
             if (progressContainer) progressContainer.classList.add("hidden");
             if (modalToClose) {
-                const modal = document.getElementById(modalToClose);
-                if (modal) modal.classList.add("hidden");
+                const mEl = document.getElementById(modalToClose);
+                if (mEl) mEl.classList.add("hidden");
             }
-            if (formToReset) formToReset.reset();
-            renderBookLibrary();
-        }, 600);
+            if (formToReset) {
+                const fEl = document.getElementById(formToReset);
+                if (fEl) fEl.reset();
+            }
+        }, 800);
+        return true;
 
     } catch (err) {
-        console.error("[AddBook] Error uploading book:", err);
-        showToast("Upload Error", "Failed to upload book file.", "danger");
+        console.error("[BookUpload] FAILED: Exception during upload:", err);
+        showToast("Upload Error", "Failed to add book.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
     }
 }
 
@@ -28459,7 +28495,7 @@ async function uploadAdminBookPdfFile(file, title, totalPages) {
 
     await processBookPdfUpload({
         title,
-        category: state.activeGroup === "dermatology" ? "Dermatology" : "Infection",
+        // Category field removed
         pages: totalPages,
         file,
         progressContainer,

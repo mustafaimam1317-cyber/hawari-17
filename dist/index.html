@@ -1543,30 +1543,77 @@
 
                 <!-- Admin Hawari Book Management Tab -->
                 <div id="admin-book-management-tab" class="admin-tab-content">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
+                    <div class="admin-questions-layout">
                         
-                        <!-- Top Left Card: Upload PDF Book -->
+                        <!-- Left Column: Upload PDF Book & Active Book Info -->
+                        <div style="display: flex; flex-direction: column; gap: 24px;">
+                            
+                            <!-- Upload PDF Book Card -->
+                            <div class="grid-card">
+                                <h3><i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-color);"></i> Upload PDF Book</h3>
+                                <p class="section-desc">Upload course PDF document to Supabase cloud storage for students.</p>
+                                <form id="admin-upload-book-form" onsubmit="handleAdminBookUploadForm(event);">
+                                    <div class="input-group" style="margin-bottom: 12px;">
+                                        <label for="admin-book-file-title" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Book Title</label>
+                                        <input type="text" id="admin-book-file-title" placeholder="e.g. Infection Course Book 2026" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                    <div class="input-group" style="margin-bottom: 12px;">
+                                        <label for="admin-book-pdf-file" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">PDF File Document</label>
+                                        <input type="file" id="admin-book-pdf-file" accept=".pdf,application/pdf" style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    </div>
+                                    
+                                    <div id="admin-book-upload-progress" class="hidden" style="margin-bottom: 15px;">
+                                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                            <span>Uploading Book PDF...</span>
+                                            <span id="admin-book-upload-pct">0%</span>
+                                        </div>
+                                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                            <div id="admin-book-upload-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.1s ease;"></div>
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary btn-block">
+                                        <i class="fa-solid fa-upload"></i> Upload & Set Active Book
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- Active PDF Book Info & Delete Card -->
+                            <div class="grid-card" style="border: 1px dashed var(--border-color);">
+                                <h3 style="font-size: 1rem; color: var(--text-primary); margin-bottom: 8px;"><i class="fa-solid fa-file-pdf" style="color: var(--color-danger);"></i> Active PDF Book File</h3>
+                                <div id="admin-active-book-info" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">
+                                    <div><strong>Title:</strong> <span id="admin-active-book-title-lbl">لا يوجد كتاب نشط حاليًا</span></div>
+                                    <div><strong>Pages:</strong> <span id="admin-active-book-pages-lbl">0</span> pages</div>
+                                </div>
+                                <button id="btn-admin-delete-book-pdf" class="btn btn-danger btn-outline btn-block" style="padding: 8px; font-size: 0.8rem;">
+                                    <i class="fa-solid fa-trash-can"></i> Delete Active PDF Book
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: FULL GRANT ACCESS MANAGER -->
                         <div class="grid-card">
-                            <h3><i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-color);"></i> Upload PDF Book</h3>
-                            <p class="section-desc">Upload course PDF document to Supabase cloud storage for students.</p>
-                            <form id="admin-upload-book-form" onsubmit="handleAdminBookUploadForm(event);">
-                                <div class="input-group" style="margin-bottom: 12px;">
-                                    <label for="admin-book-file-title" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Book Title</label>
-                                    <input type="text" id="admin-book-file-title" placeholder="e.g. Infection Course Book 2026" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                <div class="input-group" style="margin-bottom: 12px;">
-                                    <label for="admin-book-pdf-file" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">PDF File Document</label>
-                                    <input type="file" id="admin-book-pdf-file" accept=".pdf,application/pdf" style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
-                                </div>
-                                
-                                <div id="admin-book-upload-progress" class="hidden" style="margin-bottom: 15px;">
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                        <span>Uploading Book PDF...</span>
-                                        <span id="admin-book-upload-pct">0%</span>
-                                    </div>
-                                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
-                                        <div id="admin-book-upload-bar" style="width: 0%; height: 100%; background: var(--primary-color); transition: width 0.1s ease;"></div>
-                                    </div>
+                            <div class="card-header-flex" style="margin-bottom: 15px;">
+                                <h3><i class="fa-solid fa-key" style="color: var(--primary-color);"></i> FULL GRANT ACCESS</h3>
+                                <span class="badge badge-primary">Granted Users: <span id="admin-book-authorized-count">0</span></span>
+                            </div>
+                            <p class="section-desc" style="margin-bottom: 15px;">Grant full access to all book pages. Un-granted students can only access pages 1 to 10.</p>
+                            
+                            <!-- Direct Grant Form -->
+                            <form id="admin-book-access-form" style="display: flex; gap: 10px; margin-bottom: 20px;" onsubmit="event.preventDefault();">
+                                <input type="email" id="admin-book-access-email" placeholder="student@gmail.com" required style="flex-grow: 1; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                <button type="submit" class="btn btn-success" style="padding: 10px 18px; white-space: nowrap;">
+                                    <i class="fa-solid fa-key"></i> Full Grant
+                                </button>
+                            </form>
+
+                            <!-- Granted Users List -->
+                            <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto;">
+                                <!-- Dynamic rows with Revoke buttons -->
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
                                 </div>
                                 <button type="submit" class="btn btn-primary btn-block">
                                     <i class="fa-solid fa-upload"></i> Upload & Set Active Book

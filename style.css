@@ -3098,3 +3098,11 @@ body.group-dermatology.dark-theme {
 
 
 
+
+/* Hawari Book Management Layout Grid */
+.hawari-book-management-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+}

@@ -23463,6 +23463,8 @@ function renderAdminPanel() {
                 content.classList.remove("active");
             });
             document.getElementById(target).classList.add("active");
+            const mainContainer = document.querySelector(".main-content");
+            if (mainContainer) mainContainer.scrollTop = 0;
 
             // Sync with cloud users list if entering approvals tab
             if (target === "admin-approvals-tab") {

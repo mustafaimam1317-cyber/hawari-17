@@ -29729,3 +29729,23 @@ window.testRealSupabaseSession = async function() {
         return false;
     }
 };
+
+
+function renderAdminBookAccessManager() {
+    fetchGrantedUsersList();
+
+    const accessForm = document.getElementById("admin-book-access-form");
+    if (accessForm && !accessForm.getAttribute("data-bound")) {
+        accessForm.setAttribute("data-bound", "true");
+        accessForm.onsubmit = async function(e) {
+            e.preventDefault();
+            const emailInput = document.getElementById("admin-book-access-email");
+            if (!emailInput) return;
+            const email = emailInput.value.trim();
+            if (!email) return;
+            const ok = await grantBookAccess(email);
+            if (ok) emailInput.value = "";
+        };
+    }
+}
+window.renderAdminBookAccessManager = renderAdminBookAccessManager;

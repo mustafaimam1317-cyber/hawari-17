@@ -1462,7 +1462,6 @@
                             </form>
                         </div>
 
-                        </div>
 
                         <!-- Users Management Panel -->
                         <div class="grid-card">
@@ -1519,39 +1518,42 @@
 
                 <!-- Admin Announcements Tab -->
                 <div id="admin-announcements-tab" class="admin-tab-content">
-                    <div class="grid-card">
-                        <h3>Publish Course Announcement</h3>
-                        <p class="section-desc">Write a message or alert that will be highlighted at the top of all students' dashboards.</p>
-                        <form id="admin-announcements-form">
-                            <div class="input-group">
-                                <label for="admin-announcement-text">Announcement Content</label>
-                                <textarea id="admin-announcement-text" rows="5" placeholder="Type your announcement content here..." required style="width: 100%; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); padding: 12px; font-family: inherit; font-size: 0.95rem; box-sizing: border-box;"></textarea>
-                            </div>
-                            <div style="margin-top: 15px; display: flex; gap: 12px;">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fa-solid fa-paper-plane"></i> Publish Announcement
-                                </button>
-                                <button type="button" class="btn btn-danger btn-outline" id="btn-clear-announcement">
-                                    <i class="fa-solid fa-trash-can"></i> Clear Current
-                                </button>
-                            </div>
-                        </form>
+                    <div class="admin-questions-layout">
+                        <div class="grid-card">
+                            <h3>Publish Course Announcement</h3>
+                            <p class="section-desc">Write a message or alert that will be highlighted at the top of all students' dashboards.</p>
+                            <form id="admin-announcements-form">
+                                <div class="input-group">
+                                    <label for="admin-announcement-text">Announcement Content</label>
+                                    <textarea id="admin-announcement-text" rows="5" placeholder="Type your announcement content here..." required style="width: 100%; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); padding: 12px; font-family: inherit; font-size: 0.95rem; box-sizing: border-box;"></textarea>
+                                </div>
+                                <div style="margin-top: 15px; display: flex; gap: 12px;">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fa-solid fa-paper-plane"></i> Publish Announcement
+                                    </button>
+                                    <button type="button" class="btn btn-danger btn-outline" id="btn-clear-announcement">
+                                        <i class="fa-solid fa-trash-can"></i> Clear Current
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Admin Hawari Book Management Tab -->
                 <div id="admin-book-management-tab" class="admin-tab-content">
-                    <div class="hawari-book-management-grid">
+                    <div class="admin-questions-layout">
                         
+                        <!-- 1. Upload PDF Book Card -->
                         <div class="grid-card">
                             <h3><i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-color);"></i> Upload PDF Book</h3>
-                            <p class="section-desc">Upload course PDF document to Supabase cloud storage for students.</p>
+                            <p class="section-desc" style="margin-bottom: 15px;">Upload course PDF document to Supabase cloud storage for students.</p>
                             <form id="admin-upload-book-form" onsubmit="handleAdminBookUploadForm(event);">
                                 <div class="input-group" style="margin-bottom: 12px;">
                                     <label for="admin-book-file-title" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Book Title</label>
                                     <input type="text" id="admin-book-file-title" placeholder="e.g. Infection Course Book 2026" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
-                                <div class="input-group" style="margin-bottom: 12px;">
+                                <div class="input-group" style="margin-bottom: 15px;">
                                     <label for="admin-book-pdf-file" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">PDF File Document</label>
                                     <input type="file" id="admin-book-pdf-file" accept=".pdf,application/pdf" style="width: 100%; padding: 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
@@ -1571,6 +1573,7 @@
                             </form>
                         </div>
 
+                        <!-- 2. Student Book Access Subscriptions Card -->
                         <div class="grid-card">
                             <div class="card-header-flex" style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
                                 <h3><i class="fa-solid fa-key" style="color: var(--primary-color);"></i> Student Book Access Subscriptions</h3>
@@ -1578,6 +1581,7 @@
                             </div>
                             <p class="section-desc" style="margin-bottom: 15px;">Manage student book subscriptions independently. Unsubscribed students only get the first 10 pages for free.</p>
                             
+                            <!-- Direct Grant Form -->
                             <form id="admin-book-access-form" style="display: flex; gap: 10px; margin-bottom: 20px;" onsubmit="event.preventDefault();">
                                 <input type="email" id="admin-book-access-email" placeholder="student@gmail.com" required style="flex-grow: 1; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 <button type="submit" class="btn btn-success" style="padding: 10px 18px; white-space: nowrap;">
@@ -1585,10 +1589,13 @@
                                 </button>
                             </form>
 
+                            <!-- Granted Users List (Renders student emails with Revoke buttons) -->
                             <div id="admin-book-authorized-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 250px; overflow-y: auto;">
+                                <!-- Dynamic user rows with Revoke buttons -->
                             </div>
                         </div>
 
+                        <!-- 3. Active PDF Book File Card -->
                         <div class="grid-card" style="border: 1px dashed var(--border-color);">
                             <h3 style="font-size: 1rem; color: var(--text-primary); margin-bottom: 8px;"><i class="fa-solid fa-file-pdf" style="color: var(--color-danger);"></i> Active PDF Book File</h3>
                             <div id="admin-active-book-info" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">

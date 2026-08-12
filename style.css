@@ -3094,30 +3094,12 @@ body.group-dermatology.dark-theme {
 }
 
 
-
-
-
-
-
-
-/* Hawari Book Management Layout Grid & Natural Height Rules */
-#admin-book-management-tab .hawari-book-management-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 24px;
+/* Scoped Hawari Book Control Row Alignment & Spacing Fix */
+/* Scoped Hawari Book Control Alignment & Spacing Fix */
+#admin-book-management-tab .admin-questions-layout {
     align-items: start;
-    align-content: start;
-    grid-auto-rows: max-content;
 }
 
-#admin-book-management-tab .hawari-book-management-grid > .grid-card {
-    height: auto !important;
-    min-height: 0 !important;
-    max-height: none !important;
-    align-self: start !important;
-}
-
-#admin-book-management-tab #admin-book-authorized-list {
-    max-height: 250px;
-    overflow-y: auto;
+#admin-book-management-tab .grid-card {
+    margin-bottom: 0;
 }

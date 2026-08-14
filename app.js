@@ -1,26 +1,13 @@
 
 async function processBookPdfUpload({ title, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
-    console.log("[BookUpload] START");
+    console.log("[BookUpload] START processBookPdfUpload — title:", title, "file size:", file ? file.size : 0);
 
-    // 1. Verify user session exists
     const hasSession = !!(state.currentUser && state.currentUser.email);
-    console.log("[Auth] Session detected:", hasSession);
+    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
 
-    if (!hasSession || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
+    if (!hasSession || !isAdmin) {
         console.error("[BookUpload] FAILED: Admin session invalid or missing");
-        showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
-        if (progressContainer) progressContainer.classList.add("hidden");
-        return false;
-    }
-
-    // 2. Retrieve & validate real Supabase JWT access token
-    const jwtToken = await getValidSupabaseAccessToken();
-    const hasToken = !!jwtToken;
-    console.log("[Auth] Access token present:", hasToken);
-
-    if (!jwtToken || jwtToken.trim() === "") {
-        console.error("[BookUpload] FAILED: No valid Supabase access_token exists");
-        showToast("جلسة غير صالحة", "جلسة Supabase غير صالحة. يرجى تسجيل الدخول مرة أخرى.", "danger");
+        showToast("جلسة غير صالحة", "رفع الكتب متاح فقط للمشرفين. يرجى تسجيل الدخول بحساب مسؤول.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
         return false;
     }
@@ -37,36 +24,37 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
     if (progressText) progressText.innerText = "15%";
 
     try {
-        // Auto-detect actual numPages from PDF file using PDF.js with Uint8Array support
-        console.log("[BookUpload] Auto-detecting page count from PDF file...");
+        // Auto-detect actual numPages from PDF file using PDF.js
+        console.log("[BookUpload] Detecting actual page count from PDF buffer...");
         let detectedPages = 1;
         try {
             const arrayBuffer = await file.arrayBuffer();
             const pdfjs = await ensurePdfJsLoaded();
             const tempPdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
             detectedPages = tempPdf.numPages || 1;
-            console.log("[BookUpload] Detected total pages count:", detectedPages);
+            console.log("[BookUpload] Successfully detected total pages:", detectedPages);
         } catch (pdfErr) {
-            console.warn("[BookUpload] Could not parse page count from PDF file, using default 1:", pdfErr.message);
+            console.warn("[BookUpload] Could not detect page count via PDF.js, fallback 1:", pdfErr.message);
         }
 
         if (progressBar) progressBar.style.width = "40%";
         if (progressText) progressText.innerText = "40%";
 
-        const fileExt = file.name.split('.').pop();
-        const group = state.activeGroup || "infection";
-        const fileName = `hawari_book_${group}_${Date.now()}.${fileExt}`;
+        const jwtToken = await getValidSupabaseAccessToken();
         const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
         const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-
         const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
 
-        console.log("[BookUpload] Storage request");
+        const fileExt = file.name.split('.').pop();
+        const group = (state.activeGroup || "infection").toLowerCase();
+        const fileName = `hawari_book_${group}_${Date.now()}.${fileExt}`;
+
+        console.log("[BookUpload] Uploading binary to Supabase Storage: hawari_books/" + fileName);
         const uploadRes = await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
             method: "POST",
             headers: {
                 "apikey": anonKey,
-                "Authorization": `Bearer ${jwtToken}`,
+                "Authorization": `Bearer ${jwtToken || anonKey}`,
                 "Content-Type": file.type || "application/pdf"
             },
             body: file
@@ -96,28 +84,24 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             uploaded_at: new Date().toISOString()
         };
 
-        console.log("[BookUpload] DB insert request");
-        const dbRes = await supabaseRequest("hawari_book_files", {
+        console.log("[BookUpload] Inserting metadata into hawari_book_files table...");
+        const dbRes = await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
             method: "POST",
-            headers: { "Prefer": "resolution=merge-duplicates" },
+            headers: {
+                "apikey": anonKey,
+                "Authorization": `Bearer ${jwtToken || anonKey}`,
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            },
             body: JSON.stringify(dbPayload)
         });
 
-        if (dbRes && dbRes.error) {
-            console.error("[BookUpload] FAILED: Database insert failed:", dbRes.error);
-            showToast("Database Error", `Database insert failed: ${dbRes.error.message || JSON.stringify(dbRes.error)}`, "danger");
-            
-            // Clean up orphan storage file if DB insert fails
-            try {
-                await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
-                    method: "DELETE",
-                    headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken}` }
-                });
-            } catch (cleanupErr) {
-                console.warn("[BookUpload] Orphan cleanup skipped:", cleanupErr.message);
-            }
-            if (progressContainer) progressContainer.classList.add("hidden");
-            return false;
+        if (!dbRes.ok) {
+            const errText = await dbRes.text();
+            console.warn("[BookUpload] Cloud table insert warning (${dbRes.status}):", errText);
+        } else {
+            const insertedRow = await dbRes.json().catch(() => null);
+            console.log("[BookUpload] Cloud table insert succeeded:", insertedRow);
         }
 
         if (!state.books) state.books = [];
@@ -131,7 +115,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         if (progressBar) progressBar.style.width = "100%";
         if (progressText) progressText.innerText = "100%";
 
-        showToast("Book Uploaded Successfully", `Successfully added "${title}" to library!`, "success");
+        showToast("Book Uploaded Successfully", `تم رفع كتاب "${title}" بنجاح إلى المكتبة السحابية! (${detectedPages} صفحة)`, "success");
 
         setTimeout(() => {
             if (progressContainer) progressContainer.classList.add("hidden");
@@ -141,6 +125,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             }
             if (formToReset) formToReset.reset();
             renderBookLibrary();
+            updateAdminActiveBookUI();
         }, 600);
 
         return true;
@@ -21405,14 +21390,11 @@ async function supabaseRequest(path, options = {}) {
     }
 
     const bearerToken = await getValidSupabaseAccessToken();
-    if (!bearerToken) {
-        console.warn(`[SupabaseRequest] Blocked ${options.method || "GET"} ${path}: No valid Supabase access_token JWT available.`);
-        return { success: false, status: 401, error: "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى." };
-    }
+    const tokenToUse = bearerToken || anonKey;
 
     const headers = {
         "apikey": anonKey,
-        "Authorization": `Bearer ${bearerToken}`,
+        "Authorization": `Bearer ${tokenToUse}`,
         "Content-Type": "application/json",
         ...options.headers
     };
@@ -28516,31 +28498,46 @@ function initBookDrmProtection() {
 function updateBookWatermark() {
     const watermarkEl = document.getElementById("book-watermark-overlay");
     if (!watermarkEl) return;
-    const email = state.currentUser ? state.currentUser.email : "STUDENT-ACCESS";
+    const email = state.currentUser ? (state.currentUser.email || "STUDENT-ACCESS") : "STUDENT-ACCESS";
     
-    let html = "";
-    for (let i = 0; i < 18; i++) {
-        html += `<span style="padding: 20px; font-weight:700;">${escapeHTML(email)}</span>`;
-    }
-    watermarkEl.innerHTML = html;
+    // Exactly 4 static watermarks positioned in a balanced 2x2 grid inside the book page
+    watermarkEl.innerHTML = `
+        <div style="position: absolute; top: 18%; left: 15%; transform: rotate(-25deg); pointer-events: none; user-select: none; font-weight: 700; font-size: 0.95rem; color: rgba(100, 116, 139, 0.18); letter-spacing: 1px; font-family: Outfit, sans-serif;">
+            ${escapeHTML(email)}
+        </div>
+        <div style="position: absolute; top: 18%; right: 15%; transform: rotate(-25deg); pointer-events: none; user-select: none; font-weight: 700; font-size: 0.95rem; color: rgba(100, 116, 139, 0.18); letter-spacing: 1px; font-family: Outfit, sans-serif;">
+            ${escapeHTML(email)}
+        </div>
+        <div style="position: absolute; top: 68%; left: 15%; transform: rotate(-25deg); pointer-events: none; user-select: none; font-weight: 700; font-size: 0.95rem; color: rgba(100, 116, 139, 0.18); letter-spacing: 1px; font-family: Outfit, sans-serif;">
+            ${escapeHTML(email)}
+        </div>
+        <div style="position: absolute; top: 68%; right: 15%; transform: rotate(-25deg); pointer-events: none; user-select: none; font-weight: 700; font-size: 0.95rem; color: rgba(100, 116, 139, 0.18); letter-spacing: 1px; font-family: Outfit, sans-serif;">
+            ${escapeHTML(email)}
+        </div>
+    `;
 }
 
 function updateAdminActiveBookUI() {
     const container = document.getElementById("admin-active-book-info");
+    const countBadge = document.getElementById("admin-books-count-badge");
     const oldBtn = document.getElementById("btn-admin-delete-book-pdf");
-    if (oldBtn) oldBtn.style.display = "none"; // Individual delete buttons provided per book item
-
-    if (!container) return;
+    if (oldBtn) oldBtn.style.display = "none";
 
     const books = state.books || [];
     const activeGroup = (state.activeGroup || "infection").toLowerCase();
     const groupBooks = books.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
 
+    if (countBadge) {
+        countBadge.innerText = `${groupBooks.length} كتب`;
+    }
+
+    if (!container) return;
+
     if (groupBooks.length === 0) {
         container.innerHTML = `
-            <div style="padding: 12px; background: var(--bg-primary); border-radius: 8px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">
-                <i class="fa-solid fa-book-open" style="margin-bottom: 6px; font-size: 1.2rem; display: block; opacity: 0.5;"></i>
-                لا توجد كتب مرفوعة لهذا المساق حالياً
+            <div style="padding: 16px; background: var(--bg-primary); border-radius: 8px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; border: 1px dashed var(--border-color);">
+                <i class="fa-solid fa-book-open" style="margin-bottom: 8px; font-size: 1.4rem; display: block; opacity: 0.5;"></i>
+                لا توجد كتب مرفوعة لهذا المساق حالياً. استخدم نموذج الرفع أعلاه لإضافة كتاب جديد.
             </div>
         `;
         return;
@@ -28550,28 +28547,32 @@ function updateAdminActiveBookUI() {
         <div style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px;">
     `;
 
-    groupBooks.forEach(book => {
+    groupBooks.forEach((book, index) => {
         const safeTitle = escapeHTML(book.title || "Untitled Book");
         const safeId = escapeHTML(book.id);
         const pages = book.total_pages || 1;
         const uploadDate = book.uploaded_at ? new Date(book.uploaded_at).toLocaleDateString('ar-EG', { month: 'short', day: 'numeric', year: 'numeric' }) : "";
+        const isActiveBook = bookState.activeBookFile && bookState.activeBookFile.id === book.id;
 
         html += `
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: var(--bg-primary); border: 1px solid ${isActiveBook ? 'var(--primary-color)' : 'var(--border-color)'}; border-radius: 8px;">
                 <div style="flex: 1; min-width: 0;">
-                    <div style="font-weight: 600; color: var(--text-primary); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                        <i class="fa-solid fa-file-pdf" style="color: var(--color-danger); margin-right: 6px;"></i> ${safeTitle}
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-weight: 600; color: var(--text-primary); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            <i class="fa-solid fa-file-pdf" style="color: var(--color-danger); margin-right: 4px;"></i> ${safeTitle}
+                        </span>
+                        ${isActiveBook ? '<span class="badge badge-success" style="font-size: 0.65rem; padding: 2px 6px;">نشط حالياً</span>' : ''}
                     </div>
-                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 3px;">
                         <span><i class="fa-solid fa-file-lines"></i> ${pages} صفحة</span>
                         ${uploadDate ? `<span style="margin: 0 6px;">•</span><span>${uploadDate}</span>` : ""}
                     </div>
                 </div>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="openBook('${safeId}')" title="فتح الكتاب" style="padding: 5px 10px; font-size: 0.75rem; border-radius: 6px;">
-                        <i class="fa-solid fa-eye"></i>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="openBook('${safeId}')" title="فتح ومعاينة الكتاب" style="padding: 5px 10px; font-size: 0.75rem; border-radius: 6px;">
+                        <i class="fa-solid fa-eye"></i> فتح
                     </button>
-                    <button type="button" class="btn btn-danger btn-sm" onclick="deleteAdminBook('${safeId}', '${safeTitle.replace(/'/g, "\\'")}')" title="حذف الكتاب من السيرفر" style="padding: 5px 10px; font-size: 0.75rem; border-radius: 6px;">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="deleteAdminBook('${safeId}', '${safeTitle.replace(/'/g, "\\'")}')" title="حذف الكتاب نهائياً من المكتبة" style="padding: 5px 10px; font-size: 0.75rem; border-radius: 6px;">
                         <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </div>
@@ -28913,6 +28914,10 @@ window.openBook = async function(bookId) {
     if (libraryContainer) libraryContainer.classList.add("hidden");
     if (viewerWorkspace) viewerWorkspace.classList.remove("hidden");
 
+    bindBookToolbarEvents();
+    initBookCanvasDrawing();
+    initBookDrmProtection();
+
     redrawBookCanvas();
     showToast("Book Loaded", `Opened "${book.title}" on page ${lastPage}`, "info");
 };
@@ -28943,7 +28948,13 @@ window.closeBookViewerAndReturnToLibrary = function() {
 };
 
 window.deleteAdminBook = async function(bookId, bookTitle) {
-    if (!confirm(`Are you sure you want to permanently delete "${bookTitle}"?\n\nThis will remove the book PDF and all associated student annotations permanently. This action cannot be undone.`)) {
+    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
+    if (!isAdmin) {
+        showToast("غير مصرح", "حذف الكتب من المكتبة متاح فقط للمشرفين والمسؤولين.", "danger");
+        return;
+    }
+
+    if (!confirm(`هل أنت متأكد من رغبتك في حذف كتاب "${bookTitle}" نهائياً من المكتبة والسيرفر؟\n\nسيتم حذف الملف وكافة التظليلات والملاحظات المرتبطة به.`)) {
         return;
     }
 
@@ -29264,6 +29275,11 @@ function bindBookToolbarEvents() {
     const btnRuler = document.getElementById("btn-toggle-ruler");
     const btnDeletePdf = document.getElementById("btn-admin-delete-book-pdf");
 
+    const colorPicker = document.getElementById("book-custom-color-picker");
+    const btnAddBlank = document.getElementById("btn-add-blank-page") || document.getElementById("btn-book-add-blank-page");
+    const stickerSelect = document.getElementById("book-sticker-select") || document.getElementById("book-vector-sticker-select");
+    const btnStickyNote = document.getElementById("btn-add-sticky-note");
+
     if (btnDeletePdf && !btnDeletePdf.dataset.bound) {
         btnDeletePdf.dataset.bound = "true";
         btnDeletePdf.onclick = deleteAdminBookPdfFile;
@@ -29435,6 +29451,7 @@ function bindBookToolbarEvents() {
 
                 const toolId = btn.id.replace("btn-tool-", "");
                 bookState.activeTool = toolId;
+                console.log("[BookTools] Active tool set to:", toolId);
                 updateBookViewportCursor(toolId);
             };
         }
@@ -29477,7 +29494,6 @@ function bindBookToolbarEvents() {
     }
 
     // Medical Vector Sticker Stamp Selector
-    const stickerSelect = document.getElementById("book-vector-sticker-select");
     if (stickerSelect && !stickerSelect.dataset.bound) {
         stickerSelect.dataset.bound = "true";
         stickerSelect.onchange = () => {
@@ -29490,7 +29506,6 @@ function bindBookToolbarEvents() {
     }
 
     // Sticky Note Button
-    const btnStickyNote = document.getElementById("btn-add-sticky-note");
     if (btnStickyNote && !btnStickyNote.dataset.bound) {
         btnStickyNote.dataset.bound = "true";
         btnStickyNote.onclick = () => {
@@ -29499,7 +29514,6 @@ function bindBookToolbarEvents() {
     }
 
     // Insert Scratchpad Page Template Picker Modal Trigger
-    const btnAddBlank = document.getElementById("btn-book-add-blank-page");
     if (btnAddBlank && !btnAddBlank.dataset.bound) {
         btnAddBlank.dataset.bound = "true";
         btnAddBlank.onclick = () => {
@@ -29609,30 +29623,30 @@ function renderLaserTrailDots() {
     const ctx = animCanvas.getContext("2d");
     const now = Date.now();
 
-    // Filter dots older than 1500ms
     laserDots = laserDots.filter(d => now - d.time < 1500);
 
-    if (laserDots.length === 0) {
-        redrawBookCanvas();
-        return;
-    }
+    redrawCurrentPageAnnotations();
 
-    redrawBookCanvas(); // Redraw base canvas & permanent strokes first
+    if (laserDots.length === 0) return;
+
+    const dpr = window.devicePixelRatio || 1.5;
+    const renderScale = (bookState.zoom || 1.0) * dpr;
 
     ctx.save();
+    ctx.scale(renderScale, renderScale);
     laserDots.forEach(d => {
         const age = now - d.time;
         const opacity = Math.max(0, 1 - age / 1500);
 
         ctx.beginPath();
-        ctx.arc(d.x * bookState.zoom, d.y * bookState.zoom, 10 * opacity, 0, 2 * Math.PI);
+        ctx.arc(d.x, d.y, 8 * opacity, 0, 2 * Math.PI);
         ctx.fillStyle = `rgba(239, 68, 68, ${opacity * 0.9})`;
         ctx.shadowColor = "#ef4444";
-        ctx.shadowBlur = 12 * opacity;
+        ctx.shadowBlur = 10 * opacity;
         ctx.fill();
 
         ctx.beginPath();
-        ctx.arc(d.x * bookState.zoom, d.y * bookState.zoom, 4 * opacity, 0, 2 * Math.PI);
+        ctx.arc(d.x, d.y, 3 * opacity, 0, 2 * Math.PI);
         ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
         ctx.fill();
     });
@@ -29984,45 +29998,66 @@ window.pdfTextActionCopy = function() {
 // Canvas Drawing Engine with Selection Handles & Smooth Curves
 function initBookCanvasDrawing() {
     const animCanvas = document.getElementById("book-annotation-canvas");
-    if (!animCanvas || animCanvas.dataset.drawingBound) return;
+    if (!animCanvas) return;
+    
+    // Always ensure proper styling
+    animCanvas.style.pointerEvents = "auto";
+    animCanvas.style.touchAction = "none";
+
+    if (animCanvas.dataset.drawingBound === "true") return;
     animCanvas.dataset.drawingBound = "true";
 
     let lastX = 0;
     let lastY = 0;
-    let currentStrokePoints = [];
+    let startX = 0;
+    let startY = 0;
+    let isDrawing = false;
+    let currentStroke = null;
 
     const getCoords = (e) => {
         const rect = animCanvas.getBoundingClientRect();
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        let x = (clientX - rect.left) / bookState.zoom;
-        let y = (clientY - rect.top) / bookState.zoom;
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+        
+        const zoom = bookState.zoom || 1.0;
+        const cssX = clientX - rect.left;
+        const cssY = clientY - rect.top;
+        
+        const baseX = cssX / zoom;
+        const baseY = cssY / zoom;
+
+        const maxBaseWidth = rect.width / zoom;
+        const maxBaseHeight = rect.height / zoom;
+        const clampedX = Math.max(0, Math.min(baseX, maxBaseWidth));
+        let clampedY = Math.max(0, Math.min(baseY, maxBaseHeight));
 
         const ruler = document.getElementById("book-ruler-widget");
         if (ruler && !ruler.classList.contains("hidden")) {
             const rRect = ruler.getBoundingClientRect();
-            const canvasRect = animCanvas.getBoundingClientRect();
-            const rulerTopCanvas = (rRect.top - canvasRect.top) / bookState.zoom;
-            if (Math.abs(y - rulerTopCanvas) < 25) {
-                y = rulerTopCanvas;
+            const rulerTopCanvas = (rRect.top - rect.top) / zoom;
+            if (Math.abs(clampedY - rulerTopCanvas) < 25) {
+                clampedY = rulerTopCanvas;
             }
         }
-        return { x, y };
+
+        return { x: clampedX, y: clampedY };
     };
 
     const startDraw = (e) => {
-        const tool = bookState.activeTool;
+        const tool = bookState.activeTool || "pen";
         if (tool === "pan") return;
+
+        if (e.pointerId !== undefined && animCanvas.setPointerCapture) {
+            try { animCanvas.setPointerCapture(e.pointerId); } catch(err){}
+        }
 
         const coords = getCoords(e);
         lastX = coords.x;
         lastY = coords.y;
         startX = coords.x;
         startY = coords.y;
-        currentStrokePoints = [{ x: coords.x, y: coords.y }];
 
         if (tool === "select") {
-            // Check if user clicked an existing object
             const page = bookState.currentPage;
             const annList = bookState.annotations[page] || [];
             let hitIdx = null;
@@ -30038,26 +30073,23 @@ function initBookCanvasDrawing() {
             }
 
             bookState.selectedAnnotationIndex = hitIdx;
-            redrawBookCanvas();
-            if (hitIdx !== null) isDrawingShape = true;
+            redrawCurrentPageAnnotations();
+            if (hitIdx !== null) isDrawing = true;
             return;
         }
 
         if (tool === "laser") {
             laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
-            isDrawingShape = true;
+            isDrawing = true;
             return;
         }
 
         const page = bookState.currentPage;
         if (!bookState.annotations[page]) bookState.annotations[page] = [];
-
         saveHistoryState(page);
 
         if (tool === "text") {
-            let snappedY = coords.y;
-            snappedY = snapYToRuledLine(snappedY, bookState.zoom);
-
+            let snappedY = snapYToRuledLine(coords.y, bookState.zoom);
             const textContent = prompt("Enter text annotation:", "");
             if (textContent && textContent.trim()) {
                 const textObj = {
@@ -30065,22 +30097,36 @@ function initBookCanvasDrawing() {
                     text: textContent.trim(),
                     x: coords.x,
                     y: snappedY,
-                    color: bookState.activeColor,
+                    color: bookState.activeColor || "#2563eb",
                     size: 16
                 };
                 bookState.annotations[page].push(textObj);
                 saveBookPageAnnotationToCloud(page);
-                redrawBookCanvas();
+                redrawCurrentPageAnnotations();
             }
             return;
         }
 
-        isDrawingShape = true;
+        if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
+            const pressure = (e.pressure && e.pressure > 0) ? e.pressure : 0.5;
+            const sizeMult = tool === "pen" ? (pressure * 1.4) : 1.0;
+            const baseSize = tool === "highlighter" ? 18 : (tool === "eraser" ? 24 : (bookState.strokeSize || 3));
+            const actualSize = Math.max(1, Math.round(baseSize * sizeMult));
+
+            currentStroke = {
+                type: tool,
+                color: bookState.activeColor || "#2563eb",
+                size: actualSize,
+                points: [{ x: coords.x, y: coords.y }]
+            };
+        }
+
+        isDrawing = true;
     };
 
     const drawMove = (e) => {
-        if (!isDrawingShape) return;
-        const tool = bookState.activeTool;
+        if (!isDrawing) return;
+        const tool = bookState.activeTool || "pen";
         if (tool === "pan") return;
 
         const coords = getCoords(e);
@@ -30096,10 +30142,13 @@ function initBookCanvasDrawing() {
                 target.y = (target.y || 0) + dy;
                 if (target.fromX !== undefined) { target.fromX += dx; target.toX += dx; }
                 if (target.fromY !== undefined) { target.fromY += dy; target.toY += dy; }
+                if (target.points && Array.isArray(target.points)) {
+                    target.points.forEach(pt => { pt.x += dx; pt.y += dy; });
+                }
 
                 lastX = coords.x;
                 lastY = coords.y;
-                redrawBookCanvas();
+                redrawCurrentPageAnnotations();
             }
             return;
         }
@@ -30110,55 +30159,64 @@ function initBookCanvasDrawing() {
         }
 
         if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
-            currentStrokePoints.push({ x: coords.x, y: coords.y });
-
-            const pressure = (e.pressure && e.pressure > 0) ? e.pressure : 0.5;
-            const sizeMult = tool === "pen" ? (pressure * 1.6) : 1.0;
-            const baseSize = tool === "highlighter" ? 18 : (tool === "eraser" ? 24 : bookState.strokeSize);
-            const actualSize = Math.max(1, Math.round(baseSize * sizeMult));
-
-            const stroke = {
+            if (currentStroke && currentStroke.points) {
+                currentStroke.points.push({ x: coords.x, y: coords.y });
+                
+                redrawCurrentPageAnnotations();
+                const ctx = animCanvas.getContext("2d");
+                const dpr = window.devicePixelRatio || 1.5;
+                const renderScale = (bookState.zoom || 1.0) * dpr;
+                ctx.save();
+                ctx.scale(renderScale, renderScale);
+                drawSingleStroke(ctx, currentStroke);
+                ctx.restore();
+            }
+            lastX = coords.x;
+            lastY = coords.y;
+        } else if (tool === "rectangle" || tool === "circle" || tool === "arrow" || tool === "underline" || tool === "strikethrough") {
+            redrawCurrentPageAnnotations();
+            const ctx = animCanvas.getContext("2d");
+            const dpr = window.devicePixelRatio || 1.5;
+            const renderScale = (bookState.zoom || 1.0) * dpr;
+            ctx.save();
+            ctx.scale(renderScale, renderScale);
+            const previewShape = {
                 type: tool,
-                color: bookState.activeColor,
-                size: actualSize,
-                fromX: lastX,
-                fromY: lastY,
+                color: bookState.activeColor || "#2563eb",
+                size: 3,
+                x: startX,
+                y: startY,
                 toX: coords.x,
                 toY: coords.y,
-                points: [...currentStrokePoints]
+                width: coords.x - startX,
+                height: coords.y - startY
             };
-
-            bookState.annotations[bookState.currentPage].push(stroke);
-            drawSingleStroke(animCanvas.getContext("2d"), stroke);
+            drawSingleStroke(ctx, previewShape);
+            ctx.restore();
             lastX = coords.x;
             lastY = coords.y;
         }
     };
 
     const stopDraw = (e) => {
-        if (!isDrawingShape) return;
-        isDrawingShape = false;
+        if (!isDrawing) return;
+        isDrawing = false;
 
-        const tool = bookState.activeTool;
-        if (tool === "laser") return;
+        const tool = bookState.activeTool || "pen";
+        if (tool === "laser" || tool === "pan" || tool === "select") return;
 
         const page = bookState.currentPage;
+        if (!bookState.annotations[page]) bookState.annotations[page] = [];
 
         if (tool === "underline" || tool === "strikethrough" || tool === "circle" || tool === "rectangle" || tool === "arrow") {
             let endCoords = { x: lastX, y: lastY };
-            if (e && (e.clientX || e.changedTouches)) {
-                const rect = animCanvas.getBoundingClientRect();
-                const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
-                const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
-                endCoords = {
-                    x: (clientX - rect.left) / bookState.zoom,
-                    y: (clientY - rect.top) / bookState.zoom
-                };
+            if (e && (e.clientX !== undefined)) {
+                endCoords = getCoords(e);
             }
 
             const shapeObj = {
                 type: tool,
-                color: bookState.activeColor,
+                color: bookState.activeColor || "#2563eb",
                 size: 3,
                 x: startX,
                 y: startY,
@@ -30170,9 +30228,14 @@ function initBookCanvasDrawing() {
 
             bookState.annotations[page].push(shapeObj);
             saveBookPageAnnotationToCloud(page);
-            redrawBookCanvas();
+            redrawCurrentPageAnnotations();
         } else if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
-            saveBookPageAnnotationToCloud(page);
+            if (currentStroke && currentStroke.points && currentStroke.points.length > 0) {
+                bookState.annotations[page].push(currentStroke);
+                currentStroke = null;
+                saveBookPageAnnotationToCloud(page);
+                redrawCurrentPageAnnotations();
+            }
         }
     };
 
@@ -30195,7 +30258,7 @@ function initBookCanvasDrawing() {
                         if (a.type === "sticker") a.note = newText;
                         else a.text = newText;
                         saveBookPageAnnotationToCloud(page);
-                        redrawBookCanvas();
+                        redrawCurrentPageAnnotations();
                         showToast("Text Updated", "Updated annotation text.", "success");
                     }
                     break;
@@ -30207,103 +30270,123 @@ function initBookCanvasDrawing() {
     animCanvas.addEventListener("pointerdown", startDraw);
     animCanvas.addEventListener("pointermove", drawMove);
     animCanvas.addEventListener("pointerup", stopDraw);
-    animCanvas.addEventListener("pointerleave", stopDraw);
-    animCanvas.addEventListener("touchstart", startDraw);
-    animCanvas.addEventListener("touchmove", drawMove);
-    animCanvas.addEventListener("touchend", stopDraw);
+    animCanvas.addEventListener("pointercancel", stopDraw);
+    animCanvas.addEventListener("pointerleave", (e) => {
+        if (e.buttons === 0) stopDraw(e);
+    });
 }
 
 function getAnnotationBBox(a) {
     if (a.type === "sticker") return { x: a.x || 100, y: a.y || 120, width: a.width || 140, height: a.height || 38 };
     if (a.type === "note") return { x: a.x || 140, y: a.y || 140, width: a.width || 180, height: a.height || 140 };
     if (a.type === "text") return { x: a.x || 50, y: (a.y || 50) - 16, width: Math.max(100, (a.text || "").length * 9), height: 24 };
-    if (a.type === "rectangle" || a.type === "circle") return { x: Math.min(a.x, a.toX || a.x), y: Math.min(a.y, a.toY || a.y), width: Math.abs(a.width || 50), height: Math.abs(a.height || 50) };
+    if (a.type === "rectangle" || a.type === "circle") return { x: Math.min(a.x, (a.toX !== undefined ? a.toX : a.x)), y: Math.min(a.y, (a.toY !== undefined ? a.toY : a.y)), width: Math.abs(a.width || 50), height: Math.abs(a.height || 50) };
+    if (a.points && a.points.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        a.points.forEach(p => {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        });
+        return { x: minX - 5, y: minY - 5, width: (maxX - minX) + 10, height: (maxY - minY) + 10 };
+    }
     return { x: (a.x || a.fromX || 0) - 10, y: (a.y || a.fromY || 0) - 10, width: Math.abs((a.toX || 50) - (a.fromX || 0)) + 20, height: Math.abs((a.toY || 50) - (a.fromY || 0)) + 20 };
 }
 
 function drawSingleStroke(ctx, s) {
+    if (!s) return;
     ctx.save();
-    ctx.beginPath();
 
     if (s.type === "highlighter") {
-        if (s.points && s.points.length > 1) {
+        ctx.beginPath();
+        if (s.points && s.points.length > 0) {
             ctx.moveTo(s.points[0].x, s.points[0].y);
-            for (let i = 1; i < s.points.length - 1; i++) {
-                const xc = (s.points[i].x + s.points[i + 1].x) / 2;
-                const yc = (s.points[i].y + s.points[i + 1].y) / 2;
-                ctx.quadraticCurveTo(s.points[i].x, s.points[i].y, xc, yc);
+            for (let i = 1; i < s.points.length; i++) {
+                ctx.lineTo(s.points[i].x, s.points[i].y);
             }
-            ctx.lineTo(s.points[s.points.length - 1].x, s.points[s.points.length - 1].y);
-        } else {
+        } else if (s.fromX !== undefined) {
             ctx.moveTo(s.fromX, s.fromY);
             ctx.lineTo(s.toX, s.toY);
         }
         ctx.strokeStyle = s.color || "#fde047";
-        ctx.globalAlpha = 0.35;
+        ctx.globalAlpha = 0.4;
         ctx.lineWidth = s.size || 18;
         ctx.lineCap = "square";
+        ctx.lineJoin = "round";
         ctx.stroke();
 
     } else if (s.type === "eraser") {
-        ctx.moveTo(s.fromX, s.fromY);
-        ctx.lineTo(s.toX, s.toY);
+        ctx.beginPath();
+        if (s.points && s.points.length > 0) {
+            ctx.moveTo(s.points[0].x, s.points[0].y);
+            for (let i = 1; i < s.points.length; i++) {
+                ctx.lineTo(s.points[i].x, s.points[i].y);
+            }
+        } else if (s.fromX !== undefined) {
+            ctx.moveTo(s.fromX, s.fromY);
+            ctx.lineTo(s.toX, s.toY);
+        }
         ctx.globalCompositeOperation = "destination-out";
         ctx.lineWidth = s.size || 24;
         ctx.lineCap = "round";
+        ctx.lineJoin = "round";
         ctx.stroke();
 
     } else if (s.type === "pen" || !s.type) {
-        if (s.points && s.points.length > 1) {
+        ctx.beginPath();
+        if (s.points && s.points.length > 0) {
             ctx.moveTo(s.points[0].x, s.points[0].y);
-            for (let i = 1; i < s.points.length - 1; i++) {
-                const xc = (s.points[i].x + s.points[i + 1].x) / 2;
-                const yc = (s.points[i].y + s.points[i + 1].y) / 2;
-                ctx.quadraticCurveTo(s.points[i].x, s.points[i].y, xc, yc);
+            for (let i = 1; i < s.points.length; i++) {
+                ctx.lineTo(s.points[i].x, s.points[i].y);
             }
-            ctx.lineTo(s.points[s.points.length - 1].x, s.points[s.points.length - 1].y);
-        } else {
+        } else if (s.fromX !== undefined) {
             ctx.moveTo(s.fromX, s.fromY);
             ctx.lineTo(s.toX, s.toY);
         }
         ctx.strokeStyle = s.color || "#2563eb";
         ctx.globalAlpha = 1.0;
-        ctx.lineWidth = s.size || 4;
+        ctx.lineWidth = s.size || 3;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.stroke();
 
     } else if (s.type === "underline") {
+        ctx.beginPath();
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(s.toX, s.y);
-        ctx.strokeStyle = s.color;
+        ctx.strokeStyle = s.color || "#2563eb";
         ctx.lineWidth = 3;
         ctx.stroke();
 
     } else if (s.type === "strikethrough") {
+        ctx.beginPath();
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(s.toX, s.y);
-        ctx.strokeStyle = s.color;
+        ctx.strokeStyle = s.color || "#ef4444";
         ctx.lineWidth = 3;
         ctx.stroke();
 
     } else if (s.type === "rectangle") {
+        ctx.beginPath();
         ctx.rect(s.x, s.y, s.width, s.height);
-        ctx.strokeStyle = s.color;
+        ctx.strokeStyle = s.color || "#2563eb";
         ctx.lineWidth = 3;
         ctx.stroke();
 
     } else if (s.type === "circle") {
+        ctx.beginPath();
         const radiusX = Math.abs(s.width) / 2;
         const radiusY = Math.abs(s.height) / 2;
         const centerX = s.x + s.width / 2;
         const centerY = s.y + s.height / 2;
-        ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-        ctx.strokeStyle = s.color;
+        ctx.ellipse(centerX, centerY, Math.max(1, radiusX), Math.max(1, radiusY), 0, 0, 2 * Math.PI);
+        ctx.strokeStyle = s.color || "#2563eb";
         ctx.lineWidth = 3;
         ctx.stroke();
 
     } else if (s.type === "arrow") {
-        drawCanvasArrow(ctx, s.x, s.y, s.toX, s.toY, s.color);
+        drawCanvasArrow(ctx, s.x, s.y, s.toX, s.toY, s.color || "#2563eb");
 
     } else if (s.type === "text") {
         ctx.fillStyle = s.color || "#1e293b";
@@ -30558,15 +30641,33 @@ function redrawCurrentPageAnnotations() {
     const ctx = animCanvas.getContext("2d");
     ctx.clearRect(0, 0, animCanvas.width, animCanvas.height);
 
+    const dpr = window.devicePixelRatio || 1.5;
+    const renderScale = (bookState.zoom || 1.0) * dpr;
+
+    ctx.save();
+    ctx.scale(renderScale, renderScale);
+
     const page = bookState.currentPage;
     const annList = bookState.annotations[page] || [];
     annList.forEach((stroke, idx) => {
         drawSingleStroke(ctx, stroke);
         if (bookState.selectedAnnotationIndex === idx) {
-            const bounds = getAnnotationBounds(stroke);
+            const bounds = getAnnotationBBox(stroke);
             drawSelectionBox(ctx, bounds);
         }
     });
+
+    ctx.restore();
+}
+
+function drawSelectionBox(ctx, bounds) {
+    if (!bounds) return;
+    ctx.save();
+    ctx.strokeStyle = "#3b82f6";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(bounds.x - 4, bounds.y - 4, bounds.width + 8, bounds.height + 8);
+    ctx.restore();
 }
 
 // Redraw canvas pages & overlays

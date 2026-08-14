@@ -879,31 +879,30 @@
                                     📏 <span>RULER</span> | 0 · · 5 · · 10 · · 15 · · 20 · · 25 · · 30 cm
                                 </div>
 
-                                <!-- Floating Watermark Overlay (DRM Protection) -->
-                                <div id="book-watermark-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; opacity: 0.12; font-size: 1.1rem; font-weight: 700; color: #ffffff; display: flex; flex-wrap: wrap; justify-content: space-around; align-content: space-around; transform: rotate(-25deg); user-select: none;">
-                                    <!-- Populated dynamically with student email -->
-                                </div>
-
-                                <!-- Dynamic Page Lock Overlay (For Page > 10 Preview) -->
-                                <div id="book-page-lock-overlay" class="hidden" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 15; background: rgba(11, 15, 25, 0.92); backdrop-filter: blur(8px); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px;">
-                                    <div style="width: 70px; height: 70px; border-radius: 50%; background: var(--primary-color-soft); display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
-                                        <i class="fa-solid fa-lock" style="font-size: 2rem; color: var(--primary-color);"></i>
-                                    </div>
-                                    <h3 style="font-size: 1.6rem; font-weight: 700; color: #ffffff; margin-bottom: 10px;">Free 10-Page Preview Limit Reached</h3>
-                                    <p style="color: var(--text-muted); max-width: 480px; margin-bottom: 24px; line-height: 1.6; font-size: 0.95rem;">
-                                        You have reached the end of the free 10-page preview. Request full book access from the admin to unlock all chapters and pages.
-                                    </p>
-                                    <button class="btn btn-primary" onclick="window.location.hash='#admin-panel'" style="padding: 10px 24px; border-radius: 8px;">
-                                        Contact Admin for Full Access
-                                    </button>
-                                </div>
-
-                                <!-- Interactive Base Canvas & Drawing Canvas Stack -->
+                                <!-- Interactive Base Canvas, Annotations & Locked Watermark Stack -->
                                 <div id="book-canvas-stack" style="position: relative; display: inline-block; box-shadow: 0 10px 30px rgba(0,0,0,0.3); border-radius: 8px; overflow: hidden; background: #ffffff;">
                                     <!-- Base PDF Page Renderer Canvas -->
                                     <canvas id="book-pdf-canvas" style="display: block; width: 100%; height: auto;"></canvas>
+                                    
+                                    <!-- Static 4-Instance Watermark Overlay (DRM Protection Locked to Page) -->
+                                    <div id="book-watermark-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; user-select: none; overflow: hidden;"></div>
+
                                     <!-- Interactive Drawing Overlay Canvas -->
-                                    <canvas id="book-annotation-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: default;"></canvas>
+                                    <canvas id="book-annotation-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; cursor: default; touch-action: none;"></canvas>
+
+                                    <!-- Dynamic Page Lock Overlay (For Page > 10 Preview) -->
+                                    <div id="book-page-lock-overlay" class="hidden" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 15; background: rgba(11, 15, 25, 0.92); backdrop-filter: blur(8px); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; box-sizing: border-box;">
+                                        <div style="width: 70px; height: 70px; border-radius: 50%; background: var(--primary-color-soft); display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+                                            <i class="fa-solid fa-lock" style="font-size: 2rem; color: var(--primary-color);"></i>
+                                        </div>
+                                        <h3 style="font-size: 1.6rem; font-weight: 700; color: #ffffff; margin-bottom: 10px;">Free 10-Page Preview Limit Reached</h3>
+                                        <p style="color: var(--text-muted); max-width: 480px; margin-bottom: 24px; line-height: 1.6; font-size: 0.95rem;">
+                                            You have reached the end of the free 10-page preview. Request full book access from the admin to unlock all chapters and pages.
+                                        </p>
+                                        <button class="btn btn-primary" onclick="window.location.hash='#admin-panel'" style="padding: 10px 24px; border-radius: 8px;">
+                                            Contact Admin for Full Access
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1595,16 +1594,18 @@
                             </div>
                         </div>
 
-                        <!-- 3. Active PDF Book File Card -->
-                        <div class="grid-card" style="border: 1px dashed var(--border-color);">
-                            <h3 style="font-size: 1rem; color: var(--text-primary); margin-bottom: 8px;"><i class="fa-solid fa-file-pdf" style="color: var(--color-danger);"></i> Active PDF Book File</h3>
-                            <div id="admin-active-book-info" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">
-                                <div><strong>Title:</strong> <span id="admin-active-book-title-lbl">لا يوجد كتاب نشط حاليًا</span></div>
-                                <div><strong>Pages:</strong> <span id="admin-active-book-pages-lbl">0</span> pages</div>
+                        <!-- 3. Active PDF Book Files Card (Lists all books in the track) -->
+                        <div class="grid-card" style="border: 1px solid var(--border-color);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <h3 style="font-size: 1rem; color: var(--text-primary); margin: 0;">
+                                    <i class="fa-solid fa-book-bookmark" style="color: var(--primary-color);"></i> كتب المساق في المكتبة
+                                </h3>
+                                <span class="badge badge-primary" id="admin-books-count-badge">0 كتب</span>
                             </div>
-                            <button id="btn-admin-delete-book-pdf" class="btn btn-danger btn-outline btn-block" style="padding: 8px; font-size: 0.8rem;">
-                                <i class="fa-solid fa-trash-can"></i> Delete Active PDF Book
-                            </button>
+                            <p class="section-desc" style="margin-bottom: 12px; font-size: 0.8rem;">قائمة الكتب المتاحة للطلاب في هذا المساق مع إمكانية المعاينة والحذف للإدارة.</p>
+                            <div id="admin-active-book-info" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+                                <!-- Dynamically rendered list of all uploaded books for this course track -->
+                            </div>
                         </div>
 
                     </div>

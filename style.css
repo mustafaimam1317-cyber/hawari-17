@@ -2770,19 +2770,9 @@ body.group-dermatology.dark-theme {
 }
 
 #book-watermark-overlay {
-    animation: watermarkFloat 14s ease-in-out infinite alternate;
-}
-
-@keyframes watermarkFloat {
-    0% {
-        transform: rotate(-25deg) translate(0px, 0px);
-    }
-    50% {
-        transform: rotate(-25deg) translate(30px, 20px);
-    }
-    100% {
-        transform: rotate(-25deg) translate(-20px, -15px);
-    }
+    animation: none !important;
+    transform: none !important;
+    pointer-events: none !important;
 }
 
 /* ==========================================================================

@@ -22120,13 +22120,14 @@ function initAuthFlow() {
                 return;
             }
 
-            // Create auto-approved account immediately
+            // Create pending account awaiting admin approval
+            const isTargetAdmin = ALLOWED_ADMIN_EMAILS.includes(currentAuthenticatingEmail.trim().toLowerCase());
             const newUser = {
                 email: currentAuthenticatingEmail,
                 password: sha256Sync(password),
                 displayName: name,
-                status: "approved",
-                role: ALLOWED_ADMIN_EMAILS.includes(currentAuthenticatingEmail.trim().toLowerCase()) ? "admin" : "student",
+                status: isTargetAdmin ? "approved" : "pending",
+                role: isTargetAdmin ? "admin" : "student",
                 dateRegistered: new Date().toLocaleDateString(),
                 questions: JSON.parse(JSON.stringify(getGroupQuestionsSeed())),
                 tests: [],
@@ -22137,14 +22138,20 @@ function initAuthFlow() {
             };
             state.users.push(newUser);
             
-            // Sync registry with cloud
+            // Sync registry with cloud so admin can see and approve the user immediately
             syncUsersWithCloud();
 
-            showToast("تم إنشاء الحساب بنجاح", "تم تفعيل حسابك بنجاح! يمكنك الآن تسجيل الدخول مباشرة.", "success");
-            showAuthStep("auth-password-step");
-            document.getElementById("login-email-display").innerText = currentAuthenticatingEmail;
-            passwordLoginInput.value = "";
-            passwordLoginInput.focus();
+            if (isTargetAdmin) {
+                showToast("Admin Account Ready", "تم تفعيل حساب المشرف! يمكنك الآن تسجيل الدخول مباشرة.", "success");
+                showAuthStep("auth-password-step");
+                document.getElementById("login-email-display").innerText = currentAuthenticatingEmail;
+                passwordLoginInput.value = "";
+                passwordLoginInput.focus();
+            } else {
+                showToast("طلب التسجيل قيد الانتظار", "تم إرسال طلب تسجيلك بنجاح وهو الآن في انتظار موافقة المشرف.", "warning");
+                showAuthStep("auth-pending-step");
+                document.getElementById("pending-email-display").innerText = currentAuthenticatingEmail;
+            }
         });
     }
 

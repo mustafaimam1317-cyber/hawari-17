@@ -1,0 +1,566 @@
+/* ==========================================================================
+   HAWARI MEDICAL COURSE - CLAYMORHISM 3D DESIGN THEME
+   Luxury Pale Orchid & Amethyst Palette (Softer Lighting, High Contrast Backs)
+   ========================================================================== */
+
+/* ---------------- THEME VARIABLES (LIGHT - SOFT PALE ORCHID & AMETHYST) ---------------- */
+body.theme-clay {
+    /* Soft, warm, muted background to eliminate all glaring light */
+    --clay-bg: #F6ECFA; 
+    --clay-card-bg: #FCF6FD; /* Warm porcelain/thistle, smooth on eyes */
+    --clay-sidebar-bg: #EFE0F5; /* Gentle Thistle Lavender */
+    --clay-header-bg: rgba(246, 236, 250, 0.96);
+    
+    /* Medical Luxury Brand Palette */
+    --clay-primary: #9B71B2; /* Amethyst */
+    --clay-primary-hover: #84559E;
+    --clay-primary-light: #E3D0EA; /* Thistle */
+    --clay-secondary: #B78ECE;
+    --clay-accent: #D97706;
+    --clay-success: #10b981;
+    --clay-danger: #ef4444;
+    
+    /* Radii */
+    --clay-radius-xl: 24px;
+    --clay-radius-lg: 18px;
+    --clay-radius-md: 14px;
+    --clay-radius-sm: 10px;
+    --clay-radius-pill: 9999px;
+    
+    /* Text - Dark Purple for supreme readability */
+    --clay-text-title: #3A1C36; /* Dark Purple */
+    --clay-text-body: #542B50;
+    --clay-text-muted: #845D80;
+    
+    /* Gentle, Softer Clay Shadows (No harsh blinding white) */
+    --clay-shadow-card: 
+        8px 12px 22px rgba(58, 28, 54, 0.07),
+        -4px -4px 12px rgba(255, 255, 255, 0.65),
+        inset 2px 2px 5px rgba(255, 255, 255, 0.55),
+        inset -2px -2px 5px rgba(155, 113, 178, 0.07);
+
+    --clay-shadow-card-hover: 
+        12px 18px 28px rgba(58, 28, 54, 0.11),
+        -5px -5px 14px rgba(255, 255, 255, 0.75),
+        inset 2px 2px 5px rgba(255, 255, 255, 0.65),
+        inset -2px -2px 5px rgba(155, 113, 178, 0.08);
+
+    --clay-shadow-btn: 
+        5px 7px 15px rgba(155, 113, 178, 0.20),
+        -2px -2px 6px rgba(255, 255, 255, 0.6),
+        inset 2px 2px 3px rgba(255, 255, 255, 0.6),
+        inset -2px -2px 3px rgba(58, 28, 54, 0.12);
+
+    --clay-shadow-btn-pressed: 
+        inset 3px 3px 6px rgba(58, 28, 54, 0.22),
+        inset -2px -2px 4px rgba(255, 255, 255, 0.6);
+
+    --clay-shadow-pill: 
+        3px 5px 10px rgba(58, 28, 54, 0.06),
+        -2px -2px 6px rgba(255, 255, 255, 0.6),
+        inset 1px 1px 3px rgba(255, 255, 255, 0.6),
+        inset -1px -1px 3px rgba(155, 113, 178, 0.06);
+
+    --clay-shadow-inset: 
+        inset 2px 2px 5px rgba(155, 113, 178, 0.08),
+        inset -2px -2px 5px rgba(255, 255, 255, 0.6);
+
+    /* Standard variable mappings */
+    --bg-primary: var(--clay-bg);
+    --bg-secondary: var(--clay-card-bg);
+    --bg-sidebar: var(--clay-sidebar-bg);
+    --primary-color: var(--clay-primary);
+    --primary-color-hover: var(--clay-primary-hover);
+    --text-primary: var(--clay-text-title);
+    --text-secondary: var(--clay-text-body);
+    --text-muted: var(--clay-text-muted);
+    --border-color: transparent;
+    --shadow-sm: var(--clay-shadow-pill);
+    --shadow-md: var(--clay-shadow-card);
+    --shadow-lg: var(--clay-shadow-card-hover);
+    --shadow-inset: var(--clay-shadow-inset);
+}
+
+/* ---------------- THEME VARIABLES (DARK) ---------------- */
+body.theme-clay.dark-theme {
+    --clay-bg: #0b1320;
+    --clay-card-bg: #142034;
+    --clay-sidebar-bg: #0f1a2c;
+    --clay-header-bg: rgba(15, 26, 44, 0.96);
+    
+    --clay-primary: #a855f7;
+    --clay-primary-hover: #c084fc;
+    --clay-primary-light: rgba(168, 85, 247, 0.18);
+    
+    --clay-text-title: #fdf4ff;
+    --clay-text-body: #f5d0fe;
+    --clay-text-muted: #c084fc;
+    
+    --clay-shadow-card: 
+        10px 14px 26px rgba(0, 0, 0, 0.48),
+        -4px -4px 14px rgba(32, 51, 79, 0.55),
+        inset 3px 3px 6px rgba(255, 255, 255, 0.08),
+        inset -3px -3px 6px rgba(0, 0, 0, 0.45);
+
+    --clay-shadow-card-hover: 
+        14px 20px 32px rgba(0, 0, 0, 0.58),
+        -6px -6px 18px rgba(32, 51, 79, 0.65),
+        inset 3px 3px 6px rgba(255, 255, 255, 0.12),
+        inset -3px -3px 6px rgba(0, 0, 0, 0.45);
+
+    --clay-shadow-btn: 
+        6px 8px 18px rgba(0, 0, 0, 0.45),
+        -2px -2px 8px rgba(35, 55, 85, 0.5),
+        inset 2px 2px 4px rgba(255, 255, 255, 0.25),
+        inset -2px -2px 5px rgba(0, 0, 0, 0.4);
+
+    --clay-shadow-btn-pressed: 
+        inset 4px 4px 8px rgba(0, 0, 0, 0.55),
+        inset -3px -3px 6px rgba(255, 255, 255, 0.1);
+
+    --clay-shadow-pill: 
+        4px 6px 14px rgba(0, 0, 0, 0.35),
+        -2px -2px 8px rgba(30, 48, 75, 0.5),
+        inset 2px 2px 3px rgba(255, 255, 255, 0.08),
+        inset -2px -2px 4px rgba(0, 0, 0, 0.35);
+
+    --clay-shadow-inset: 
+        inset 4px 4px 8px rgba(0, 0, 0, 0.45),
+        inset -3px -3px 6px rgba(35, 55, 85, 0.4);
+
+    --bg-primary: var(--clay-bg);
+    --bg-secondary: var(--clay-card-bg);
+    --bg-sidebar: var(--clay-sidebar-bg);
+    --border-color: transparent;
+}
+
+/* ---------------- 1. CORE LAYOUT & SIDEBAR ---------------- */
+body.theme-clay {
+    background: var(--clay-bg) !important;
+    color: var(--clay-text-body) !important;
+}
+
+body.theme-clay h1, 
+body.theme-clay h2, 
+body.theme-clay h3, 
+body.theme-clay h4 {
+    color: var(--clay-text-title) !important;
+}
+
+body.theme-clay .sidebar {
+    background: var(--clay-sidebar-bg) !important;
+    border-radius: 0 var(--clay-radius-xl) var(--clay-radius-xl) 0;
+    box-shadow: 6px 0 20px rgba(58, 28, 54, 0.04);
+    border-left: none !important;
+    border-right: none !important;
+    padding: 18px 14px;
+}
+
+body.theme-clay .sidebar-brand {
+    background: var(--clay-card-bg);
+    border-radius: var(--clay-radius-lg);
+    box-shadow: var(--clay-shadow-pill);
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+body.theme-clay .sidebar-brand h2 {
+    font-weight: 700;
+    color: var(--clay-primary) !important;
+}
+
+body.theme-clay .nav-item {
+    border-radius: var(--clay-radius-md);
+    margin-bottom: 8px;
+    padding: 12px 18px;
+    font-weight: 600;
+    color: var(--clay-text-body) !important;
+    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    border: none !important;
+}
+
+body.theme-clay .nav-item i {
+    color: var(--clay-primary);
+}
+
+body.theme-clay .nav-item:hover {
+    background: var(--clay-card-bg);
+    box-shadow: var(--clay-shadow-pill);
+    transform: translateX(-3px);
+}
+
+body.theme-clay .nav-item.active {
+    background: var(--clay-primary) !important;
+    color: #ffffff !important;
+    box-shadow: 
+        5px 7px 16px rgba(155, 113, 178, 0.32),
+        inset 2px 2px 5px rgba(255, 255, 255, 0.35),
+        inset -2px -2px 5px rgba(0, 0, 0, 0.15) !important;
+    transform: scale(1.02);
+}
+
+body.theme-clay .nav-item.active i {
+    color: #ffffff !important;
+    transform: scale(1.15);
+}
+
+/* ---------------- 2. COURSE SELECTOR & LANDING ---------------- */
+body.theme-clay .course-selector-page,
+body.theme-clay .landing-page {
+    background: var(--clay-bg) !important;
+}
+
+body.theme-clay .selector-about-card,
+body.theme-clay .course-card,
+body.theme-clay .landing-hero,
+body.theme-clay .landing-card,
+body.theme-clay .auth-card {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body.theme-clay .course-card:hover,
+body.theme-clay .landing-card:hover {
+    transform: translateY(-5px) scale(1.015);
+    box-shadow: var(--clay-shadow-card-hover) !important;
+}
+
+body.theme-clay .course-icon-wrapper {
+    background: var(--clay-sidebar-bg) !important;
+    color: var(--clay-primary) !important;
+    border-radius: var(--clay-radius-pill) !important;
+    box-shadow: var(--clay-shadow-pill) !important;
+    border: none !important;
+}
+
+/* ---------------- 3. TOP HEADER & USER PROFILE ---------------- */
+body.theme-clay .top-header {
+    background: var(--clay-header-bg) !important;
+    border-radius: var(--clay-radius-lg);
+    box-shadow: var(--clay-shadow-pill);
+    margin: 14px 20px 20px 20px;
+    padding: 10px 20px;
+    border: none !important;
+}
+
+body.theme-clay .user-profile,
+body.theme-clay .user-pill {
+    background: var(--clay-card-bg);
+    border-radius: var(--clay-radius-pill);
+    box-shadow: var(--clay-shadow-pill);
+    padding: 6px 14px;
+    border: none !important;
+}
+
+/* ---------------- 4. CLAY BUTTONS & CONTROLS ---------------- */
+body.theme-clay .btn {
+    border-radius: var(--clay-radius-md);
+    font-weight: 600;
+    border: none !important;
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: var(--clay-shadow-btn);
+}
+
+body.theme-clay .btn:hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: var(--clay-shadow-card-hover);
+}
+
+body.theme-clay .btn:active {
+    transform: translateY(2px) scale(0.98);
+    box-shadow: var(--clay-shadow-btn-pressed) !important;
+}
+
+body.theme-clay .btn-primary {
+    background: linear-gradient(135deg, #9B71B2, #84559E) !important;
+    color: #ffffff !important;
+}
+
+body.theme-clay .btn-secondary {
+    background: #E3D0EA !important;
+    color: #3A1C36 !important;
+}
+
+body.theme-clay .btn-accent {
+    background: linear-gradient(135deg, #B78ECE, #9B71B2) !important;
+    color: #ffffff !important;
+}
+
+/* ---------------- 5. DASHBOARD STATS & CARDS ---------------- */
+body.theme-clay .stat-card,
+body.theme-clay .quick-action-card,
+body.theme-clay .progress-card,
+body.theme-clay .report-card,
+body.theme-clay .dashboard-card,
+body.theme-clay .dash-card {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+    padding: 22px;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body.theme-clay .stat-card:hover,
+body.theme-clay .quick-action-card:hover,
+body.theme-clay .progress-card:hover {
+    transform: translateY(-4px) scale(1.01);
+    box-shadow: var(--clay-shadow-card-hover) !important;
+}
+
+body.theme-clay .stat-icon,
+body.theme-clay .icon-box,
+body.theme-clay .card-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: var(--clay-radius-lg);
+    background: var(--clay-primary-light);
+    color: var(--clay-primary);
+    box-shadow: var(--clay-shadow-pill);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+}
+
+/* ---------------- 6. QUESTION BANK & QUIZ CHOICES ---------------- */
+body.theme-clay .q-card,
+body.theme-clay .question-container,
+body.theme-clay .test-setup-card {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+    padding: 26px;
+}
+
+body.theme-clay .choice-btn,
+body.theme-clay .quiz-option {
+    background: #F3E6F7 !important;
+    border-radius: var(--clay-radius-lg) !important;
+    box-shadow: var(--clay-shadow-pill) !important;
+    border: 2px solid transparent !important;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    font-weight: 500;
+    color: var(--clay-text-body) !important;
+    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body.theme-clay .choice-btn:hover {
+    background: #FCF6FD !important;
+    transform: translateX(-4px) scale(1.01);
+    box-shadow: var(--clay-shadow-card) !important;
+}
+
+body.theme-clay .choice-btn.selected,
+body.theme-clay .choice-btn.active {
+    background: #FCF6FD !important;
+    border-color: var(--clay-primary) !important;
+    box-shadow: 
+        inset 2px 2px 5px rgba(155, 113, 178, 0.15),
+        inset -2px -2px 5px rgba(255, 255, 255, 0.7),
+        3px 5px 12px rgba(155, 113, 178, 0.12) !important;
+}
+
+body.theme-clay .choice-btn.correct {
+    background: #ecfdf5 !important;
+    border-color: #10b981 !important;
+    color: #065f46 !important;
+    box-shadow: inset 2px 2px 5px rgba(16, 185, 129, 0.2) !important;
+}
+
+body.theme-clay .choice-btn.incorrect {
+    background: #fef2f2 !important;
+    border-color: #ef4444 !important;
+    color: #991b1b !important;
+    box-shadow: inset 2px 2px 5px rgba(239, 68, 68, 0.2) !important;
+}
+
+/* ---------------- 7. HAWARI BOOK LIBRARY & VIEWER ---------------- */
+body.theme-clay .book-card {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+    padding: 20px;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body.theme-clay .book-card:hover {
+    transform: translateY(-5px) scale(1.015);
+    box-shadow: var(--clay-shadow-card-hover) !important;
+}
+
+body.theme-clay .book-card .book-thumbnail {
+    border-radius: var(--clay-radius-lg);
+    box-shadow: var(--clay-shadow-pill);
+    overflow: hidden;
+}
+
+body.theme-clay .book-toolbar,
+body.theme-clay .annotation-tools-bar {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-lg) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+}
+
+body.theme-clay .book-tool-btn,
+body.theme-clay .annotation-tool-btn {
+    border-radius: var(--clay-radius-md);
+    background: var(--clay-bg);
+    box-shadow: var(--clay-shadow-pill);
+    border: none !important;
+    transition: all 0.2s ease;
+}
+
+body.theme-clay .book-tool-btn.active,
+body.theme-clay .annotation-tool-btn.active {
+    background: var(--clay-primary) !important;
+    color: #ffffff !important;
+    box-shadow: var(--clay-shadow-btn-pressed) !important;
+}
+
+/* ---------------- 8. FLASHCARDS (HIGH CONTRAST DISTINCT BACK) ---------------- */
+body.theme-clay .flashcard-card {
+    border-radius: var(--clay-radius-xl) !important;
+}
+
+/* Front Face: Soft Porcelain Thistle */
+body.theme-clay .flashcard-front {
+    background: #FCF6FD !important;
+    color: var(--clay-text-title) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: 2px solid rgba(155, 113, 178, 0.12) !important;
+}
+
+/* Back Face: Distinct Dark Purple with Rich Amethyst Inset Depth (Crystal Clear Like Night Mode) */
+body.theme-clay .flashcard-back {
+    background: linear-gradient(145deg, #3A1C36, #4E2548) !important;
+    color: #FBF1FF !important;
+    border-radius: var(--clay-radius-xl) !important;
+    border: 2px solid #9B71B2 !important;
+    box-shadow: 
+        10px 14px 28px rgba(58, 28, 54, 0.25),
+        inset 2px 2px 5px rgba(255, 255, 255, 0.18),
+        inset -2px -2px 5px rgba(0, 0, 0, 0.35) !important;
+    transform: rotateY(180deg) !important;
+}
+
+body.theme-clay .flashcard-back .card-category {
+    background: rgba(155, 113, 178, 0.35) !important;
+    color: #FBF1FF !important;
+    border-radius: var(--clay-radius-pill) !important;
+}
+
+body.theme-clay .flashcard-back .card-text,
+body.theme-clay .flashcard-back p,
+body.theme-clay .flashcard-back h3,
+body.theme-clay .flashcard-back h4 {
+    color: #FBF1FF !important;
+}
+
+body.theme-clay .flashcard-back .card-hint {
+    color: #E3D0EA !important;
+}
+
+/* Dark Mode Flashcard adjustments */
+body.theme-clay.dark-theme .flashcard-front {
+    background: #142034 !important;
+    color: #fdf4ff !important;
+    border: 2px solid rgba(168, 85, 247, 0.2) !important;
+}
+
+body.theme-clay.dark-theme .flashcard-back {
+    background: linear-gradient(145deg, #2e1065, #4c1d95) !important;
+    color: #fdf4ff !important;
+    border: 2px solid #a855f7 !important;
+}
+
+/* ---------------- 9. NOTEBOOK & VIDEO PLAYER ---------------- */
+body.theme-clay .notebook-layout,
+body.theme-clay .notebook-sidebar,
+body.theme-clay .notebook-editor {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+}
+
+body.theme-clay .note-card-item {
+    background: #F3E6F7;
+    border-radius: var(--clay-radius-md);
+    box-shadow: var(--clay-shadow-pill);
+    border: none !important;
+    margin-bottom: 10px;
+}
+
+body.theme-clay .video-card {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+}
+
+body.theme-clay .video-card .video-thumb-wrapper {
+    border-radius: var(--clay-radius-lg);
+    overflow: hidden;
+    box-shadow: var(--clay-shadow-pill);
+}
+
+/* ---------------- 10. ADMIN PANEL & MODALS ---------------- */
+body.theme-clay .admin-card,
+body.theme-clay .modal-content,
+body.theme-clay .admin-stats-card {
+    background: var(--clay-card-bg) !important;
+    border-radius: var(--clay-radius-xl) !important;
+    box-shadow: var(--clay-shadow-card) !important;
+    border: none !important;
+}
+
+body.theme-clay .admin-tab-btn {
+    border-radius: var(--clay-radius-pill);
+    padding: 10px 20px;
+    background: var(--clay-bg);
+    box-shadow: var(--clay-shadow-pill);
+    border: none !important;
+    color: var(--clay-text-body);
+}
+
+body.theme-clay .admin-tab-btn.active {
+    background: var(--clay-primary) !important;
+    color: #ffffff !important;
+    box-shadow: var(--clay-shadow-btn) !important;
+}
+
+/* ---------------- 11. LIVE CLAY THEME SWITCH BUTTON ---------------- */
+#btn-clay-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 9999px;
+    background: #F6ECFA;
+    color: #9B71B2;
+    font-weight: 700;
+    font-size: 0.85rem;
+    border: 2px solid #9B71B2;
+    box-shadow: 0 4px 12px rgba(155, 113, 178, 0.18);
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+#btn-clay-theme-toggle:hover {
+    transform: scale(1.05);
+    background: #9B71B2;
+    color: #ffffff;
+    box-shadow: 0 6px 18px rgba(155, 113, 178, 0.28);
+}

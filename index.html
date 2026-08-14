@@ -17,6 +17,7 @@
     <!-- Chart.js for progress visualization -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="claymorphism.css">
 
     <!-- PDF.js Renderer Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -38,7 +39,7 @@
     </style>
 
 </head>
-<body class="light-theme">
+<body class="light-theme theme-clay">
     
     <!-- Toast System for email / action simulation notifications -->
     <div id="toast-container" class="toast-container"></div>
@@ -54,6 +55,7 @@
             <h3>About Hawari Course System</h3>
             <p>Hawari Course is a premium clinical preparation platform designed to help medical students and professionals master clinical topics, build active recall, and pass their board and college exams with ease. Select a group below to start your specialized learning track.</p>
         </div>
+
 
         <div class="selector-cards-container">
             <!-- Infection Group Card -->
@@ -297,6 +299,12 @@
                     </label>
                     <span class="theme-label"><i class="fa-regular fa-moon"></i> Night Mode</span>
                 </div>
+
+                <div style="margin-top: 10px; display: flex; justify-content: center;">
+                    <button id="btn-clay-theme-toggle" class="btn" style="width: 100%; font-size: 0.82rem; padding: 7px 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <i class="fa-solid fa-shapes"></i> <span>Clay 3D: On</span>
+                    </button>
+                </div>
             </div>
         </aside>
 
@@ -305,7 +313,7 @@
             
             <!-- ================= DASHBOARD VIEW ================= -->
             <section id="dashboard-view" class="view-section active">
-                <div class="page-header">
+                <div class="page-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                     <div>
                         <h2>Welcome back, <span id="welcome-user-name">User</span>!</h2>
                         <p>Track your learning progress and challenge yourself.</p>

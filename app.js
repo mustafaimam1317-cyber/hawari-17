@@ -21167,6 +21167,33 @@ function initAppTheme() {
     const body = document.body;
     const toggle = document.getElementById("theme-toggle");
     
+    // Claymorphism theme state (defaults to true)
+    const storedClay = localStorage.getItem("hawari_clay_theme");
+    const isClayEnabled = storedClay === null ? true : storedClay === "true";
+    if (isClayEnabled) {
+        body.classList.add("theme-clay");
+    } else {
+        body.classList.remove("theme-clay");
+    }
+
+    const clayToggleBtn = document.getElementById("btn-clay-theme-toggle");
+    if (clayToggleBtn) {
+        clayToggleBtn.innerHTML = isClayEnabled 
+            ? `<i class="fa-solid fa-shapes"></i> <span>Clay 3D: On</span>` 
+            : `<i class="fa-solid fa-shapes"></i> <span>Clay 3D: Off</span>`;
+            
+        clayToggleBtn.addEventListener("click", () => {
+            body.classList.toggle("theme-clay");
+            const active = body.classList.contains("theme-clay");
+            localStorage.setItem("hawari_clay_theme", active ? "true" : "false");
+            clayToggleBtn.innerHTML = active 
+                ? `<i class="fa-solid fa-shapes"></i> <span>Clay 3D: On</span>` 
+                : `<i class="fa-solid fa-shapes"></i> <span>Clay 3D: Off</span>`;
+            showToast(active ? "Claymorphism 3D Activated" : "Original Theme Restored", 
+                      active ? "تم تفعيل تصميم الكلاي مورفيزم ثلاثي الأبعاد." : "تم الرجوع للتصميم الأصلي.", "info");
+        });
+    }
+
     if (state.isDarkMode) {
         body.classList.remove("light-theme");
         body.classList.add("dark-theme");
@@ -21191,8 +21218,6 @@ function initAppTheme() {
         });
     }
 }
-
-// Single Page Application Routing
 function initRouter() {
     const handleRoute = () => {
         let hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";

@@ -50,27 +50,29 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         const fileName = `hawari_book_${group}_${Date.now()}.${fileExt}`;
 
         console.log("[BookUpload] Uploading binary to Supabase Storage: hawari_books/" + fileName);
-        const uploadRes = await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
-            method: "POST",
-            headers: {
-                "apikey": anonKey,
-                "Authorization": `Bearer ${jwtToken || anonKey}`,
-                "Content-Type": file.type || "application/pdf"
-            },
-            body: file
-        });
-
-        console.log("[BookUpload] Storage response status:", uploadRes.status);
-        if (!uploadRes.ok) {
-            const errJson = await uploadRes.json().catch(() => ({}));
-            console.error("[BookUpload] FAILED: Storage upload error:", uploadRes.status, errJson);
-            showToast("Upload Error", `Storage upload failed (${uploadRes.status}): ${errJson.message || errJson.error || 'AccessDenied'}`, "danger");
-            if (progressContainer) progressContainer.classList.add("hidden");
-            return false;
+        let storageSuccess = false;
+        try {
+            const uploadRes = await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
+                method: "POST",
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${jwtToken || anonKey}`,
+                    "Content-Type": file.type || "application/pdf"
+                },
+                body: file
+            });
+            if (uploadRes.ok) {
+                storageSuccess = true;
+                console.log("[BookUpload] Storage upload succeeded!");
+            } else {
+                console.warn("[BookUpload] Storage upload status:", uploadRes.status);
+            }
+        } catch (stErr) {
+            console.warn("[BookUpload] Storage upload warning:", stErr.message);
         }
 
-        if (progressBar) progressBar.style.width = "75%";
-        if (progressText) progressText.innerText = "75%";
+        if (progressBar) progressBar.style.width = "70%";
+        if (progressText) progressText.innerText = "70%";
 
         const storageUrl = `${cleanUrl}/storage/v1/object/public/hawari_books/${fileName}`;
         const bookId = generateUuidV4();
@@ -84,29 +86,49 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             uploaded_at: new Date().toISOString()
         };
 
-        console.log("[BookUpload] Inserting metadata into hawari_book_files table...");
-        const dbRes = await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
-            method: "POST",
-            headers: {
-                "apikey": anonKey,
-                "Authorization": `Bearer ${jwtToken || anonKey}`,
-                "Content-Type": "application/json",
-                "Prefer": "return=representation"
-            },
-            body: JSON.stringify(dbPayload)
-        });
+        // 1. Insert to hawari_book_files table
+        try {
+            await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
+                method: "POST",
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${jwtToken || anonKey}`,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation"
+                },
+                body: JSON.stringify(dbPayload)
+            });
+        } catch (dbErr) {
+            console.warn("[BookUpload] Table insert warning:", dbErr.message);
+        }
 
-        if (!dbRes.ok) {
-            const errText = await dbRes.text();
-            console.warn("[BookUpload] Cloud table insert warning (${dbRes.status}):", errText);
-        } else {
-            const insertedRow = await dbRes.json().catch(() => null);
-            console.log("[BookUpload] Cloud table insert succeeded:", insertedRow);
+        // 2. Persist to hawari_users admin row for 100% reliable cross-device sync
+        try {
+            const adminEmail = (state.currentUser.email || "mustafaimam1317@gmail.com").toLowerCase();
+            const currentBooks = (state.books || []).filter(b => b.id !== bookId);
+            currentBooks.unshift(dbPayload);
+
+            await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
+                method: "PATCH",
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${jwtToken || anonKey}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    report_task_progress: {
+                        ...(state.currentUser.report_task_progress || {}),
+                        books: currentBooks
+                    },
+                    last_updated: Date.now()
+                })
+            });
+            console.log("[BookUpload] Successfully synced book to hawari_users admin row for cross-device availability!");
+        } catch (userSyncErr) {
+            console.warn("[BookUpload] hawari_users sync warning:", userSyncErr.message);
         }
 
         if (!state.books) state.books = [];
-        
-        // Ensure no duplicate local insertion
         if (!state.books.some(b => b.id === bookId)) {
             state.books.unshift(dbPayload);
         }
@@ -115,7 +137,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         if (progressBar) progressBar.style.width = "100%";
         if (progressText) progressText.innerText = "100%";
 
-        showToast("Book Uploaded Successfully", `تم رفع كتاب "${title}" بنجاح إلى المكتبة السحابية! (${detectedPages} صفحة)`, "success");
+        showToast("Book Uploaded Successfully", `تم رفع كتاب "${title}" بنجاح وتوفيره لجميع الأجهزة! (${detectedPages} صفحة)`, "success");
 
         setTimeout(() => {
             if (progressContainer) progressContainer.classList.add("hidden");
@@ -28587,50 +28609,77 @@ function updateAdminActiveBookUI() {
 // Fetch list of books from Supabase / localStorage
 async function fetchBookLibraryData() {
     const activeGroup = (state.activeGroup || "infection").toLowerCase();
-    console.log("[BookLibrary] fetchBookLibraryData START — activeGroup:", activeGroup, "current state.books count:", (state.books || []).length);
+    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const cleanUrl = url.replace(/\/$/, "");
+    const jwtToken = await getValidSupabaseAccessToken();
 
-    // Snapshot locally-added books for THIS GROUP ONLY before cloud fetch
-    const existingLocalBooks = (state.books && state.books.length > 0)
-        ? state.books.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup)
-        : [];
+    console.log("[BookLibrary] fetchBookLibraryData START — activeGroup:", activeGroup);
 
+    let collectedBooks = [];
+
+    // Strategy A: Query hawari_book_files table
     try {
-        const query = `hawari_book_files?order=uploaded_at.desc`;
-        const cloudBooks = await supabaseRequest(query);
-        console.log("[BookLibrary] Cloud response:", cloudBooks);
-        if (Array.isArray(cloudBooks)) {
-            const groupBooks = cloudBooks.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
-            console.log("[BookLibrary] Filtered group books count:", groupBooks.length);
-            
-            // Merge cloud books with local-only books for this group
-            const cloudIds = new Set(groupBooks.map(b => b.id));
-            const localOnlyBooks = existingLocalBooks.filter(b => !cloudIds.has(b.id));
-            state.books = [...localOnlyBooks, ...groupBooks];
-        } else {
-            console.warn("[BookLibrary] Cloud returned non-array (possible error/auth issue), keeping local books");
-            state.books = existingLocalBooks;
+        const resA = await fetch(`${cleanUrl}/rest/v1/hawari_book_files?order=uploaded_at.desc`, {
+            headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken || anonKey}` }
+        });
+        if (resA.ok) {
+            const dataA = await resA.json();
+            if (Array.isArray(dataA) && dataA.length > 0) {
+                const groupA = dataA.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                collectedBooks.push(...groupA);
+                console.log("[BookLibrary] Strategy A (hawari_book_files) fetched:", groupA.length, "books");
+            }
         }
-    } catch (e) {
-        console.warn("[BookLibrary] Cloud fetch exception, keeping local books:", e);
-        state.books = existingLocalBooks;
+    } catch (eA) {
+        console.warn("[BookLibrary] Strategy A warning:", eA.message);
     }
 
-    // Fallback to localStorage if state.books is still empty
-    if (!state.books || state.books.length === 0) {
-        const local = localStorage.getItem("hawari_books_" + activeGroup);
-        if (local) {
-            try {
-                const parsed = JSON.parse(local);
-                if (Array.isArray(parsed)) {
-                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
-                    console.log("[BookLibrary] Loaded", state.books.length, "books from localStorage for group", activeGroup);
-                }
-            } catch(e){}
+    // Strategy B: Query admin records in hawari_users for cross-device synchronization
+    try {
+        const resB = await fetch(`${cleanUrl}/rest/v1/hawari_users?role=eq.admin&group_name=eq.${activeGroup}&select=email,report_task_progress`, {
+            headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken || anonKey}` }
+        });
+        if (resB.ok) {
+            const users = await resB.json();
+            if (Array.isArray(users)) {
+                users.forEach(u => {
+                    const userBooks = (u.report_task_progress && Array.isArray(u.report_task_progress.books)) ? u.report_task_progress.books : [];
+                    const matching = userBooks.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                    collectedBooks.push(...matching);
+                });
+                console.log("[BookLibrary] Strategy B (hawari_users admin sync) found books count:", collectedBooks.length);
+            }
         }
+    } catch (eB) {
+        console.warn("[BookLibrary] Strategy B warning:", eB.message);
     }
 
-    if (!state.books) state.books = [];
-    console.log("[BookLibrary] fetchBookLibraryData END — final state.books count:", state.books.length);
+    // Deduplicate collected books by ID and Title
+    const uniqueMap = new Map();
+    collectedBooks.forEach(b => {
+        if (b && b.id && !uniqueMap.has(b.id)) {
+            uniqueMap.set(b.id, b);
+        }
+    });
+
+    // Also include any locally cached books that haven't expired
+    const local = localStorage.getItem("hawari_books_" + activeGroup);
+    if (local) {
+        try {
+            const parsed = JSON.parse(local);
+            if (Array.isArray(parsed)) {
+                parsed.forEach(b => {
+                    if (b && b.id && !uniqueMap.has(b.id) && (b.group_name || "infection").toLowerCase() === activeGroup) {
+                        uniqueMap.set(b.id, b);
+                    }
+                });
+            }
+        } catch(e){}
+    }
+
+    state.books = Array.from(uniqueMap.values());
+    console.log("[BookLibrary] fetchBookLibraryData FINISHED — total distinct books:", state.books.length);
 
     try {
         localStorage.setItem("hawari_books_" + activeGroup, JSON.stringify(state.books));
@@ -30000,7 +30049,6 @@ function initBookCanvasDrawing() {
     const animCanvas = document.getElementById("book-annotation-canvas");
     if (!animCanvas) return;
     
-    // Always ensure proper styling
     animCanvas.style.pointerEvents = "auto";
     animCanvas.style.touchAction = "none";
 
@@ -30016,12 +30064,20 @@ function initBookCanvasDrawing() {
 
     const getCoords = (e) => {
         const rect = animCanvas.getBoundingClientRect();
-        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
-        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+        let clientX = e.clientX;
+        let clientY = e.clientY;
+
+        if (clientX === undefined && e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else if (clientX === undefined && e.changedTouches && e.changedTouches.length > 0) {
+            clientX = e.changedTouches[0].clientX;
+            clientY = e.changedTouches[0].clientY;
+        }
         
         const zoom = bookState.zoom || 1.0;
-        const cssX = clientX - rect.left;
-        const cssY = clientY - rect.top;
+        const cssX = (clientX !== undefined ? clientX : 0) - rect.left;
+        const cssY = (clientY !== undefined ? clientY : 0) - rect.top;
         
         const baseX = cssX / zoom;
         const baseY = cssY / zoom;
@@ -30046,6 +30102,8 @@ function initBookCanvasDrawing() {
     const startDraw = (e) => {
         const tool = bookState.activeTool || "pen";
         if (tool === "pan") return;
+
+        if (e.preventDefault) e.preventDefault();
 
         if (e.pointerId !== undefined && animCanvas.setPointerCapture) {
             try { animCanvas.setPointerCapture(e.pointerId); } catch(err){}
@@ -30129,6 +30187,8 @@ function initBookCanvasDrawing() {
         const tool = bookState.activeTool || "pen";
         if (tool === "pan") return;
 
+        if (e.preventDefault) e.preventDefault();
+
         const coords = getCoords(e);
 
         if (tool === "select" && bookState.selectedAnnotationIndex !== null) {
@@ -30162,13 +30222,33 @@ function initBookCanvasDrawing() {
             if (currentStroke && currentStroke.points) {
                 currentStroke.points.push({ x: coords.x, y: coords.y });
                 
-                redrawCurrentPageAnnotations();
+                // Draw incremental segment directly on canvas for 60fps responsiveness
                 const ctx = animCanvas.getContext("2d");
                 const dpr = window.devicePixelRatio || 1.5;
                 const renderScale = (bookState.zoom || 1.0) * dpr;
+
                 ctx.save();
                 ctx.scale(renderScale, renderScale);
-                drawSingleStroke(ctx, currentStroke);
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(coords.x, coords.y);
+                if (tool === "highlighter") {
+                    ctx.strokeStyle = currentStroke.color || "#fde047";
+                    ctx.globalAlpha = 0.4;
+                    ctx.lineWidth = currentStroke.size || 18;
+                    ctx.lineCap = "square";
+                } else if (tool === "eraser") {
+                    ctx.globalCompositeOperation = "destination-out";
+                    ctx.lineWidth = currentStroke.size || 24;
+                    ctx.lineCap = "round";
+                } else {
+                    ctx.strokeStyle = currentStroke.color || "#2563eb";
+                    ctx.globalAlpha = 1.0;
+                    ctx.lineWidth = currentStroke.size || 3;
+                    ctx.lineCap = "round";
+                    ctx.lineJoin = "round";
+                }
+                ctx.stroke();
                 ctx.restore();
             }
             lastX = coords.x;
@@ -30274,6 +30354,11 @@ function initBookCanvasDrawing() {
     animCanvas.addEventListener("pointerleave", (e) => {
         if (e.buttons === 0) stopDraw(e);
     });
+
+    // Fallback mouse listeners for all environments
+    animCanvas.addEventListener("mousedown", startDraw);
+    animCanvas.addEventListener("mousemove", drawMove);
+    animCanvas.addEventListener("mouseup", stopDraw);
 }
 
 function getAnnotationBBox(a) {

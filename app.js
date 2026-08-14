@@ -20645,7 +20645,7 @@ function getGroupQuestionsSeed() {
 }
 
 // Immutable Whitelist of Admin Emails
-const ALLOWED_ADMIN_EMAILS = ["mustafaimam1317@gmail.com"];
+const ALLOWED_ADMIN_EMAILS = ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"];
 
 function isUserAdmin(user = state.currentUser) {
     if (!user || !user.email) return false;
@@ -22099,7 +22099,7 @@ function initAuthFlow() {
 
     // Submit New Registration Request
     if (btnRegisterSubmit) {
-        btnRegisterSubmit.addEventListener("click", () => {
+        btnRegisterSubmit.addEventListener("click", async () => {
             const nameInput = document.getElementById("auth-reg-name");
             const name = nameInput ? nameInput.value.trim() : "";
             const password = passwordRegInput.value;
@@ -22120,23 +22120,31 @@ function initAuthFlow() {
                 return;
             }
 
-            // Create pending account
+            // Create auto-approved account immediately
             const newUser = {
                 email: currentAuthenticatingEmail,
                 password: sha256Sync(password),
                 displayName: name,
-                status: "pending",
-                role: "user",
-                dateRegistered: new Date().toLocaleDateString()
+                status: "approved",
+                role: ALLOWED_ADMIN_EMAILS.includes(currentAuthenticatingEmail.trim().toLowerCase()) ? "admin" : "student",
+                dateRegistered: new Date().toLocaleDateString(),
+                questions: JSON.parse(JSON.stringify(getGroupQuestionsSeed())),
+                tests: [],
+                notebookNotes: [],
+                flashcards: [],
+                reportTaskProgress: {},
+                lastUpdated: Date.now()
             };
             state.users.push(newUser);
             
-            // Sync registry with cloud in the background to provide instant UI transition
+            // Sync registry with cloud
             syncUsersWithCloud();
 
-            showToast("Sign-up Request Sent", "Your account has been registered and is pending Admin approval.", "warning");
-            showAuthStep("auth-pending-step");
-            document.getElementById("pending-email-display").innerText = currentAuthenticatingEmail;
+            showToast("تم إنشاء الحساب بنجاح", "تم تفعيل حسابك بنجاح! يمكنك الآن تسجيل الدخول مباشرة.", "success");
+            showAuthStep("auth-password-step");
+            document.getElementById("login-email-display").innerText = currentAuthenticatingEmail;
+            passwordLoginInput.value = "";
+            passwordLoginInput.focus();
         });
     }
 
@@ -30776,7 +30784,7 @@ async function redrawBookCanvas() {
     // Enforce maxPage bounds strictly
     if (bookState.currentPage > maxPage) {
         bookState.currentPage = maxPage;
-        showToast("صفحات غير متاحة", "أول 10 صفحات متاحة للمشتركين. للحصول على الكتاب كاملًا تواصل مع الإدارة.", "warning");
+        showToast("معاينة مجانية", "تم الوصول للحد الأقصى للمعاينة المجانية (10 صفحات). يرجى طلب الوصول الكامل من المشرف.", "warning");
     }
 
     if (pageNumInput) pageNumInput.value = bookState.currentPage;

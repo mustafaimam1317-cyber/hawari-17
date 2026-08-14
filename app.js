@@ -1,4 +1,158 @@
 
+async function processBookPdfUpload({ title, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
+    console.log("[BookUpload] START");
+
+    // 1. Verify user session exists
+    const hasSession = !!(state.currentUser && state.currentUser.email);
+    console.log("[Auth] Session detected:", hasSession);
+
+    if (!hasSession || (state.currentUser.role !== "admin" && state.currentUser.email !== "mustafaimam1317@gmail.com" && state.currentUser.email !== "mustafa172004@gmail.com")) {
+        console.error("[BookUpload] FAILED: Admin session invalid or missing");
+        showToast("جلسة غير صالحة", "جلسة تسجيل الدخول غير صالحة، يرجى تسجيل الدخول مرة أخرى.", "danger");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
+    }
+
+    // 2. Retrieve & validate real Supabase JWT access token
+    const jwtToken = await getValidSupabaseAccessToken();
+    const hasToken = !!jwtToken;
+    console.log("[Auth] Access token present:", hasToken);
+
+    if (!jwtToken || jwtToken.trim() === "") {
+        console.error("[BookUpload] FAILED: No valid Supabase access_token exists");
+        showToast("جلسة غير صالحة", "جلسة Supabase غير صالحة. يرجى تسجيل الدخول مرة أخرى.", "danger");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
+    }
+
+    if (!title || !file) {
+        console.error("[BookUpload] FAILED: Missing title or file");
+        showToast("Missing Required Fields", "Please enter a title and select a PDF file.", "warning");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
+    }
+
+    if (progressContainer) progressContainer.classList.remove("hidden");
+    if (progressBar) progressBar.style.width = "15%";
+    if (progressText) progressText.innerText = "15%";
+
+    try {
+        // Auto-detect actual numPages from PDF file using PDF.js with Uint8Array support
+        console.log("[BookUpload] Auto-detecting page count from PDF file...");
+        let detectedPages = 1;
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdfjs = await ensurePdfJsLoaded();
+            const tempPdf = await pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+            detectedPages = tempPdf.numPages || 1;
+            console.log("[BookUpload] Detected total pages count:", detectedPages);
+        } catch (pdfErr) {
+            console.warn("[BookUpload] Could not parse page count from PDF file, using default 1:", pdfErr.message);
+        }
+
+        if (progressBar) progressBar.style.width = "40%";
+        if (progressText) progressText.innerText = "40%";
+
+        const fileExt = file.name.split('.').pop();
+        const group = state.activeGroup || "infection";
+        const fileName = `hawari_book_${group}_${Date.now()}.${fileExt}`;
+        const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+
+        const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+
+        console.log("[BookUpload] Storage request");
+        const uploadRes = await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
+            method: "POST",
+            headers: {
+                "apikey": anonKey,
+                "Authorization": `Bearer ${jwtToken}`,
+                "Content-Type": file.type || "application/pdf"
+            },
+            body: file
+        });
+
+        console.log("[BookUpload] Storage response status:", uploadRes.status);
+        if (!uploadRes.ok) {
+            const errJson = await uploadRes.json().catch(() => ({}));
+            console.error("[BookUpload] FAILED: Storage upload error:", uploadRes.status, errJson);
+            showToast("Upload Error", `Storage upload failed (${uploadRes.status}): ${errJson.message || errJson.error || 'AccessDenied'}`, "danger");
+            if (progressContainer) progressContainer.classList.add("hidden");
+            return false;
+        }
+
+        if (progressBar) progressBar.style.width = "75%";
+        if (progressText) progressText.innerText = "75%";
+
+        const storageUrl = `${cleanUrl}/storage/v1/object/public/hawari_books/${fileName}`;
+        const bookId = generateUuidV4();
+
+        const dbPayload = {
+            id: bookId,
+            title: title.trim(),
+            total_pages: detectedPages,
+            storage_url: storageUrl,
+            group_name: group,
+            uploaded_at: new Date().toISOString()
+        };
+
+        console.log("[BookUpload] DB insert request");
+        const dbRes = await supabaseRequest("hawari_book_files", {
+            method: "POST",
+            headers: { "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify(dbPayload)
+        });
+
+        if (dbRes && dbRes.error) {
+            console.error("[BookUpload] FAILED: Database insert failed:", dbRes.error);
+            showToast("Database Error", `Database insert failed: ${dbRes.error.message || JSON.stringify(dbRes.error)}`, "danger");
+            
+            // Clean up orphan storage file if DB insert fails
+            try {
+                await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
+                    method: "DELETE",
+                    headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken}` }
+                });
+            } catch (cleanupErr) {
+                console.warn("[BookUpload] Orphan cleanup skipped:", cleanupErr.message);
+            }
+            if (progressContainer) progressContainer.classList.add("hidden");
+            return false;
+        }
+
+        if (!state.books) state.books = [];
+        
+        // Ensure no duplicate local insertion
+        if (!state.books.some(b => b.id === bookId)) {
+            state.books.unshift(dbPayload);
+        }
+        localStorage.setItem("hawari_books_" + group, JSON.stringify(state.books));
+
+        if (progressBar) progressBar.style.width = "100%";
+        if (progressText) progressText.innerText = "100%";
+
+        showToast("Book Uploaded Successfully", `Successfully added "${title}" to library!`, "success");
+
+        setTimeout(() => {
+            if (progressContainer) progressContainer.classList.add("hidden");
+            if (modalToClose) {
+                const modal = document.getElementById(modalToClose);
+                if (modal) modal.classList.add("hidden");
+            }
+            if (formToReset) formToReset.reset();
+            renderBookLibrary();
+        }, 600);
+
+        return true;
+
+    } catch (err) {
+        console.error("[BookUpload] Exception:", err);
+        showToast("Upload Error", err.message || "Failed to upload book.", "danger");
+        if (progressContainer) progressContainer.classList.add("hidden");
+        return false;
+    }
+}
+
 window.handleAdminBookUploadForm = async function(event) {
     if (event) event.preventDefault();
     console.log("[BookUpload] Submit button clicked!");
@@ -46,7 +200,12 @@ async function saveBookReadingProgress(email, bookId, page, totalPages) {
 
 
 async function ensurePdfJsLoaded() {
-    if (window.pdfjsLib) return window.pdfjsLib;
+    if (window.pdfjsLib) {
+        if (window.pdfjsLib.GlobalWorkerOptions) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+        return window.pdfjsLib;
+    }
     return new Promise((resolve, reject) => {
         const script = document.createElement("script");
         script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
@@ -64,39 +223,113 @@ async function ensurePdfJsLoaded() {
 }
 
 async function loadRealBookPdfDocument(bookFile) {
-    if (!bookFile || !bookFile.storage_url) return null;
-    console.log("[PDFViewer] Fetching real PDF document from Storage:", bookFile.storage_url);
+    if (!bookFile) return null;
+    console.log("[PDFViewer] Fetching real PDF document for book:", bookFile.id, bookFile.title);
 
     try {
         const pdfjs = await ensurePdfJsLoaded();
         const jwtToken = await getValidSupabaseAccessToken();
-
-        let fetchUrl = bookFile.storage_url;
-        if (!fetchUrl.startsWith("http")) {
-            const cleanPath = fetchUrl.replace(/.*\/hawari_books\//, "");
-            fetchUrl = `https://sueksolsletlhunpbtix.supabase.co/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
-        }
-
         const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-        const headers = { "apikey": anonKey };
-        if (jwtToken) {
-            headers["Authorization"] = `Bearer ${jwtToken}`;
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+        const cleanUrl = supabaseUrl.replace(/\/$/, "");
+
+        const rawUrl = bookFile.storage_url || "";
+        let cleanPath = rawUrl.replace(/.*\/hawari_books\//, "").replace(/^public\//, "");
+        if (!cleanPath || cleanPath.startsWith("http")) {
+            cleanPath = rawUrl.split("/").pop();
         }
 
-        const res = await fetch(fetchUrl, { headers });
-        if (!res.ok) {
-            console.error("[PDFViewer] HTTP error fetching PDF file:", res.status);
+        console.log("[PDFViewer] Extracted cleanPath:", cleanPath);
+
+        let pdfArrayBuffer = null;
+
+        // Strategy A: Authenticated storage endpoint
+        try {
+            const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
+            const resAuth = await fetch(authEndpoint, {
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${jwtToken || anonKey}`
+                }
+            });
+            if (resAuth.ok) {
+                pdfArrayBuffer = await resAuth.arrayBuffer();
+                console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+            } else {
+                console.warn("[PDFViewer] Strategy A returned status:", resAuth.status);
+            }
+        } catch (errA) {
+            console.warn("[PDFViewer] Strategy A failed:", errA.message);
+        }
+
+        // Strategy B: Public storage endpoint
+        if (!pdfArrayBuffer && rawUrl && rawUrl.startsWith("http")) {
+            try {
+                const resPub = await fetch(rawUrl, {
+                    headers: { "apikey": anonKey }
+                });
+                if (resPub.ok) {
+                    pdfArrayBuffer = await resPub.arrayBuffer();
+                    console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                } else {
+                    console.warn("[PDFViewer] Strategy B returned status:", resPub.status);
+                }
+            } catch (errB) {
+                console.warn("[PDFViewer] Strategy B failed:", errB.message);
+            }
+        }
+
+        // Strategy C: Signed temporary URL from Supabase
+        if (!pdfArrayBuffer && cleanPath) {
+            try {
+                const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                    method: "POST",
+                    headers: {
+                        "apikey": anonKey,
+                        "Authorization": `Bearer ${jwtToken || anonKey}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ expiresIn: 3600 })
+                });
+                if (signRes.ok) {
+                    const signJson = await signRes.json();
+                    const signedPath = signJson.signedURL || signJson.signedUrl;
+                    if (signedPath) {
+                        const signedFullUrl = signedPath.startsWith("http") ? signedPath : `${cleanUrl}/storage/v1${signedPath}`;
+                        const resSigned = await fetch(signedFullUrl);
+                        if (resSigned.ok) {
+                            pdfArrayBuffer = await resSigned.arrayBuffer();
+                            console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                        }
+                    }
+                }
+            } catch (errC) {
+                console.warn("[PDFViewer] Strategy C failed:", errC.message);
+            }
+        }
+
+        if (!pdfArrayBuffer || pdfArrayBuffer.byteLength === 0) {
+            console.error("[PDFViewer] FAILED: Could not retrieve PDF binary buffer from any storage endpoint.");
+            showToast("فشل تحميل الملف", "تعذر تحميل مستند الـ PDF من السيرفر. يرجى التحقق من اتصال الإنترنت.", "danger");
             return null;
         }
 
-        const pdfArrayBuffer = await res.arrayBuffer();
-        const pdfDoc = await pdfjs.getDocument({ data: pdfArrayBuffer }).promise;
+        // Load into PDF.js using Uint8Array
+        const uint8Data = new Uint8Array(pdfArrayBuffer);
+        const loadingTask = pdfjs.getDocument({
+            data: uint8Data,
+            cMapUrl: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/",
+            cMapPacked: true
+        });
+
+        const pdfDoc = await loadingTask.promise;
         console.log("[PDFViewer] REAL PDF loaded successfully! Total pages:", pdfDoc.numPages);
         bookState.pdfDoc = pdfDoc;
         bookState.numPages = pdfDoc.numPages;
         return pdfDoc;
     } catch (e) {
-        console.error("[PDFViewer] Error loading PDF document:", e);
+        console.error("[PDFViewer] Error in loadRealBookPdfDocument:", e);
+        showToast("خطأ في قراءة الـ PDF", e.message || "حدث خطأ أثناء فك تشفير مستند الـ PDF.", "danger");
         return null;
     }
 }
@@ -20677,6 +20910,7 @@ function showToast(title, msg, type = "info") {
 // ================= INITIALIZATION & ROUTING =================
 async function selectCourseTrack(groupName) {
     state.activeGroup = groupName;
+    state.books = []; // Clear cross-group books on track change
     localStorage.setItem("hawari_active_group", groupName);
     
     // Apply body theme class
@@ -20887,6 +21121,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initSecurityProtections();
     initVideoPortal();
     initBackupRestoreFlow();
+    initAddBookModalForm();
 
     // Admin Announcements Form bindings
     const annForm = document.getElementById("admin-announcements-form");
@@ -28220,6 +28455,761 @@ window.revokeStudentBookAccess = async function(email) {
     }
 };
 
+// ==========================================
+// RESTORED HAWARI BOOK UTILITIES & SYNC
+// ==========================================
+
+function initBookDrmProtection() {
+    const bookView = document.getElementById("hawari-book-view");
+    const viewport = document.getElementById("book-canvas-viewport");
+    if (!bookView || bookView.dataset.drmBound) return;
+    bookView.dataset.drmBound = "true";
+
+    // 1. Context Menu & Selection Blocker
+    bookView.addEventListener("contextmenu", (e) => e.preventDefault());
+    bookView.addEventListener("copy", (e) => e.preventDefault());
+    bookView.addEventListener("cut", (e) => e.preventDefault());
+    bookView.addEventListener("dragstart", (e) => e.preventDefault());
+
+    // 2. Keyboard Shortcut Blocker (Ctrl+P, Ctrl+S, Ctrl+U, F12, PrintScreen)
+    window.addEventListener("keydown", (e) => {
+        if (!state.activeView || state.activeView !== "hawari-book") return;
+        const key = e.key ? e.key.toLowerCase() : "";
+        if (
+            (e.ctrlKey && (key === "p" || key === "s" || key === "u")) ||
+            (e.ctrlKey && e.shiftKey && key === "i") ||
+            key === "f12" ||
+            key === "printscreen"
+        ) {
+            e.preventDefault();
+            e.stopPropagation();
+            showToast("Action Blocked", "Printing, saving, or inspecting Hawari Book content is disabled.", "danger");
+            return false;
+        }
+
+        // Undo / Redo Shortcuts
+        if (e.ctrlKey && key === "z") {
+            e.preventDefault();
+            undoBookPageAction();
+        } else if (e.ctrlKey && key === "y") {
+            e.preventDefault();
+            redoBookPageAction();
+        }
+    });
+
+    // 3. Screen Protection Auto-Blur on Window Focus Loss
+    window.addEventListener("blur", () => {
+        if (state.activeView === "hawari-book" && viewport) {
+            viewport.classList.add("canvas-blurred");
+        }
+    });
+    window.addEventListener("focus", () => {
+        if (viewport) {
+            viewport.classList.remove("canvas-blurred");
+        }
+    });
+
+    // 4. Populate Floating Student Email Watermark
+    updateBookWatermark();
+}
+
+function updateBookWatermark() {
+    const watermarkEl = document.getElementById("book-watermark-overlay");
+    if (!watermarkEl) return;
+    const email = state.currentUser ? state.currentUser.email : "STUDENT-ACCESS";
+    
+    let html = "";
+    for (let i = 0; i < 18; i++) {
+        html += `<span style="padding: 20px; font-weight:700;">${escapeHTML(email)}</span>`;
+    }
+    watermarkEl.innerHTML = html;
+}
+
+function updateAdminActiveBookUI() {
+    const container = document.getElementById("admin-active-book-info");
+    const oldBtn = document.getElementById("btn-admin-delete-book-pdf");
+    if (oldBtn) oldBtn.style.display = "none"; // Individual delete buttons provided per book item
+
+    if (!container) return;
+
+    const books = state.books || [];
+    const activeGroup = (state.activeGroup || "infection").toLowerCase();
+    const groupBooks = books.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+
+    if (groupBooks.length === 0) {
+        container.innerHTML = `
+            <div style="padding: 12px; background: var(--bg-primary); border-radius: 8px; text-align: center; color: var(--text-secondary); font-size: 0.85rem;">
+                <i class="fa-solid fa-book-open" style="margin-bottom: 6px; font-size: 1.2rem; display: block; opacity: 0.5;"></i>
+                لا توجد كتب مرفوعة لهذا المساق حالياً
+            </div>
+        `;
+        return;
+    }
+
+    let html = `
+        <div style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px;">
+    `;
+
+    groupBooks.forEach(book => {
+        const safeTitle = escapeHTML(book.title || "Untitled Book");
+        const safeId = escapeHTML(book.id);
+        const pages = book.total_pages || 1;
+        const uploadDate = book.uploaded_at ? new Date(book.uploaded_at).toLocaleDateString('ar-EG', { month: 'short', day: 'numeric', year: 'numeric' }) : "";
+
+        html += `
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px;">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: 600; color: var(--text-primary); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        <i class="fa-solid fa-file-pdf" style="color: var(--color-danger); margin-right: 6px;"></i> ${safeTitle}
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;">
+                        <span><i class="fa-solid fa-file-lines"></i> ${pages} صفحة</span>
+                        ${uploadDate ? `<span style="margin: 0 6px;">•</span><span>${uploadDate}</span>` : ""}
+                    </div>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="openBook('${safeId}')" title="فتح الكتاب" style="padding: 5px 10px; font-size: 0.75rem; border-radius: 6px;">
+                        <i class="fa-solid fa-eye"></i>
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm" onclick="deleteAdminBook('${safeId}', '${safeTitle.replace(/'/g, "\\'")}')" title="حذف الكتاب من السيرفر" style="padding: 5px 10px; font-size: 0.75rem; border-radius: 6px;">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+// Fetch list of books from Supabase / localStorage
+async function fetchBookLibraryData() {
+    const activeGroup = (state.activeGroup || "infection").toLowerCase();
+    console.log("[BookLibrary] fetchBookLibraryData START — activeGroup:", activeGroup, "current state.books count:", (state.books || []).length);
+
+    // Snapshot locally-added books for THIS GROUP ONLY before cloud fetch
+    const existingLocalBooks = (state.books && state.books.length > 0)
+        ? state.books.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup)
+        : [];
+
+    try {
+        const query = `hawari_book_files?order=uploaded_at.desc`;
+        const cloudBooks = await supabaseRequest(query);
+        console.log("[BookLibrary] Cloud response:", cloudBooks);
+        if (Array.isArray(cloudBooks)) {
+            const groupBooks = cloudBooks.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+            console.log("[BookLibrary] Filtered group books count:", groupBooks.length);
+            
+            // Merge cloud books with local-only books for this group
+            const cloudIds = new Set(groupBooks.map(b => b.id));
+            const localOnlyBooks = existingLocalBooks.filter(b => !cloudIds.has(b.id));
+            state.books = [...localOnlyBooks, ...groupBooks];
+        } else {
+            console.warn("[BookLibrary] Cloud returned non-array (possible error/auth issue), keeping local books");
+            state.books = existingLocalBooks;
+        }
+    } catch (e) {
+        console.warn("[BookLibrary] Cloud fetch exception, keeping local books:", e);
+        state.books = existingLocalBooks;
+    }
+
+    // Fallback to localStorage if state.books is still empty
+    if (!state.books || state.books.length === 0) {
+        const local = localStorage.getItem("hawari_books_" + activeGroup);
+        if (local) {
+            try {
+                const parsed = JSON.parse(local);
+                if (Array.isArray(parsed)) {
+                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                    console.log("[BookLibrary] Loaded", state.books.length, "books from localStorage for group", activeGroup);
+                }
+            } catch(e){}
+        }
+    }
+
+    if (!state.books) state.books = [];
+    console.log("[BookLibrary] fetchBookLibraryData END — final state.books count:", state.books.length);
+
+    try {
+        localStorage.setItem("hawari_books_" + activeGroup, JSON.stringify(state.books));
+    } catch(err){}
+
+    updateAdminActiveBookUI();
+    return state.books;
+}
+
+// Save user reading progress for active book (debounced to save traffic)
+let saveProgressTimeout = null;
+async function saveUserBookProgress() {
+    if (!state.currentUser || !bookState.activeBookFile) return;
+    
+    // Only save progress for Full Grant Access students
+    const accessInfo = getBookAccessLevel(state.currentUser);
+    if (!accessInfo.isFullGrant) {
+        console.log("[BookProgress] Page progress sync skipped (Premium feature for Full Grant only)");
+        return;
+    }
+
+    const docId = bookState.activeBookFile.id;
+    const page = bookState.currentPage;
+    const email = state.currentUser.email;
+
+    // Immediately save to LocalStorage (local first)
+    localStorage.setItem(`hawari_progress_${email}_${docId}`, page);
+
+    // Debounce the Supabase DB write by 5 seconds
+    if (saveProgressTimeout) clearTimeout(saveProgressTimeout);
+    saveProgressTimeout = setTimeout(async () => {
+        const payload = {
+            id: `${email}_${docId}`,
+            email: email,
+            document_id: docId,
+            last_page: page,
+            updated_at: new Date().toISOString()
+        };
+
+        try {
+            await supabaseRequest("hawari_user_book_progress", {
+                method: "POST",
+                headers: { "Prefer": "resolution=merge-duplicates" },
+                body: JSON.stringify(payload)
+            });
+            console.log(`[BookProgress] Debounced sync: Saved page progress ${page} of ${docId} to cloud.`);
+        } catch (e) {
+            console.warn("[BookProgress] Debounced sync fallback:", e);
+        }
+    }, 5000);
+}
+
+async function fetchUserBookProgress(bookId) {
+    if (!state.currentUser) return 1;
+    const email = state.currentUser.email;
+
+    const local = localStorage.getItem(`hawari_progress_${email}_${bookId}`);
+    if (local) {
+        const p = parseInt(local);
+        if (!isNaN(p)) return p;
+    }
+
+    try {
+        const query = `hawari_user_book_progress?email=eq.${encodeURIComponent(email)}&document_id=eq.${bookId}&select=last_page`;
+        const rows = await supabaseRequest(query);
+        if (rows && rows[0] && rows[0].last_page) {
+            const p = parseInt(rows[0].last_page);
+            localStorage.setItem(`hawari_progress_${email}_${bookId}`, p);
+            return p;
+        }
+    } catch (e) {
+        console.warn("[BookProgress] Cloud progress fetch fallback:", e);
+    }
+    return 1;
+}
+
+// Render book cards inside book-library-grid
+async function renderBookLibrary(filterCategory = "all", searchQuery = "", skipCloudFetch = false) {
+    console.log("[BookLibrary] renderBookLibrary CALLED — filter:", filterCategory, "search:", searchQuery, "skipCloud:", skipCloudFetch);
+    const gridEl = document.getElementById("book-library-grid");
+    const emptyEl = document.getElementById("book-library-empty");
+    if (!gridEl) {
+        console.warn("[BookLibrary] renderBookLibrary ABORTED — book-library-grid element NOT FOUND in DOM");
+        return;
+    }
+
+    const activeGroup = (state.activeGroup || "infection").toLowerCase();
+
+    // 1. Local-first: Ensure state.books has cached books from localStorage if empty
+    if (!state.books || state.books.length === 0) {
+        const local = localStorage.getItem("hawari_books_" + activeGroup);
+        if (local) {
+            try {
+                const parsed = JSON.parse(local);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                    console.log("[BookLibrary] Pre-loaded from localStorage for instant render:", state.books.length, "books");
+                }
+            } catch(e){}
+        }
+    }
+
+    let booksList = (state.books || []).filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+    
+    // Apply search filter
+    if (searchQuery && searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        booksList = booksList.filter(b => (b.title || "").toLowerCase().includes(q));
+    }
+
+    gridEl.innerHTML = "";
+
+    if (booksList.length === 0) {
+        gridEl.classList.add("hidden");
+        if (emptyEl) emptyEl.classList.remove("hidden");
+        updateAdminActiveBookUI();
+        return;
+    }
+
+    gridEl.classList.remove("hidden");
+    if (emptyEl) emptyEl.classList.add("hidden");
+
+    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
+    const email = state.currentUser ? (state.currentUser.email || "").trim().toLowerCase() : "";
+
+    const getLocalProgress = (bookId) => {
+        if (!email || !bookId) return 1;
+        try {
+            const stored = localStorage.getItem(`hawari_progress_${email}_${bookId}`);
+            if (stored) return parseInt(stored, 10) || 1;
+        } catch (e) {}
+        return 1;
+    };
+
+    // Render cards
+    for (const book of booksList) {
+        try {
+            const cachedPage = getLocalProgress(book.id);
+            const totalPages = book.total_pages || 1;
+            const pct = Math.min(100, Math.round((cachedPage / totalPages) * 100));
+
+            let gradient = "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)";
+            if (book.group_name === "infection") gradient = "linear-gradient(135deg, #1e40af 0%, #1e1b4b 100%)";
+            else if (book.group_name === "dermatology") gradient = "linear-gradient(135deg, #9d174d 0%, #4c0519 100%)";
+
+            const card = document.createElement("div");
+            card.className = "hawari-book-card";
+            const safeTitle = escapeHTML(book.title).replace(/'/g, "\\\\'");
+            card.innerHTML = `
+                <div class="book-card-cover" style="background: ${gradient};">
+                    <span class="book-cover-badge">${escapeHTML((book.group_name || "Course").toUpperCase())}</span>
+                    <div>
+                        <h4 class="book-cover-title">${escapeHTML(book.title)}</h4>
+                        <span style="font-size: 0.78rem; opacity: 0.85;"><i class="fa-solid fa-file-pdf"></i> ${totalPages} Pages</span>
+                    </div>
+                </div>
+                <div class="book-card-body">
+                    <div>
+                        <div class="book-card-meta">
+                            <span id="book-meta-${book.id}"><i class="fa-solid fa-bookmark" style="color: var(--primary-color);"></i> ${cachedPage > 1 ? `Page ${cachedPage} of ${totalPages}` : "Not Started"}</span>
+                            <span id="book-pct-${book.id}">${pct}%</span>
+                        </div>
+                        <div class="book-card-progress-bar">
+                            <div id="book-fill-${book.id}" class="book-card-progress-fill" style="width: ${pct}%;"></div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">
+                        <button id="book-btn-${book.id}" class="btn btn-primary" style="flex: 1; padding: 8px 12px; font-size: 0.85rem;" onclick="openBook('${book.id}')">
+                            <i class="fa-solid fa-book-open"></i> ${cachedPage > 1 ? `Continue (p.${cachedPage})` : "Open Book"}
+                        </button>
+                        ${isAdmin ? `
+                            <button class="btn btn-danger btn-icon" style="padding: 8px 10px;" title="Delete Book Permanently" onclick="deleteAdminBook('${book.id}', '${safeTitle}')">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        ` : ""}
+                    </div>
+                </div>
+            `;
+            gridEl.appendChild(card);
+        } catch (cardErr) {
+            console.error("[BookLibrary] Failed to render card for book:", book.id, book.title, cardErr);
+        }
+    }
+
+    updateAdminActiveBookUI();
+
+    // 2. Background Cloud Fetch & Refresh (Non-Blocking)
+    if (!skipCloudFetch) {
+        fetchBookLibraryData().then(() => {
+            renderBookLibrary(filterCategory, searchQuery, true);
+        }).catch(err => {
+            console.error("[BookLibrary] Async cloud fetch failed:", err);
+        });
+    }
+}
+
+window.filterBookLibrary = function(cat, btnEl) {
+    const btns = document.querySelectorAll("#book-library-category-filters button");
+    btns.forEach(b => b.classList.remove("active"));
+    if (btnEl) btnEl.classList.add("active");
+    const searchVal = document.getElementById("book-library-search-input")?.value || "";
+    renderBookLibrary(cat, searchVal);
+};
+
+window.searchBookLibrary = function(q) {
+    const activeFilterBtn = document.querySelector("#book-library-category-filters button.active");
+    const activeCat = activeFilterBtn ? activeFilterBtn.dataset.category || "all" : "all";
+    renderBookLibrary(activeCat, q);
+};
+
+async function getSignedBookUrl(filePath, expiresIn = 300) {
+    try {
+        const cleanUrl = (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, '');
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+        
+        let targetPath = filePath || "";
+        if (targetPath.includes("/hawari_books/")) {
+            targetPath = targetPath.split("/hawari_books/").pop();
+        } else if (targetPath.startsWith("http://") || targetPath.startsWith("https://")) {
+            targetPath = targetPath.split("/").pop();
+        }
+
+        console.log("[Security] Requesting signed URL for path:", targetPath);
+
+        const response = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${targetPath}`, {
+            method: "POST",
+            headers: {
+                "apikey": anonKey,
+                "Authorization": `Bearer ${(state.currentUser && state.currentUser.token) ? state.currentUser.token : anonKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ expiresIn })
+        });
+
+        if (!response.ok) {
+            console.error("[Security] Error fetching signed URL:", response.status);
+            return null;
+        }
+
+        const data = await response.json();
+        return `${cleanUrl}/storage/v1/object/sign/hawari_books/${targetPath}?token=${data.token || data.signedURL.split('token=').pop()}`;
+    } catch (err) {
+        console.error("[Security] Error fetching signed URL:", err);
+        return null;
+    }
+}
+
+window.openBook = async function(bookId) {
+    const book = (state.books || []).find(b => b.id === bookId);
+    if (!book) return;
+
+    // Set active book
+    bookState.activeBookFile = book;
+    bookState.numPages = book.total_pages || 1;
+    bookState.annotations = {}; // CLEAR memory to prevent annotations bleeding between books!
+    bookState.pdfDoc = null; // Clear previous document!
+
+    // Fetch user progress for this book
+    const lastPage = await fetchUserBookProgress(bookId);
+    bookState.currentPage = lastPage;
+
+    // Fetch annotations scoped to this book
+    await fetchBookCloudAnnotations();
+
+    // Update UI elements
+    const titleEl = document.getElementById("book-viewer-title");
+    if (titleEl) titleEl.innerText = book.title;
+
+    const totalPagesEl = document.getElementById("book-total-pages-num");
+    if (totalPagesEl) totalPagesEl.innerText = book.total_pages;
+
+    const gotoInput = document.getElementById("book-goto-page-input");
+    if (gotoInput) {
+        gotoInput.max = book.total_pages;
+        gotoInput.value = lastPage;
+    }
+
+    // Toggle Workspace views
+    const libraryContainer = document.getElementById("book-library-container");
+    const viewerWorkspace = document.getElementById("book-viewer-workspace");
+    if (libraryContainer) libraryContainer.classList.add("hidden");
+    if (viewerWorkspace) viewerWorkspace.classList.remove("hidden");
+
+    redrawBookCanvas();
+    showToast("Book Loaded", `Opened "${book.title}" on page ${lastPage}`, "info");
+};
+
+window.closeBookViewerAndReturnToLibrary = function() {
+    saveUserBookProgress();
+    saveBookPageAnnotationToCloud(bookState.currentPage);
+
+    // Flush any pending debounced syncs immediately
+    if (saveAnnotationsTimeout) {
+        clearTimeout(saveAnnotationsTimeout);
+        flushPendingAnnotationsSync();
+    }
+    if (saveProgressTimeout) {
+        clearTimeout(saveProgressTimeout);
+        flushPendingProgressSync();
+    }
+
+    bookState.activeBookFile = null;
+    bookState.pdfDoc = null;
+
+    const libraryContainer = document.getElementById("book-library-container");
+    const viewerWorkspace = document.getElementById("book-viewer-workspace");
+    if (libraryContainer) libraryContainer.classList.remove("hidden");
+    if (viewerWorkspace) viewerWorkspace.classList.add("hidden");
+
+    renderBookLibrary();
+};
+
+window.deleteAdminBook = async function(bookId, bookTitle) {
+    if (!confirm(`Are you sure you want to permanently delete "${bookTitle}"?\n\nThis will remove the book PDF and all associated student annotations permanently. This action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        const book = (state.books || []).find(b => b.id === bookId);
+        if (book) {
+            await supabaseRequest(`hawari_book_files?id=eq.${encodeURIComponent(bookId)}`, {
+                method: "DELETE"
+            });
+            try {
+                const cleanPath = book.storage_url.replace(/.*\/hawari_books\//, "");
+                const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
+                const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+                const jwtToken = await getValidSupabaseAccessToken();
+                const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+                await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                    method: "DELETE",
+                    headers: {
+                        "apikey": anonKey,
+                        "Authorization": `Bearer ${jwtToken || anonKey}`
+                    }
+                });
+            } catch (storageErr) {
+                console.warn("[BookDelete] Storage cleanup warning:", storageErr.message);
+            }
+        }
+
+        if (bookState.activeBookFile && bookState.activeBookFile.id === bookId) {
+            bookState.activeBookFile = null;
+            bookState.numPages = 10;
+        }
+
+        state.books = (state.books || []).filter(b => b.id !== bookId);
+        localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books));
+        
+        showToast("Book Deleted", `Successfully deleted "${bookTitle}"`, "info");
+        updateAdminActiveBookUI();
+        renderBookLibrary();
+    } catch (e) {
+        console.error("[BookDelete] Error deleting book:", e);
+        showToast("Delete Error", "Failed to delete book.", "danger");
+    }
+};
+
+window.openAdminAddBookModal = function() {
+    const modal = document.getElementById("modal-admin-add-book");
+    if (modal) modal.classList.remove("hidden");
+};
+
+function initAddBookModalForm() {
+    // Bind modal close buttons
+    document.querySelectorAll(".close-modal").forEach(btn => {
+        if (!btn.dataset.bound) {
+            btn.dataset.bound = "true";
+            btn.onclick = () => {
+                document.querySelectorAll(".modal").forEach(m => m.classList.add("hidden"));
+            };
+        }
+    });
+
+    const modalForm = document.getElementById("modal-add-book-form");
+    if (modalForm && !modalForm.dataset.bound) {
+        modalForm.dataset.bound = "true";
+        modalForm.onsubmit = async (event) => {
+            event.preventDefault();
+            console.log("[BookUpload] Modal Submit button clicked!");
+            
+            const titleInput = document.getElementById("modal-book-title");
+            const fileInput = document.getElementById("modal-book-pdf-file");
+            const progressContainer = document.getElementById("modal-book-upload-progress");
+            const progressBar = document.getElementById("modal-book-upload-bar");
+            const progressText = document.getElementById("modal-book-upload-pct");
+
+            const title = titleInput ? titleInput.value.trim() : "";
+            const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+
+            if (!title || !file) {
+                showToast("بيانات ناقصة", "يرجى كتابة عنوان الكتاب واختيار ملف الـ PDF.", "warning");
+                return;
+            }
+
+            await processBookPdfUpload({
+                title,
+                file,
+                progressContainer,
+                progressBar,
+                progressText,
+                modalToClose: "modal-admin-add-book",
+                formToReset: modalForm
+            });
+        };
+    }
+}
+
+// Annotation compact compression & decompression helpers (saves ~60%+ database space and traffic)
+function compressAnnotations(annotations) {
+    if (!annotations || !Array.isArray(annotations)) return annotations;
+    return annotations.map(ann => {
+        const compressed = { t: ann.type };
+        if (ann.color !== undefined) compressed.c = ann.color;
+        if (ann.width !== undefined) compressed.w = ann.width;
+        if (ann.height !== undefined) compressed.h = ann.height;
+        if (ann.x !== undefined) compressed.x = ann.x;
+        if (ann.y !== undefined) compressed.y = ann.y;
+        if (ann.text !== undefined) compressed.tx = ann.text;
+        if (ann.note !== undefined) compressed.n = ann.note;
+        if (ann.badgeType !== undefined) compressed.b = ann.badgeType;
+        if (ann.fontSize !== undefined) compressed.fs = ann.fontSize;
+        if (ann.opacity !== undefined) compressed.o = ann.opacity;
+        
+        if (ann.points && Array.isArray(ann.points)) {
+            const flat = [];
+            ann.points.forEach(pt => {
+                flat.push(Math.round(pt.x), Math.round(pt.y));
+            });
+            compressed.p = flat;
+        }
+        return compressed;
+    });
+}
+
+function decompressAnnotations(compressed) {
+    if (!compressed || !Array.isArray(compressed)) return compressed;
+    return compressed.map(ann => {
+        const decompressed = {};
+        if (ann.t !== undefined) decompressed.type = ann.t;
+        if (ann.c !== undefined) decompressed.color = ann.c;
+        if (ann.w !== undefined) decompressed.width = ann.w;
+        if (ann.h !== undefined) decompressed.height = ann.h;
+        if (ann.x !== undefined) decompressed.x = ann.x;
+        if (ann.y !== undefined) decompressed.y = ann.y;
+        if (ann.tx !== undefined) decompressed.text = ann.tx;
+        if (ann.n !== undefined) decompressed.note = ann.n;
+        if (ann.b !== undefined) decompressed.badgeType = ann.b;
+        if (ann.fs !== undefined) decompressed.fontSize = ann.fs;
+        if (ann.o !== undefined) decompressed.opacity = ann.o;
+        
+        if (ann.p && Array.isArray(ann.p)) {
+            const pts = [];
+            for (let i = 0; i < ann.p.length; i += 2) {
+                pts.push({ x: ann.p[i], y: ann.p[i+1] });
+            }
+            decompressed.points = pts;
+        }
+        return decompressed;
+    });
+}
+
+async function fetchBookCloudAnnotations() {
+    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
+    const docId = bookState.activeBookFile.id;
+    const email = state.currentUser.email;
+
+    const local = localStorage.getItem(`hawari_anns_${email}_${docId}`);
+    if (local) {
+        try {
+            bookState.annotations = JSON.parse(local);
+        } catch (e) {}
+    }
+
+    try {
+        const query = `hawari_book_annotations?email=eq.${encodeURIComponent(email)}&document_id=eq.${docId}`;
+        const records = await supabaseRequest(query);
+        if (Array.isArray(records) && records.length > 0) {
+            records.forEach(row => {
+                if (row.page_number && row.payload_json) {
+                    // Decompress annotations payload
+                    bookState.annotations[row.page_number] = decompressAnnotations(row.payload_json);
+                }
+            });
+            localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
+            console.log(`[BookSync] Fetched and decompressed cloud annotations for ${records.length} pages.`);
+        }
+    } catch (e) {
+        console.warn("[BookSync] Cloud annotations fetch fallback:", e);
+    }
+}
+
+let saveAnnotationsTimeout = null;
+const pendingPagesToSync = new Set();
+
+async function saveBookPageAnnotationToCloud(page) {
+    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
+    
+    // Only save annotations for Full Grant Access students
+    const accessInfo = getBookAccessLevel(state.currentUser);
+    if (!accessInfo.isFullGrant) {
+        console.log("[BookSync] Annotations sync skipped (Premium feature for Full Grant only)");
+        return;
+    }
+
+    const docId = bookState.activeBookFile.id;
+    const email = state.currentUser.email;
+
+    // Immediately save standard JSON to LocalStorage (local first)
+    localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
+
+    // Register page for cloud syncing
+    pendingPagesToSync.add(page);
+
+    // Debounce the cloud write by 5 seconds
+    if (saveAnnotationsTimeout) clearTimeout(saveAnnotationsTimeout);
+    saveAnnotationsTimeout = setTimeout(async () => {
+        await flushPendingAnnotationsSync();
+    }, 5000);
+}
+
+async function flushPendingAnnotationsSync() {
+    if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
+    const docId = bookState.activeBookFile.id;
+    const email = state.currentUser.email;
+    const pagesArray = Array.from(pendingPagesToSync);
+    pendingPagesToSync.clear();
+
+    for (const p of pagesArray) {
+        const pageData = bookState.annotations[p] || [];
+        const payload = {
+            id: `${email}_${state.activeGroup}_${docId}_p${p}`,
+            email: email,
+            group_name: state.activeGroup,
+            document_id: docId,
+            page_number: p,
+            payload_json: compressAnnotations(pageData), // Send compressed payload
+            updated_at: new Date().toISOString()
+        };
+
+        try {
+            await supabaseRequest("hawari_book_annotations", {
+                method: "POST",
+                headers: { "Prefer": "resolution=merge-duplicates" },
+                body: JSON.stringify(payload)
+            });
+            console.log(`[BookSync] Synced compressed annotations for page ${p} to cloud.`);
+        } catch (e) {
+            console.warn(`[BookSync] Cloud sync failed for page ${p}:`, e);
+        }
+    }
+}
+
+async function flushPendingProgressSync() {
+    if (!state.currentUser || !bookState.activeBookFile) return;
+    const docId = bookState.activeBookFile.id;
+    const page = bookState.currentPage;
+    const email = state.currentUser.email;
+
+    const payload = {
+        id: `${email}_	ext{${docId}}`.replace('_text{', '_'),
+        email: email,
+        document_id: docId,
+        last_page: page,
+        updated_at: new Date().toISOString()
+    };
+    // Fix id interpolation safely
+    payload.id = `${email}_${docId}`;
+
+    try {
+        await supabaseRequest("hawari_user_book_progress", {
+            method: "POST",
+            headers: { "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify(payload)
+        });
+        console.log(`[BookProgress] Flushed page progress ${page} to cloud.`);
+    } catch (e) {
+        console.warn("[BookProgress] Flush progress failed:", e);
+    }
+}
 
 function renderHawariBookView() {
     const isAuth = isUserBookAuthorized(state.currentUser);
@@ -29562,8 +30552,27 @@ function renderBookDrawerBookmarks() {
     });
 }
 
+function redrawCurrentPageAnnotations() {
+    const animCanvas = document.getElementById("book-annotation-canvas");
+    if (!animCanvas) return;
+    const ctx = animCanvas.getContext("2d");
+    ctx.clearRect(0, 0, animCanvas.width, animCanvas.height);
+
+    const page = bookState.currentPage;
+    const annList = bookState.annotations[page] || [];
+    annList.forEach((stroke, idx) => {
+        drawSingleStroke(ctx, stroke);
+        if (bookState.selectedAnnotationIndex === idx) {
+            const bounds = getAnnotationBounds(stroke);
+            drawSelectionBox(ctx, bounds);
+        }
+    });
+}
+
 // Redraw canvas pages & overlays
 async function redrawBookCanvas() {
+    saveUserBookProgress();
+
     const pageNumInput = document.getElementById("book-goto-page-input");
     const totalPagesEl = document.getElementById("book-total-pages-num");
     const zoomPctEl = document.getElementById("book-zoom-percentage");
@@ -29622,6 +30631,12 @@ async function redrawBookCanvas() {
     // Load PDF Document if not loaded yet
     if (!bookState.pdfDoc && bookState.activeBookFile) {
         await loadRealBookPdfDocument(bookState.activeBookFile);
+        if (totalPagesEl && bookState.pdfDoc) {
+            totalPagesEl.innerText = bookState.pdfDoc.numPages;
+        }
+        if (pageNumInput && bookState.pdfDoc) {
+            pageNumInput.max = bookState.pdfDoc.numPages;
+        }
     }
 
     if (bookState.pdfDoc) {
@@ -29635,24 +30650,33 @@ async function redrawBookCanvas() {
             }
 
             const page = await bookState.pdfDoc.getPage(pageNum);
-            const scale = bookState.zoom || 1.0;
+            const scale = (bookState.zoom || 1.0) * (window.devicePixelRatio || 1.5);
+            const displayScale = bookState.zoom || 1.0;
             const viewport = page.getViewport({ scale: scale });
+            const displayViewport = page.getViewport({ scale: displayScale });
 
             if (stack) {
-                stack.style.width = viewport.width + "px";
-                stack.style.height = viewport.height + "px";
+                stack.style.width = displayViewport.width + "px";
+                stack.style.height = displayViewport.height + "px";
             }
 
             pdfCanvas.width = viewport.width;
             pdfCanvas.height = viewport.height;
+            pdfCanvas.style.width = displayViewport.width + "px";
+            pdfCanvas.style.height = displayViewport.height + "px";
+
             animCanvas.width = viewport.width;
             animCanvas.height = viewport.height;
+            animCanvas.style.width = displayViewport.width + "px";
+            animCanvas.style.height = displayViewport.height + "px";
 
             const pdfCtx = pdfCanvas.getContext("2d");
             pdfCtx.clearRect(0, 0, viewport.width, viewport.height);
 
             await page.render({ canvasContext: pdfCtx, viewport: viewport }).promise;
             console.log(`[PDFViewer] Rendered REAL PDF page ${pageNum} / ${bookState.pdfDoc.numPages}`);
+
+            redrawCurrentPageAnnotations();
         } catch (renderErr) {
             console.error("[PDFViewer] Error rendering real PDF page:", renderErr);
         }
@@ -29676,7 +30700,7 @@ async function redrawBookCanvas() {
         pdfCtx.fillRect(0, 0, scaledWidth, scaledHeight);
         pdfCtx.fillStyle = "#475569";
         pdfCtx.font = "bold 16px Outfit, sans-serif";
-        pdfCtx.fillText("Loading Real PDF Document...", 40, 50);
+        pdfCtx.fillText("جاري تحميل مستند الـ PDF الأصلي...", 40, 50);
     }
 }
 

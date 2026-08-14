@@ -3093,3 +3093,211 @@ body.group-dermatology.dark-theme {
 #admin-book-management-tab .grid-card {
     margin-bottom: 0;
 }
+
+
+/* ==========================================================================
+   COMPREHENSIVE RESPONSIVE DESIGN SYSTEM: NOTEBOOK & HAWARI BOOK LIBRARY / VIEWER
+   ========================================================================== */
+
+/* Tablet Screens (Max-Width: 992px) */
+@media (max-width: 992px) {
+    .notebook-layout {
+        grid-template-columns: 240px 1fr;
+        height: calc(100vh - 140px);
+    }
+    .book-toolbar .toolbar-group {
+        flex-wrap: wrap;
+    }
+    .book-library-grid {
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)) !important;
+        gap: 16px !important;
+    }
+}
+
+/* Mobile Screens (Max-Width: 768px) */
+@media (max-width: 768px) {
+    /* 1. Notebook View Responsiveness */
+    #notebook-view .page-header {
+        margin-bottom: 12px;
+    }
+    #notebook-view .page-header h2 {
+        font-size: 1.35rem;
+    }
+    #notebook-view .page-header p {
+        font-size: 0.82rem;
+    }
+    .notebook-layout {
+        display: flex !important;
+        flex-direction: column !important;
+        height: auto !important;
+        min-height: calc(100vh - 120px) !important;
+        border-radius: 12px !important;
+        overflow: visible !important;
+    }
+    .notebook-sidebar {
+        width: 100% !important;
+        border-right: none !important;
+        border-bottom: 1px solid var(--border-color) !important;
+        padding: 12px !important;
+        max-height: 260px !important;
+        overflow-y: auto !important;
+    }
+    .notes-list {
+        max-height: 150px !important;
+    }
+    .notebook-editor {
+        min-height: 420px !important;
+        width: 100% !important;
+        flex-grow: 1 !important;
+    }
+    .editor-header {
+        padding: 12px 14px !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 8px !important;
+    }
+    .editor-header input {
+        width: 100% !important;
+        font-size: 1.15rem !important;
+    }
+    .editor-header > div {
+        width: 100% !important;
+        justify-content: space-between !important;
+    }
+    .editor-toolbar {
+        padding: 8px 12px !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        white-space: nowrap !important;
+        gap: 6px !important;
+        scrollbar-width: thin !important;
+    }
+    .editor-body {
+        padding: 14px !important;
+        font-size: 0.9rem !important;
+        min-height: 280px !important;
+    }
+
+    /* 2. Hawari Book Library View Responsiveness */
+    #book-library-container .page-header {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 12px !important;
+    }
+    #book-library-container .page-header > div:last-child {
+        width: 100% !important;
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+    }
+    #book-library-grid {
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)) !important;
+        gap: 14px !important;
+    }
+    .book-library-grid .grid-card {
+        margin: 0 !important;
+        width: 100% !important;
+    }
+
+    /* 3. Hawari Book Viewer Workspace Responsiveness */
+    #book-viewer-workspace > div:first-child {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 10px !important;
+        padding: 10px 12px !important;
+    }
+    #book-viewer-workspace > div:first-child > div:last-child {
+        width: 100% !important;
+        display: flex !important;
+        justify-content: space-between !important;
+    }
+    #book-viewer-title {
+        font-size: 1.05rem !important;
+    }
+    #book-workspace-container {
+        padding: 8px !important;
+        border-radius: 12px !important;
+    }
+    .book-toolbar {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 8px !important;
+        padding-bottom: 8px !important;
+    }
+    .book-toolbar .toolbar-group {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        width: 100% !important;
+        gap: 4px !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+    }
+    .book-toolbar .toolbar-group::-webkit-scrollbar {
+        display: none;
+    }
+    .annotation-tools-bar {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        flex-wrap: nowrap !important;
+        justify-content: flex-start !important;
+        padding: 8px 10px !important;
+        gap: 10px !important;
+        scrollbar-width: thin !important;
+    }
+    .annotation-tools-bar .toolbar-group {
+        flex-shrink: 0 !important;
+        width: auto !important;
+    }
+    #book-nav-drawer {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        z-index: 50 !important;
+        width: 85% !important;
+        max-width: 280px !important;
+        height: 100% !important;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.35) !important;
+        background: var(--bg-secondary) !important;
+    }
+    #book-canvas-viewport {
+        min-height: 360px !important;
+        padding: 4px !important;
+        width: 100% !important;
+    }
+    #book-canvas-stack {
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+    #book-canvas-stack canvas {
+        max-width: 100% !important;
+        height: auto !important;
+    }
+}
+
+/* Small Mobile Screens (Max-Width: 480px) */
+@media (max-width: 480px) {
+    #book-library-grid {
+        grid-template-columns: 1fr !important;
+    }
+    .book-tool-btn {
+        width: 32px !important;
+        height: 32px !important;
+        font-size: 0.85rem !important;
+    }
+    .pen-size-btn {
+        padding: 2px 6px !important;
+        font-size: 0.7rem !important;
+    }
+    .color-dot {
+        width: 18px !important;
+        height: 18px !important;
+    }
+    #book-search-text-input {
+        width: 120px !important;
+    }
+    .notebook-sidebar {
+        max-height: 220px !important;
+    }
+}

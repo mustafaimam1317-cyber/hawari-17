@@ -23618,6 +23618,12 @@ function renderNotebookListOnly() {
 function selectNotebookNote(noteId) {
     activeNoteId = noteId;
     renderNotebook();
+    if (window.innerWidth <= 768) {
+        const editor = document.querySelector(".notebook-editor");
+        if (editor) {
+            editor.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+    }
 }
 
 function initEditorToolbarActions(editorEl, saveCallback) {

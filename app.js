@@ -21428,6 +21428,40 @@ function decryptLocal(key, defaultValue) {
     }
 }
 
+// Network and cache performance instrumentation
+window.HawariNetworkMetrics = window.HawariNetworkMetrics || {
+    totalRequests: 0,
+    GETRequests: 0,
+    POSTRequests: 0,
+    PATCHRequests: 0,
+    DELETERequests: 0,
+
+    questionBankRequests: 0,
+    questionBankFullDownloads: 0,
+    questionBankVersionChecks: 0,
+
+    examListRequests: 0,
+    examListVersionChecks: 0,
+
+    profileReads: 0,
+
+    progressWrites: 0,
+    queuedWrites: 0,
+
+    quizSubmissions: 0,
+
+    deduplicatedRequests: 0,
+
+    cacheHits: 0,
+    cacheMisses: 0,
+
+    successfulRequests: 0,
+    failedRequests: 0,
+    retryCount: 0,
+
+    estimatedBytes: 0
+};
+
 async function supabaseRequest(path, options = {}) {
     const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
@@ -21446,7 +21480,31 @@ async function supabaseRequest(path, options = {}) {
         ...options.headers
     };
 
-    const method = options.method || "GET";
+    const method = (options.method || "GET").toUpperCase();
+    
+    // Track network metrics
+    window.HawariNetworkMetrics.totalRequests++;
+    if (method === "GET") window.HawariNetworkMetrics.GETRequests++;
+    else if (method === "POST") window.HawariNetworkMetrics.POSTRequests++;
+    else if (method === "PATCH") window.HawariNetworkMetrics.PATCHRequests++;
+    else if (method === "DELETE") window.HawariNetworkMetrics.DELETERequests++;
+
+    if (path.includes("hawari_global_questions")) {
+        window.HawariNetworkMetrics.questionBankRequests++;
+        if (path.includes("select=group_name,last_updated")) {
+            window.HawariNetworkMetrics.questionBankVersionChecks++;
+        } else {
+            window.HawariNetworkMetrics.questionBankFullDownloads++;
+        }
+    } else if (path.includes("hawari_course_quizzes") || path.includes("hawari_report_tasks")) {
+        window.HawariNetworkMetrics.examListRequests++;
+    } else if (path.includes("hawari_users")) {
+        if (method === "GET") window.HawariNetworkMetrics.profileReads++;
+        else window.HawariNetworkMetrics.progressWrites++;
+    } else if (path.includes("hawari_quiz_results")) {
+        if (method === "POST") window.HawariNetworkMetrics.quizSubmissions++;
+    }
+
     try {
         const response = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
             ...options,
@@ -21455,9 +21513,13 @@ async function supabaseRequest(path, options = {}) {
 
         if (!response.ok) {
             const errText = await response.text();
+            window.HawariNetworkMetrics.failedRequests++;
             console.error(`[SupabaseRequest] FAILED ${method} ${path} (${response.status}):`, errText);
             return { success: false, status: response.status, error: errText || `HTTP ${response.status}` };
         }
+
+        window.HawariNetworkMetrics.successfulRequests++;
+
         if (method === "DELETE" || response.status === 204) {
             return { success: true, data: true };
         }
@@ -21465,12 +21527,16 @@ async function supabaseRequest(path, options = {}) {
         if (!text || text.trim() === "") {
             return { success: true, data: [] };
         }
+        
+        window.HawariNetworkMetrics.estimatedBytes += text.length;
+
         try {
             return JSON.parse(text);
         } catch (jsonErr) {
             return { success: true, data: [] };
         }
     } catch (e) {
+        window.HawariNetworkMetrics.failedRequests++;
         console.error(`[SupabaseRequest] Exception ${method} ${path}:`, e);
         return { success: false, status: 0, error: e.message };
     }
@@ -21501,22 +21567,486 @@ function mergeQuestionsWithGlobal(userQuestions, globalQuestions) {
     return userQuestions;
 }
 
-async function fetchGlobalQuestions(group) {
+/* ==========================================================================
+   HAWARI MULTI-COURSE QUESTION-BANK & EXAM CACHING ENGINE
+   Isolated for: "infection" & "dermatology"
+   Layer 1: In-Memory Cache (0ms latency)
+   Layer 2: IndexedDB Persistence (hawari_question_cache)
+   Layer 3: Lightweight Cloud Version Check (~48-60 bytes)
+   Layer 4: Full Cloud Question Bank Download (Only when missing/stale)
+   Layer 5: Published Exams / Quizzes Separate Cache (Short 90s TTL)
+   Layer 6: Persistent Write-Behind Sync Queue
+   Layer 7: Cross-Tab Invalidation via BroadcastChannel
+   ========================================================================== */
+
+const QUESTION_CACHE_DB_NAME = "hawari_question_cache";
+const QUESTION_CACHE_STORE_NAME = "question_banks";
+const QUESTION_BANK_VERSION_CHECK_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+const PUBLISHED_EXAMS_CACHE_TTL_MS = 90 * 1000; // 90 seconds short TTL for published exams
+
+// Global in-memory caches
+window.HawariQuestionCacheMemory = window.HawariQuestionCacheMemory || { infection: null, dermatology: null };
+window.HawariExamCacheMemory = window.HawariExamCacheMemory || { infection: null, dermatology: null };
+window.HawariQuestionLoadPromises = window.HawariQuestionLoadPromises || {};
+window.HawariExamLoadPromises = window.HawariExamLoadPromises || {};
+
+window.HawariCacheMetricsByGroup = window.HawariCacheMetricsByGroup || {
+    infection: { memoryHits: 0, indexedDBHits: 0, cloudVersionChecks: 0, fullCloudDownloads: 0, deduplicatedRequests: 0, cacheUpdates: 0 },
+    dermatology: { memoryHits: 0, indexedDBHits: 0, cloudVersionChecks: 0, fullCloudDownloads: 0, deduplicatedRequests: 0, cacheUpdates: 0 }
+};
+
+// Cross-tab broadcast channel for instant cache invalidation
+const questionBankSyncChannel = typeof BroadcastChannel !== "undefined"
+    ? new BroadcastChannel("hawari-question-bank-sync")
+    : null;
+
+if (questionBankSyncChannel) {
+    questionBankSyncChannel.onmessage = (event) => {
+        if (!event || !event.data) return;
+        const { type, group, version } = event.data;
+        if (type === "QUESTION_BANK_UPDATED" && group) {
+            console.log(`[QuestionCache] Broadcast received: ${group} question bank updated to v${version}.`);
+            if (window.HawariQuestionCacheMemory[group]) {
+                delete window.HawariQuestionCacheMemory[group];
+            }
+            if (state && state.activeGroup === group && !state.activeQuiz) {
+                fetchGlobalQuestions(group, true);
+            }
+        } else if (type === "EXAM_LIST_UPDATED" && group) {
+            console.log(`[ExamCache] Broadcast received: ${group} exams updated. Revalidating...`);
+            if (window.HawariExamCacheMemory[group]) {
+                delete window.HawariExamCacheMemory[group];
+            }
+            if (state && state.activeGroup === group) {
+                fetchCourseQuizzes(group, true);
+                fetchReportTasksFromCloud(group, true);
+            }
+        }
+    };
+}
+
+// Open / initialize IndexedDB
+function openQuestionCacheDB() {
+    return new Promise((resolve) => {
+        if (typeof indexedDB === "undefined") {
+            return resolve(null);
+        }
+        try {
+            const request = indexedDB.open(QUESTION_CACHE_DB_NAME, 1);
+            request.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(QUESTION_CACHE_STORE_NAME)) {
+                    db.createObjectStore(QUESTION_CACHE_STORE_NAME, { keyPath: "groupName" });
+                }
+            };
+            request.onsuccess = (e) => resolve(e.target.result);
+            request.onerror = (e) => {
+                console.warn("[QuestionCache] IndexedDB open error:", e.target ? e.target.error : e);
+                resolve(null);
+            };
+        } catch (err) {
+            console.warn("[QuestionCache] IndexedDB open exception:", err);
+            resolve(null);
+        }
+    });
+}
+
+// Read from IndexedDB
+async function getCachedQuestionBank(groupName) {
+    try {
+        const db = await openQuestionCacheDB();
+        if (!db) return null;
+        return new Promise((resolve) => {
+            const tx = db.transaction(QUESTION_CACHE_STORE_NAME, "readonly");
+            const store = tx.objectStore(QUESTION_CACHE_STORE_NAME);
+            const req = store.get(groupName);
+            req.onsuccess = () => {
+                const record = req.result;
+                if (record && Array.isArray(record.questions) && record.questions.length > 0) {
+                    resolve(record);
+                } else {
+                    resolve(null);
+                }
+            };
+            req.onerror = () => resolve(null);
+        });
+    } catch (e) {
+        console.warn(`[QuestionCache] Error reading ${groupName} from IndexedDB:`, e);
+        return null;
+    }
+}
+
+// Write to IndexedDB
+async function setCachedQuestionBank(groupName, data) {
+    try {
+        const db = await openQuestionCacheDB();
+        if (!db) return false;
+        return new Promise((resolve) => {
+            const tx = db.transaction(QUESTION_CACHE_STORE_NAME, "readwrite");
+            const store = tx.objectStore(QUESTION_CACHE_STORE_NAME);
+            const record = {
+                groupName: groupName,
+                version: data.version || Date.now(),
+                generatedAt: data.generatedAt || Date.now(),
+                lastCheckedAt: data.lastCheckedAt || Date.now(),
+                questionCount: data.questions ? data.questions.length : 0,
+                questions: data.questions || []
+            };
+            store.put(record);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+        });
+    } catch (e) {
+        console.warn(`[QuestionCache] Error writing ${groupName} to IndexedDB:`, e);
+        return false;
+    }
+}
+
+// Background lightweight version revalidator (Stale-While-Revalidate: ~48-60 bytes metadata only)
+async function revalidateQuestionBankVersion(group, cachedVersion) {
+    const metrics = window.HawariCacheMetricsByGroup[group] || window.HawariCacheMetricsByGroup.infection;
+    metrics.cloudVersionChecks++;
+    console.log(`[QuestionCache] Background version check for course "${group}" (cached: ${cachedVersion})...`);
+    try {
+        const checkRes = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}&select=group_name,last_updated`);
+        if (checkRes && checkRes.length > 0) {
+            const serverVersion = checkRes[0].last_updated;
+            if (serverVersion && serverVersion !== cachedVersion) {
+                console.log(`[QuestionCache] VERSION CHANGED for ${group}: cached ${cachedVersion} != server ${serverVersion}. Downloading updated question bank in background...`);
+                await downloadFullQuestionBankFromCloud(group, serverVersion);
+            } else {
+                console.log(`[QuestionCache] Version UNCHANGED for course ${group} (${cachedVersion}). Cache is valid.`);
+                if (window.HawariQuestionCacheMemory[group]) {
+                    window.HawariQuestionCacheMemory[group].lastCheckedAt = Date.now();
+                }
+                const existing = await getCachedQuestionBank(group);
+                if (existing) {
+                    existing.lastCheckedAt = Date.now();
+                    await setCachedQuestionBank(group, existing);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[QuestionCache] Background version check skipped/fallback for ${group}:`, e);
+    }
+}
+
+// Full download from Supabase (Only when cache is missing or version mismatch)
+async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
+    const metrics = window.HawariCacheMetricsByGroup[group] || window.HawariCacheMetricsByGroup.infection;
+    metrics.fullCloudDownloads++;
+    console.log(`[QuestionCache] FULL DOWNLOAD executing for course "${group}"...`);
     try {
         const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
         if (records && records.length > 0 && records[0].questions) {
-            globalQuestionsCache = records[0].questions;
-            console.log(`[Sync] Loaded global questions from cloud for group ${group}`);
+            const questions = records[0].questions;
+            const version = records[0].last_updated || targetVersion || Date.now();
+            
+            // 1. Update In-Memory
+            window.HawariQuestionCacheMemory[group] = {
+                groupName: group,
+                version: version,
+                lastCheckedAt: Date.now(),
+                generatedAt: Date.now(),
+                questionCount: questions.length,
+                questions: questions
+            };
+            
+            // 2. Update IndexedDB
+            await setCachedQuestionBank(group, window.HawariQuestionCacheMemory[group]);
+            
+            // 3. Update globalQuestionsCache if this is the active course
+            if (state && state.activeGroup === group) {
+                globalQuestionsCache = questions;
+            }
+            metrics.cacheUpdates++;
+            console.log(`[QuestionCache] CACHE UPDATED for ${group}: ${questions.length} questions, version ${version}`);
+            
+            // 4. Notify other tabs via BroadcastChannel & localStorage
+            if (questionBankSyncChannel) {
+                questionBankSyncChannel.postMessage({
+                    type: "QUESTION_BANK_UPDATED",
+                    group: group,
+                    version: version
+                });
+            }
+            try {
+                localStorage.setItem("hawari_qb_sync_" + group, String(version));
+            } catch (e) {}
+
+            return questions;
         } else {
-            // Fallback to local questions seed and seed it to cloud
-            globalQuestionsCache = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+            const seed = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+            if (state && state.activeGroup === group) {
+                globalQuestionsCache = seed;
+            }
             await saveGlobalQuestionsToCloud();
+            return seed;
         }
     } catch (e) {
-        console.error("[Sync] Failed to fetch global questions:", e);
-        globalQuestionsCache = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+        console.error(`[QuestionCache] Full cloud download failed for ${group}:`, e);
+        const fallback = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+        if (state && state.activeGroup === group) {
+            globalQuestionsCache = fallback;
+        }
+        return fallback;
     }
 }
+
+// Multi-layer fetch entrypoint with synchronous Memory check & async request deduplication
+async function fetchGlobalQuestions(group, forceRefresh = false) {
+    if (!group) return globalQuestionsCache;
+
+    const metrics = window.HawariCacheMetricsByGroup[group] || window.HawariCacheMetricsByGroup.infection;
+
+    // LAYER 1: In-Memory Cache (0ms latency)
+    const mem = window.HawariQuestionCacheMemory[group];
+    if (mem && mem.questions && !forceRefresh) {
+        if (state && state.activeGroup === group) {
+            globalQuestionsCache = mem.questions;
+        }
+        metrics.memoryHits++;
+        window.HawariNetworkMetrics.cacheHits++;
+        console.log(`[QuestionCache] Memory HIT for course "${group}" (${mem.questions.length} questions)`);
+
+        // Non-blocking background revalidation after TTL
+        if (Date.now() - (mem.lastCheckedAt || 0) > QUESTION_BANK_VERSION_CHECK_TTL_MS) {
+            revalidateQuestionBankVersion(group, mem.version);
+        }
+        return mem.questions;
+    }
+
+    // Request deduplication for inflight fetches
+    if (window.HawariQuestionLoadPromises[group]) {
+        metrics.deduplicatedRequests++;
+        window.HawariNetworkMetrics.deduplicatedRequests++;
+        return window.HawariQuestionLoadPromises[group];
+    }
+
+    const asyncFetchOperation = async () => {
+        try {
+            // LAYER 2: IndexedDB Cache
+            const idbRecord = await getCachedQuestionBank(group);
+            if (idbRecord && idbRecord.questions && !forceRefresh) {
+                if (state && state.activeGroup === group) {
+                    globalQuestionsCache = idbRecord.questions;
+                }
+                window.HawariQuestionCacheMemory[group] = idbRecord;
+                metrics.indexedDBHits++;
+                window.HawariNetworkMetrics.cacheHits++;
+                console.log(`[QuestionCache] IndexedDB HIT for course "${group}" (${idbRecord.questions.length} questions, v${idbRecord.version})`);
+
+                if (Date.now() - (idbRecord.lastCheckedAt || 0) > QUESTION_BANK_VERSION_CHECK_TTL_MS) {
+                    revalidateQuestionBankVersion(group, idbRecord.version);
+                }
+                return idbRecord.questions;
+            }
+
+            // LAYER 3 & 4: Cold Load / Full Cloud Download
+            window.HawariNetworkMetrics.cacheMisses++;
+            return await downloadFullQuestionBankFromCloud(group);
+        } finally {
+            delete window.HawariQuestionLoadPromises[group];
+        }
+    };
+
+    const inflightPromise = asyncFetchOperation();
+    window.HawariQuestionLoadPromises[group] = inflightPromise;
+    return inflightPromise;
+}
+
+// Background Question Bank Prefetch (runs on login / course load without blocking UI)
+function prefetchQuestionBank(group) {
+    if (!group) return;
+    setTimeout(() => {
+        fetchGlobalQuestions(group).catch(err => {
+            console.warn(`[QuestionCache] Background prefetch warning for ${group}:`, err);
+        });
+    }, 150);
+}
+
+// Persistent Write-Behind Sync Queue
+const SYNC_QUEUE_KEY = "hawari_pending_sync_queue";
+
+function getPendingSyncQueue() {
+    try {
+        const raw = localStorage.getItem(SYNC_QUEUE_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function savePendingSyncQueue(queue) {
+    try {
+        localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
+    } catch (e) {}
+}
+
+function enqueueSyncItem(item) {
+    const queue = getPendingSyncQueue();
+    const existingIdx = queue.findIndex(q => q.id === item.id && q.entityType === item.entityType);
+    const enrichedItem = {
+        ...item,
+        updatedAt: item.updatedAt || Date.now(),
+        retryCount: 0,
+        createdAt: item.createdAt || Date.now()
+    };
+    if (existingIdx >= 0) {
+        queue[existingIdx] = enrichedItem;
+    } else {
+        queue.push(enrichedItem);
+    }
+    savePendingSyncQueue(queue);
+    window.HawariNetworkMetrics.queuedWrites++;
+    scheduleQueueFlush(2000);
+}
+
+let queueFlushTimer = null;
+let isFlushingQueue = false;
+
+function scheduleQueueFlush(delayMs = 2500) {
+    if (queueFlushTimer) clearTimeout(queueFlushTimer);
+    queueFlushTimer = setTimeout(() => {
+        flushPendingSyncQueue();
+    }, delayMs);
+}
+
+async function flushPendingSyncQueue() {
+    if (isFlushingQueue || (typeof navigator !== "undefined" && !navigator.onLine)) return;
+    const queue = getPendingSyncQueue();
+    if (queue.length === 0) return;
+
+    isFlushingQueue = true;
+    const remainingQueue = [];
+
+    for (const item of queue) {
+        try {
+            if (item.entityType === "quiz_result") {
+                await saveQuizResultToCloud(item.payload, true);
+            } else if (item.entityType === "user_progress") {
+                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(item.email)}&group_name=eq.${item.group}`, {
+                    method: "PATCH",
+                    body: JSON.stringify(item.payload)
+                });
+            }
+            console.log(`[SyncQueue] Successfully synced ${item.entityType} (${item.id})`);
+        } catch (err) {
+            console.warn(`[SyncQueue] Failed sync attempt for ${item.id}:`, err);
+            item.retryCount = (item.retryCount || 0) + 1;
+            window.HawariNetworkMetrics.retryCount++;
+            if (item.retryCount < 5) {
+                remainingQueue.push(item);
+            } else {
+                console.error(`[SyncQueue] Dropping item ${item.id} after 5 failed retries.`);
+            }
+        }
+    }
+
+    savePendingSyncQueue(remainingQueue);
+    isFlushingQueue = false;
+
+    if (remainingQueue.length > 0) {
+        scheduleQueueFlush(10000);
+    }
+}
+
+if (typeof window !== "undefined") {
+    window.addEventListener("online", () => {
+        console.log("[SyncQueue] Network online. Flushing pending sync queue...");
+        flushPendingSyncQueue();
+    });
+}
+
+// Development debug helpers
+window.debugQuestionCache = function() {
+    const groups = ["infection", "dermatology"];
+    const results = {};
+
+    groups.forEach(grp => {
+        const mem = window.HawariQuestionCacheMemory[grp];
+        let cacheAgeStr = "N/A";
+        let statusStr = "COLD";
+
+        if (mem && mem.lastCheckedAt) {
+            const diffMs = Date.now() - mem.lastCheckedAt;
+            const mins = Math.floor(diffMs / 60000);
+            const hours = Math.floor(mins / 60);
+            cacheAgeStr = hours > 0 ? `${hours}h ${mins % 60}m` : `${mins}m ${Math.round((diffMs % 60000) / 1000)}s`;
+            statusStr = diffMs > QUESTION_BANK_VERSION_CHECK_TTL_MS ? "STALE" : "FRESH";
+        }
+
+        const metrics = window.HawariCacheMetricsByGroup[grp] || {
+            memoryHits: 0,
+            indexedDBHits: 0,
+            fullCloudDownloads: 0,
+            cloudVersionChecks: 0,
+            deduplicatedRequests: 0
+        };
+
+        results[grp] = {
+            course: grp.toUpperCase(),
+            questions: mem ? mem.questionCount : 0,
+            cachedVersion: mem ? mem.version : "N/A",
+            cacheAge: cacheAgeStr,
+            status: statusStr,
+            memoryHits: metrics.memoryHits,
+            indexedDBHits: metrics.indexedDBHits,
+            fullDownloads: metrics.fullCloudDownloads,
+            versionChecks: metrics.cloudVersionChecks,
+            deduplicated: metrics.deduplicatedRequests
+        };
+    });
+
+    console.group("=== HAWARI QUESTION CACHE DIAGNOSTICS ===");
+    console.table(results);
+    console.groupEnd();
+
+    // Published Exam Cache
+    const examCacheInfo = {};
+    groups.forEach(grp => {
+        const memExam = window.HawariExamCacheMemory && window.HawariExamCacheMemory[grp];
+        examCacheInfo[grp] = {
+            course: grp.toUpperCase(),
+            cachedQuizzes: memExam && memExam.quizzes ? memExam.quizzes.length : 0,
+            cachedReportTasks: memExam && memExam.reportTasks ? memExam.reportTasks.length : 0,
+            lastCheckedAge: memExam && memExam.lastCheckedAt ? `${Math.round((Date.now() - memExam.lastCheckedAt)/1000)}s ago` : "N/A",
+            status: memExam && (Date.now() - memExam.lastCheckedAt < PUBLISHED_EXAMS_CACHE_TTL_MS) ? "FRESH" : "STALE/EMPTY"
+        };
+    });
+    console.group("=== HAWARI PUBLISHED EXAMS CACHE ===");
+    console.table(examCacheInfo);
+    console.groupEnd();
+
+    // Sync Queue Status
+    const queue = getPendingSyncQueue();
+    console.group(`=== STUDENT SYNC QUEUE (${queue.length} pending writes) ===`);
+    if (queue.length > 0) {
+        console.table(queue.map(q => ({
+            id: q.id,
+            type: q.entityType,
+            email: q.email,
+            retries: q.retryCount,
+            age: `${Math.round((Date.now() - q.createdAt)/1000)}s`
+        })));
+    } else {
+        console.log("Sync queue is empty. All local state synchronized.");
+    }
+    console.groupEnd();
+
+    return {
+        questions: results,
+        exams: examCacheInfo,
+        pendingQueueCount: queue.length
+    };
+};
+
+window.debugNetworkMetrics = function() {
+    console.group("=== HAWARI SUPABASE NETWORK METRICS ===");
+    console.table(window.HawariNetworkMetrics);
+    console.groupEnd();
+    return window.HawariNetworkMetrics;
+};
 
 async function saveGlobalQuestionsToCloud() {
     const group = state.activeGroup;
@@ -21535,10 +22065,11 @@ async function saveGlobalQuestionsToCloud() {
         };
     });
 
+    const newVersion = Date.now();
     const payload = {
         group_name: group,
         questions: cleanQuestions,
-        last_updated: Date.now()
+        last_updated: newVersion
     };
 
     try {
@@ -21549,36 +22080,105 @@ async function saveGlobalQuestionsToCloud() {
             },
             body: JSON.stringify(payload)
         });
-        console.log(`[Sync] Saved global questions template to cloud for group ${group}`);
+        
+        // Update local memory and IndexedDB caches immediately
+        window.HawariQuestionCacheMemory[group] = {
+            groupName: group,
+            version: newVersion,
+            lastCheckedAt: Date.now(),
+            generatedAt: Date.now(),
+            questionCount: cleanQuestions.length,
+            questions: cleanQuestions
+        };
+        await setCachedQuestionBank(group, window.HawariQuestionCacheMemory[group]);
+        globalQuestionsCache = cleanQuestions;
+
+        // Broadcast invalidation across tabs
+        if (questionBankSyncChannel) {
+            questionBankSyncChannel.postMessage({
+                type: "QUESTION_BANK_UPDATED",
+                group: group,
+                version: newVersion
+            });
+        }
+        try {
+            localStorage.setItem("hawari_qb_sync_" + group, String(newVersion));
+        } catch (e) {}
+
+        console.log(`[Sync] Saved global questions template to cloud for course ${group} (version ${newVersion})`);
     } catch (e) {
         console.error("[Sync] Failed to save global questions to cloud:", e);
     }
 }
 
-async function fetchReportTasksFromCloud(group) {
+// ==========================================
+// PUBLISHED EXAMS / TESTS CACHING & FRESHNESS
+// ==========================================
+
+async function fetchReportTasksFromCloud(group, forceRefresh = false) {
+    if (!group) return;
+
+    // Check in-memory exam cache (90s TTL)
+    const memExam = window.HawariExamCacheMemory[group];
+    if (memExam && memExam.reportTasks && !forceRefresh) {
+        state.reportTasks = memExam.reportTasks;
+        if (Date.now() - memExam.lastCheckedAt > PUBLISHED_EXAMS_CACHE_TTL_MS) {
+            // Background revalidation
+            revalidateReportTasks(group);
+        }
+        return state.reportTasks;
+    }
+
     try {
         const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
-            state.reportTasks = records.map(row => {
-                return {
-                    id: row.id,
-                    title: row.title,
-                    duration: row.time_limit,
-                    questions: row.question_ids || [],
-                    dateCreated: row.date_created
-                };
-            });
-            console.log(`[Sync] Fetched ${state.reportTasks.length} report tasks from cloud for group ${group}`);
+            state.reportTasks = records.map(row => ({
+                id: row.id,
+                title: row.title,
+                duration: row.time_limit,
+                questions: row.question_ids || [],
+                dateCreated: row.date_created
+            }));
+            
+            // Cache in memory
+            window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
+            window.HawariExamCacheMemory[group].reportTasks = state.reportTasks;
+            window.HawariExamCacheMemory[group].lastCheckedAt = Date.now();
+            
+            console.log(`[Sync] Fetched ${state.reportTasks.length} report tasks from cloud for course ${group}`);
         }
     } catch (e) {
         console.error("[Sync] Failed to fetch report tasks from cloud:", e);
     }
 }
 
+async function revalidateReportTasks(group) {
+    try {
+        const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${group}`);
+        if (records && Array.isArray(records)) {
+            const mapped = records.map(row => ({
+                id: row.id,
+                title: row.title,
+                duration: row.time_limit,
+                questions: row.question_ids || [],
+                dateCreated: row.date_created
+            }));
+            state.reportTasks = mapped;
+            window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
+            window.HawariExamCacheMemory[group].reportTasks = mapped;
+            window.HawariExamCacheMemory[group].lastCheckedAt = Date.now();
+            if (state.activeView === "report-task") {
+                renderReportTaskStudentView();
+            }
+        }
+    } catch (e) {}
+}
+
 async function saveReportTaskToCloud(rt) {
+    const group = state.activeGroup;
     const payload = {
         id: rt.id,
-        group_name: state.activeGroup,
+        group_name: group,
         title: rt.title,
         question_ids: rt.questions,
         time_limit: rt.duration,
@@ -21592,6 +22192,17 @@ async function saveReportTaskToCloud(rt) {
             },
             body: JSON.stringify(payload)
         });
+        
+        // Invalidate and update exam cache immediately
+        if (window.HawariExamCacheMemory[group]) {
+            delete window.HawariExamCacheMemory[group];
+        }
+        if (questionBankSyncChannel) {
+            questionBankSyncChannel.postMessage({
+                type: "EXAM_LIST_UPDATED",
+                group: group
+            });
+        }
         console.log(`[Sync] Saved report task "${rt.title}" to cloud`);
     } catch (e) {
         console.error("[Sync] Failed to save report task to cloud:", e);
@@ -21599,42 +22210,94 @@ async function saveReportTaskToCloud(rt) {
 }
 
 async function deleteReportTaskFromCloud(id) {
+    const group = state.activeGroup;
     try {
         await supabaseRequest(`hawari_report_tasks?id=eq.${id}`, {
             method: "DELETE"
         });
+        if (window.HawariExamCacheMemory[group]) {
+            delete window.HawariExamCacheMemory[group];
+        }
+        if (questionBankSyncChannel) {
+            questionBankSyncChannel.postMessage({
+                type: "EXAM_LIST_UPDATED",
+                group: group
+            });
+        }
         console.log(`[Sync] Deleted report task ${id} from cloud`);
     } catch (e) {
         console.error("[Sync] Failed to delete report task from cloud:", e);
     }
 }
 
-async function fetchCourseQuizzes(group) {
+async function fetchCourseQuizzes(group, forceRefresh = false) {
+    if (!group) return;
+
+    // Check in-memory exam cache (90s TTL)
+    const memExam = window.HawariExamCacheMemory[group];
+    if (memExam && memExam.quizzes && !forceRefresh) {
+        state.courseQuizzes = memExam.quizzes;
+        if (Date.now() - memExam.lastCheckedAt > PUBLISHED_EXAMS_CACHE_TTL_MS) {
+            // Background revalidation
+            revalidateCourseQuizzes(group);
+        }
+        return state.courseQuizzes;
+    }
+
     try {
         const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
-            state.courseQuizzes = records.map(row => {
-                return {
-                    id: row.id,
-                    title: row.title,
-                    questions: row.questions || [],
-                    duration: row.time_limit,
-                    startTime: row.start_time,
-                    endTime: row.end_time,
-                    status: row.status
-                };
-            });
-            console.log(`[Sync] Fetched ${state.courseQuizzes.length} quizzes from cloud`);
+            state.courseQuizzes = records.map(row => ({
+                id: row.id,
+                title: row.title,
+                questions: row.questions || [],
+                duration: row.time_limit,
+                startTime: row.start_time,
+                endTime: row.end_time,
+                status: row.status
+            }));
+
+            // Cache in memory
+            window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
+            window.HawariExamCacheMemory[group].quizzes = state.courseQuizzes;
+            window.HawariExamCacheMemory[group].lastCheckedAt = Date.now();
+
+            console.log(`[Sync] Fetched ${state.courseQuizzes.length} quizzes from cloud for course ${group}`);
         }
     } catch (e) {
         console.error("[Sync] Failed to fetch course quizzes:", e);
     }
 }
 
+async function revalidateCourseQuizzes(group) {
+    try {
+        const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
+        if (records && Array.isArray(records)) {
+            const mapped = records.map(row => ({
+                id: row.id,
+                title: row.title,
+                questions: row.questions || [],
+                duration: row.time_limit,
+                startTime: row.start_time,
+                endTime: row.end_time,
+                status: row.status
+            }));
+            state.courseQuizzes = mapped;
+            window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
+            window.HawariExamCacheMemory[group].quizzes = mapped;
+            window.HawariExamCacheMemory[group].lastCheckedAt = Date.now();
+            if (state.activeView === "quizzes") {
+                renderCourseQuizzesStudentView();
+            }
+        }
+    } catch (e) {}
+}
+
 async function saveCourseQuizToCloud(quiz) {
+    const group = state.activeGroup;
     const payload = {
         id: quiz.id,
-        group_name: state.activeGroup,
+        group_name: group,
         title: quiz.title,
         questions: quiz.questions,
         time_limit: quiz.duration,
@@ -21650,6 +22313,17 @@ async function saveCourseQuizToCloud(quiz) {
             },
             body: JSON.stringify(payload)
         });
+
+        // Invalidate and update exam cache immediately
+        if (window.HawariExamCacheMemory[group]) {
+            delete window.HawariExamCacheMemory[group];
+        }
+        if (questionBankSyncChannel) {
+            questionBankSyncChannel.postMessage({
+                type: "EXAM_LIST_UPDATED",
+                group: group
+            });
+        }
         console.log(`[Sync] Saved course quiz "${quiz.title}" to cloud`);
     } catch (e) {
         console.error("[Sync] Failed to save course quiz:", e);
@@ -21657,10 +22331,20 @@ async function saveCourseQuizToCloud(quiz) {
 }
 
 async function deleteCourseQuizFromCloud(id) {
+    const group = state.activeGroup;
     try {
         await supabaseRequest(`hawari_course_quizzes?id=eq.${id}`, {
             method: "DELETE"
         });
+        if (window.HawariExamCacheMemory[group]) {
+            delete window.HawariExamCacheMemory[group];
+        }
+        if (questionBankSyncChannel) {
+            questionBankSyncChannel.postMessage({
+                type: "EXAM_LIST_UPDATED",
+                group: group
+            });
+        }
         console.log(`[Sync] Deleted quiz ${id} from cloud`);
     } catch (e) {
         console.error("[Sync] Failed to delete course quiz:", e);
@@ -21747,7 +22431,7 @@ async function fetchQuizResults(group) {
     }
 }
 
-async function saveQuizResultToCloud(result) {
+async function saveQuizResultToCloud(result, isQueueFlush = false) {
     const payload = {
         id: result.id || `${result.quiz_id}_${result.email}`,
         quiz_id: result.quiz_id,
@@ -21760,16 +22444,35 @@ async function saveQuizResultToCloud(result) {
         status: result.status
     };
     try {
-        await supabaseRequest("hawari_quiz_results", {
+        const res = await supabaseRequest("hawari_quiz_results", {
             method: "POST",
             headers: {
                 "Prefer": "resolution=merge-duplicates"
             },
             body: JSON.stringify(payload)
         });
+
+        if (res && res.error && !isQueueFlush) {
+            enqueueSyncItem({
+                id: payload.id,
+                entityType: "quiz_result",
+                group: state.activeGroup,
+                email: result.email,
+                payload: payload
+            });
+        }
         console.log(`[Sync] Saved quiz result for ${result.email} to cloud`);
     } catch (e) {
         console.error("[Sync] Failed to save quiz result:", e);
+        if (!isQueueFlush) {
+            enqueueSyncItem({
+                id: payload.id,
+                entityType: "quiz_result",
+                group: state.activeGroup,
+                email: result.email,
+                payload: payload
+            });
+        }
     }
 }
 
@@ -25793,14 +26496,16 @@ window.startCourseQuizStudent = function(quizId) {
         localStorage.setItem("active_quiz_session", quizId);
     }
 
+    // Deep immutable snapshot of exam questions to isolate active exam from background cache updates
     state.activeQuiz = {
         quizId: qz.id,
         title: qz.title,
-        questions: qz.questions,
+        questions: JSON.parse(JSON.stringify(qz.questions || [])),
         answers: {},
         currentQuestionIdx: 0,
         timeRemaining: qz.duration * 60,
-        isPractice: isPractice
+        isPractice: isPractice,
+        startedAt: Date.now()
     };
 
     const overlay = document.getElementById("active-quiz-overlay");
@@ -25827,6 +26532,12 @@ window.startCourseQuizStudent = function(quizId) {
             loadQuizQuestion(state.activeQuiz.currentQuestionIdx + 1);
         }
     };
+
+    const submitBtn = document.getElementById("btn-submit-active-quiz");
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `Submit Exam`;
+    }
 
     document.getElementById("btn-submit-active-quiz").onclick = () => {
         if (confirm("هل أنت متأكد من تسليم الإجابات وإنهاء الاختبار؟")) {
@@ -25976,8 +26687,15 @@ function renderQuizSidebarGrid() {
     });
 }
 
+// Inflight submission lock to prevent spike duplicates
+let isQuizSubmitting = false;
+
 async function submitActiveQuiz() {
     if (!state.activeQuiz) return;
+    if (isQuizSubmitting) {
+        console.warn("[QuizSubmit] Inflight submission active. Ignoring duplicate trigger.");
+        return;
+    }
 
     const qzId = state.activeQuiz.quizId;
     const questions = state.activeQuiz.questions;
@@ -25987,6 +26705,14 @@ async function submitActiveQuiz() {
     if (unansweredCount > 0) {
         showToast("Unanswered Questions", `لديك ${unansweredCount} أسئلة لم تقم بالإجابة عليها. يجب حل جميع الأسئلة قبل التسليم.`, "warning");
         return;
+    }
+
+    // Lock submission & update button state
+    isQuizSubmitting = true;
+    const submitBtn = document.getElementById("btn-submit-active-quiz");
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> جاري التسليم...`;
     }
 
     if (quizTimerInterval) clearInterval(quizTimerInterval);
@@ -26038,6 +26764,12 @@ async function submitActiveQuiz() {
     } catch (e) {
         console.error("Failed to submit quiz:", e);
         showToast("Error", "فشلت عملية تسليم الاختبار. حاول مرة أخرى.", "danger");
+    } finally {
+        isQuizSubmitting = false;
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `Submit Exam`;
+        }
     }
 }
 

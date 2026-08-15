@@ -20847,28 +20847,25 @@ function loadStateFromStorage() {
     if (storedCurrentUser) {
         try {
             state.currentUser = storedCurrentUser;
-            // Verify user exists in the database
-            const dbUser = state.users.find(u => u.email === state.currentUser.email);
-            if (dbUser) {
-                loadUserSpecificProgress(state.currentUser.email);
-            } else {
-                console.warn("[Auth] Stored current user not found in database. Resetting session.");
-                state.currentUser = null;
-                localStorage.removeItem(getGroupKey(STORAGE_KEYS.CURRENT_USER));
-    clearSupabaseSession();
-                state.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-                state.tests = [];
-                state.notebookNotes = [];
-                state.flashcards = [];
+            // Verify user exists in the local database or initialize stub
+            let dbUser = state.users.find(u => u.email === state.currentUser.email);
+            if (!dbUser) {
+                dbUser = {
+                    email: state.currentUser.email,
+                    role: state.currentUser.role || "student",
+                    status: state.currentUser.status || "approved",
+                    password: state.currentUser.password || "",
+                    dateRegistered: state.currentUser.dateRegistered || new Date().toLocaleDateString(),
+                    displayName: state.currentUser.displayName || "",
+                    questions: [],
+                    tests: [],
+                    lastUpdated: 0
+                };
+                state.users.push(dbUser);
             }
+            loadUserSpecificProgress(state.currentUser.email);
         } catch (e) {
-            console.error("[Auth] Error parsing stored current user:", e);
-            state.currentUser = null;
-            localStorage.removeItem(getGroupKey(STORAGE_KEYS.CURRENT_USER));
-            state.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-            state.tests = [];
-            state.notebookNotes = [];
-            state.flashcards = [];
+            console.error("[Auth] Error loading stored current user:", e);
         }
     } else {
         state.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
@@ -20914,7 +20911,18 @@ function showToast(title, msg, type = "info") {
 // ================= INITIALIZATION & ROUTING =================
 async function selectCourseTrack(groupName) {
     state.activeGroup = groupName;
-    state.books = []; // Clear cross-group books on track change
+    // Complete in-memory state reset for clean course isolation
+    state.users = [];
+    state.grantedBookUsers = [];
+    state.tests = [];
+    state.questions = [];
+    state.notebookNotes = [];
+    state.flashcards = [];
+    state.reportTasks = [];
+    state.courseQuizzes = [];
+    state.quizResults = [];
+    state.books = [];
+
     localStorage.setItem("hawari_active_group", groupName);
     
     // Apply body theme class
@@ -20938,7 +20946,6 @@ async function selectCourseTrack(groupName) {
 
     if (groupName === "infection") {
         if (brandName) brandName.innerText = "Hawari Infection";
-        // Keep custom brand logo image
         if (authBrandTitle) authBrandTitle.innerText = "Hawari Infection";
         if (authBrandLogo) {
             authBrandLogo.className = "fa-solid fa-virus-covid brand-logo-icon";
@@ -20952,7 +20959,6 @@ async function selectCourseTrack(groupName) {
         if (landingMCQCount) landingMCQCount.innerText = "560+ MCQ Bank";
     } else {
         if (brandName) brandName.innerText = "Hawari Dermatology";
-        // Keep custom brand logo image
         if (authBrandTitle) authBrandTitle.innerText = "Hawari Dermatology";
         if (authBrandLogo) {
             authBrandLogo.className = "fa-solid fa-hand-dots brand-logo-icon";
@@ -20989,16 +20995,13 @@ async function selectCourseTrack(groupName) {
 
     // Check auth status
     if (state.currentUser) {
-        const activeSession = await getSupabaseSession();
-                console.log("[AUTH-TRACE] localStorage hawari_supabase_session exists:", !!localStorage.getItem("hawari_supabase_session"));
-                console.log("[AUTH-TRACE] session access_token exists:", !!(activeSession && activeSession.access_token));
-                console.log("[AUTH-TRACE] session refresh_token exists:", !!(activeSession && activeSession.refresh_token));
-                console.log("[AUTH-TRACE] session user id:", activeSession && activeSession.user ? activeSession.user.id : null);
-                console.log("[AUTH-TRACE] session user email:", activeSession && activeSession.user ? activeSession.user.email : null);
-                console.log("[AUTH-TRACE] window.supabaseSession exists:", !!window.supabaseSession);
-                console.log("[AUTH-TRACE] state.currentUser access_token exists:", !!(state.currentUser && state.currentUser.token));
-                console.log("[AUTH-TRACE] FINAL AUTH STATE READY:", !!(activeSession && activeSession.access_token));
-                enterWorkspace();
+        // Await user-specific cloud progress sync before entering workspace
+        try {
+            await syncUsersWithCloud();
+        } catch (e) {
+            console.warn("[Sync] Initial user cloud sync deferred:", e);
+        }
+        enterWorkspace();
     } else {
         showLandingPage();
     }
@@ -21009,18 +21012,22 @@ async function seedDefaultUsersToCloud(group) {
     if (localStorage.getItem(seedKey)) return; // Bypass if already seeded
 
     const defaultEmails = [
-        { email: "admin@gmail.com", password: "admin", status: "approved", role: "admin" },
-        { email: "student@gmail.com", password: "student", status: "approved", role: "user" },
         { email: "mustafaimam1317@gmail.com", password: "mustafa172004", status: "approved", role: "admin" },
         { email: "mustafa172004@gmail.com", password: "mustafa172004", status: "approved", role: "admin" }
     ];
+
+    if (group === "infection") {
+        defaultEmails.unshift(
+            { email: "admin@gmail.com", password: "admin", status: "approved", role: "admin" },
+            { email: "student@gmail.com", password: "student", status: "approved", role: "user" }
+        );
+    }
 
     const promises = defaultEmails.map(async (u) => {
         const path = `hawari_users?email=eq.${u.email}&group_name=eq.${group}`;
         try {
             const records = await supabaseRequest(path);
             if (records && records.length === 0) {
-                // Initialize default users in Supabase database
                 const payload = {
                     email: u.email,
                     group_name: group,
@@ -21049,7 +21056,7 @@ async function seedDefaultUsersToCloud(group) {
         }
     });
     await Promise.all(promises);
-    localStorage.setItem(seedKey, "true"); // Cache the successful seeding state locally
+    localStorage.setItem(seedKey, "true");
 }
 
 function switchCourseTrack() {
@@ -21069,6 +21076,18 @@ function switchCourseTrack() {
 
     // Reset body classes
     document.body.classList.remove("group-infection", "group-dermatology");
+
+    // Complete in-memory state reset for clean course isolation
+    state.users = [];
+    state.grantedBookUsers = [];
+    state.tests = [];
+    state.questions = [];
+    state.notebookNotes = [];
+    state.flashcards = [];
+    state.reportTasks = [];
+    state.courseQuizzes = [];
+    state.quizResults = [];
+    state.books = [];
 
     // Show course selector page, hide layout/landing/auth
     const selectorPage = document.getElementById("course-selector-page");
@@ -22482,32 +22501,6 @@ async function saveQuizResultToCloud(result, isQueueFlush = false) {
     }
 }
 
-function triggerViewRefresh() {
-    if (state.activeView === "dashboard") {
-        renderDashboard();
-    } else if (state.activeView === "generate-test") {
-        renderGenerateTest();
-    } else if (state.activeView === "my-tests") {
-        renderMyTests();
-    } else if (state.activeView === "notebook") {
-        renderNotebook();
-    } else if (state.activeView === "flashcards") {
-        renderFlashcardsView();
-    } else if (state.activeView === "report-task") {
-        renderReportTaskStudentView();
-    } else if (state.activeView === "hawari-book") {
-        renderHawariBookView();
-    }
-}
-
-let syncTimeout = null;
-function debouncedSync() {
-    if (syncTimeout) clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(() => {
-        syncUsersWithCloud();
-    }, 2000);
-}
-
 async function syncUsersWithCloud() {
     const group = state.activeGroup;
     if (!group) return;
@@ -22522,12 +22515,11 @@ async function syncUsersWithCloud() {
         targetEmail = currentAuthenticatingEmail;
     }
 
-    // 1. Fetch cloud records
+    // 1. Fetch cloud records for the current active course only
     let queryPath = `hawari_users?group_name=eq.${group}`;
     if (!isAdmin && targetEmail) {
         queryPath += `&email=eq.${targetEmail}`;
     } else if (!isAdmin && !targetEmail) {
-        // If not admin and no target email, nothing to sync
         return;
     }
 
@@ -22568,7 +22560,7 @@ async function syncUsersWithCloud() {
                         state.currentUser.displayName = cu.displayName;
                     }
                 }
-                // Smart bidirectional merge for tests
+                // Smart bidirectional merge for tests (preserves completed tests)
                 const localTests = Array.isArray(lu.tests) ? lu.tests : [];
                 const cloudTests = Array.isArray(cu.tests) ? cu.tests : [];
                 if (cloudTests.length > 0 && localTests.length === 0) {
@@ -22576,7 +22568,6 @@ async function syncUsersWithCloud() {
                 } else if (localTests.length > 0 && cloudTests.length === 0) {
                     // Keep local tests
                 } else if (cloudTests.length > 0 && localTests.length > 0) {
-                    // Merge unique tests by id
                     const testMap = new Map();
                     localTests.forEach(t => testMap.set(t.id, t));
                     cloudTests.forEach(t => {
@@ -22600,15 +22591,15 @@ async function syncUsersWithCloud() {
                     lu.flashcards = cu.flashcards;
                 }
 
-                // Sync progress data if cloud has newer timestamp
+                // Sync progress data if cloud has newer timestamp or local has no questions
                 const localUpdated = lu.lastUpdated || 0;
                 const cloudUpdated = cu.lastUpdated || 0;
                 
-                if (cloudUpdated > localUpdated) {
+                if (cloudUpdated >= localUpdated || (!lu.questions || lu.questions.length === 0)) {
                     if (Array.isArray(cu.questions) && cu.questions.length > 0) {
                         lu.questions = cu.questions;
                     }
-                    lu.lastUpdated = cu.lastUpdated;
+                    lu.lastUpdated = Math.max(localUpdated, cloudUpdated);
                 }
                 
                 // If this is the current logged-in user, also update global state!
@@ -22625,19 +22616,27 @@ async function syncUsersWithCloud() {
                 }
             } else {
                 state.users.push(cu);
+                if (state.currentUser && state.currentUser.email === cu.email) {
+                    state.tests = Array.isArray(cu.tests) ? cu.tests : [];
+                    state.notebookNotes = Array.isArray(cu.notebookNotes) ? cu.notebookNotes : [];
+                    state.flashcards = Array.isArray(cu.flashcards) && cu.flashcards.length > 0 ? cu.flashcards : state.flashcards;
+                    if (Array.isArray(cu.questions) && cu.questions.length > 0) {
+                        state.questions = mergeQuestionsWithGlobal(cu.questions, globalQuestionsCache);
+                    }
+                    state.currentUser.lastUpdated = cu.lastUpdated;
+                    triggerViewRefresh();
+                }
             }
         });
     }
 
     // 3. Determine which users to write back to Supabase
+    // ONLY students write their own updated progress row to Supabase.
+    // Admin approvals/deletions/toggles are written specifically on admin action.
     let usersToWrite = [];
-    if (isAdmin) {
-        // Admins sync all users
-        usersToWrite = state.users;
-    } else if (targetEmail) {
-        // Students/Guests only write their own record
+    if (!isAdmin && targetEmail) {
         const matchingUser = state.users.find(u => u.email === targetEmail);
-        if (matchingUser) {
+        if (matchingUser && matchingUser.lastUpdated > 0) {
             usersToWrite = [matchingUser];
         }
     }

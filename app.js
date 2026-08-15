@@ -20662,46 +20662,43 @@ function saveStateToStorage(skipCloudSync = false) {
             state.currentUser.role = "student";
         }
         
-        const userRecord = state.users.find(u => u.email === state.currentUser.email);
-        if (userRecord) {
-            userRecord.questions = state.questions;
-            userRecord.tests = state.tests;
-            userRecord.notebookNotes = state.notebookNotes;
-            userRecord.flashcards = state.flashcards;
-            userRecord.lastUpdated = Date.now();
-            if (!ALLOWED_ADMIN_EMAILS.includes(userRecord.email.trim().toLowerCase())) {
-                userRecord.role = "student";
-            }
-            state.currentUser.lastUpdated = userRecord.lastUpdated;
+        let userRecord = state.users.find(u => u.email === state.currentUser.email);
+        if (!userRecord) {
+            userRecord = {
+                email: state.currentUser.email,
+                password: state.currentUser.password || "",
+                role: state.currentUser.role || "student",
+                status: state.currentUser.status || "approved",
+                dateRegistered: state.currentUser.dateRegistered || new Date().toLocaleDateString(),
+                displayName: state.currentUser.displayName || "",
+                lastUpdated: Date.now()
+            };
+            state.users.push(userRecord);
         }
+
+        // Preserve all user-specific progress in memory & storage
+        userRecord.tests = state.tests || [];
+        userRecord.reportTaskProgress = userRecord.reportTaskProgress || {};
+        userRecord.notebookNotes = state.notebookNotes || [];
+        userRecord.flashcards = state.flashcards || [];
+        userRecord.questions = (state.questions || []).map(q => ({
+            id: q.id,
+            status: q.status || "unused",
+            marked: q.marked || false,
+            notes: q.notes || "",
+            highlightedHtml: q.highlightedHtml || "",
+            userAnswer: q.userAnswer || null
+        }));
+        userRecord.lastUpdated = Date.now();
+        if (!ALLOWED_ADMIN_EMAILS.includes(userRecord.email.trim().toLowerCase())) {
+            userRecord.role = "student";
+        }
+        state.currentUser.lastUpdated = userRecord.lastUpdated;
     }
 
-    // Sanitize users array to remove heavy redundant question bank duplications before saving
-    const sanitizedUsers = state.users.map(u => ({
-        email: u.email,
-        password: u.password,
-        role: ALLOWED_ADMIN_EMAILS.includes(u.email.trim().toLowerCase()) ? u.role : "student",
-        status: u.status,
-        dateRegistered: u.dateRegistered,
-        displayName: u.displayName || "",
-        lastUpdated: u.lastUpdated || Date.now()
-    }));
-
-    // Sanitize current user snapshot for storage
-    let sanitizedCurrentUser = null;
-    if (state.currentUser) {
-        sanitizedCurrentUser = {
-            email: state.currentUser.email,
-            role: isUserAdmin(state.currentUser) ? "admin" : "student",
-            status: state.currentUser.status,
-            dateRegistered: state.currentUser.dateRegistered,
-            displayName: state.currentUser.displayName || "",
-            lastUpdated: state.currentUser.lastUpdated || Date.now()
-        };
-    }
-
-    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), sanitizedUsers);
-    encryptLocal(getGroupKey(STORAGE_KEYS.CURRENT_USER), sanitizedCurrentUser);
+    // Persist full state.users with all tests, progress, notes, and flashcards intact!
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+    encryptLocal(getGroupKey(STORAGE_KEYS.CURRENT_USER), state.currentUser);
     encryptLocal(STORAGE_KEYS.THEME, state.isDarkMode);
     encryptLocal(getGroupKey(STORAGE_KEYS.REPORT_TASKS), state.reportTasks);
     
@@ -21279,11 +21276,20 @@ function initRouter() {
     });
 
     window.addEventListener("beforeunload", (e) => {
+        try {
+            saveStateToStorage(true);
+        } catch (err) {}
         if (state.activeQuiz && !state.activeQuiz.isReview) {
             const msg = "مغادرة الصفحة الآن ستنهي اختبارك بدرجة صفر!";
             e.returnValue = msg;
             return msg;
         }
+    });
+
+    window.addEventListener("pagehide", () => {
+        try {
+            saveStateToStorage(true);
+        } catch (err) {}
     });
 
     // Run router on startup
@@ -22562,28 +22568,60 @@ async function syncUsersWithCloud() {
                         state.currentUser.displayName = cu.displayName;
                     }
                 }
-                // Sync progress data if cloud has newer progress
+                // Smart bidirectional merge for tests
+                const localTests = Array.isArray(lu.tests) ? lu.tests : [];
+                const cloudTests = Array.isArray(cu.tests) ? cu.tests : [];
+                if (cloudTests.length > 0 && localTests.length === 0) {
+                    lu.tests = cloudTests;
+                } else if (localTests.length > 0 && cloudTests.length === 0) {
+                    // Keep local tests
+                } else if (cloudTests.length > 0 && localTests.length > 0) {
+                    // Merge unique tests by id
+                    const testMap = new Map();
+                    localTests.forEach(t => testMap.set(t.id, t));
+                    cloudTests.forEach(t => {
+                        if (!testMap.has(t.id) || (t.timeRemaining !== undefined && t.isCompleted)) {
+                            testMap.set(t.id, t);
+                        }
+                    });
+                    lu.tests = Array.from(testMap.values());
+                }
+
+                // Smart merge for report task progress
+                lu.reportTaskProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
+
+                // Smart merge for notebook notes
+                if (Array.isArray(cu.notebookNotes) && cu.notebookNotes.length > 0 && (!lu.notebookNotes || lu.notebookNotes.length === 0)) {
+                    lu.notebookNotes = cu.notebookNotes;
+                }
+
+                // Smart merge for flashcards
+                if (Array.isArray(cu.flashcards) && cu.flashcards.length > 0 && (!lu.flashcards || lu.flashcards.length === 0)) {
+                    lu.flashcards = cu.flashcards;
+                }
+
+                // Sync progress data if cloud has newer timestamp
                 const localUpdated = lu.lastUpdated || 0;
                 const cloudUpdated = cu.lastUpdated || 0;
                 
                 if (cloudUpdated > localUpdated) {
-                    lu.questions = cu.questions;
-                    lu.tests = cu.tests;
-                    lu.notebookNotes = cu.notebookNotes;
-                    lu.flashcards = cu.flashcards;
-                    lu.reportTaskProgress = cu.reportTaskProgress || {};
-                    lu.lastUpdated = cu.lastUpdated;
-                    
-                    // If this is the current logged-in user, also update global state!
-                    if (state.currentUser && state.currentUser.email === lu.email) {
-                        state.questions = lu.questions;
-                        state.tests = lu.tests;
-                        state.notebookNotes = lu.notebookNotes;
-                        state.flashcards = lu.flashcards;
-                        state.currentUser.lastUpdated = lu.lastUpdated;
-                        
-                        triggerViewRefresh();
+                    if (Array.isArray(cu.questions) && cu.questions.length > 0) {
+                        lu.questions = cu.questions;
                     }
+                    lu.lastUpdated = cu.lastUpdated;
+                }
+                
+                // If this is the current logged-in user, also update global state!
+                if (state.currentUser && state.currentUser.email === lu.email) {
+                    state.tests = lu.tests || [];
+                    state.notebookNotes = lu.notebookNotes || [];
+                    state.flashcards = lu.flashcards || [];
+                    if (lu.questions && lu.questions.length > 0) {
+                        state.questions = mergeQuestionsWithGlobal(lu.questions, globalQuestionsCache);
+                    }
+                    state.currentUser.lastUpdated = Math.max(localUpdated, cloudUpdated);
+                    
+                    triggerViewRefresh();
                 }
             } else {
                 state.users.push(cu);
@@ -22619,7 +22657,7 @@ async function syncUsersWithCloud() {
             flashcards: user.flashcards || [],
             report_task_progress: user.reportTaskProgress || {},
             display_name: user.displayName || "",
-            last_updated: user.lastUpdated || 0
+            last_updated: user.lastUpdated || Date.now()
         };
         return supabaseRequest("hawari_users", {
             method: "POST",
@@ -22632,7 +22670,7 @@ async function syncUsersWithCloud() {
     await Promise.all(promises);
 
     // 4. Save to local storage using encrypted local helper
-    encryptLocal(`${STORAGE_KEYS.USERS}_${group}`, state.users);
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 }
 
 // ================= AUTHENTICATION FLOW =================
@@ -23942,6 +23980,7 @@ function submitActiveTest() {
         
         state.activeTest = null;
         saveStateToStorage();
+        syncUsersWithCloud().catch(err => console.warn("[Sync] Test submit cloud sync deferred:", err));
         
         document.getElementById("active-test-overlay").classList.add("hidden");
         document.body.style.overflow = "auto";
@@ -23986,6 +24025,7 @@ function submitActiveTest() {
 
         state.activeTest = null;
         saveStateToStorage();
+        syncUsersWithCloud().catch(err => console.warn("[Sync] Test submit cloud sync deferred:", err));
 
         // Close overlay and reset layout scrolling
         document.getElementById("active-test-overlay").classList.add("hidden");

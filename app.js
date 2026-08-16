@@ -20637,8 +20637,8 @@ function getGroupKey(baseKey) {
     return `${baseKey}_${state.activeGroup}`;
 }
 
-function getGroupQuestionsSeed() {
-    if (state.activeGroup === "dermatology") {
+function getGroupQuestionsSeed(group = state.activeGroup) {
+    if ((group || "").toLowerCase() === "dermatology") {
         return DERMA_QUESTIONS_DATA;
     }
     return SEED_QUESTIONS;
@@ -21581,20 +21581,30 @@ async function supabaseRequest(path, options = {}) {
 
 let globalQuestionsCache = [];
 
-function mergeQuestionsWithGlobal(userQuestions, globalQuestions) {
-    const template = (globalQuestions && globalQuestions.length > 0)
+function mergeQuestionsWithGlobal(userQuestions, globalQuestions, group = state.activeGroup) {
+    const activeCourse = (group || state.activeGroup || "infection").toLowerCase();
+    const seed = getGroupQuestionsSeed(activeCourse);
+    const expectedPrefix = activeCourse === "dermatology" ? "q_derma_" : "q_past_";
+
+    let template = (globalQuestions && Array.isArray(globalQuestions) && globalQuestions.length > 0)
         ? globalQuestions
-        : getGroupQuestionsSeed();
+        : seed;
+
+    // Strict validation: Ensure template questions belong to the requested course
+    if (template.length > 0 && template[0].id && !String(template[0].id).startsWith(expectedPrefix)) {
+        console.warn(`[Merge] Template question mismatch for course "${activeCourse}". Overriding with course seed.`);
+        template = seed;
+    }
 
     const userMap = new Map();
     if (Array.isArray(userQuestions)) {
         userQuestions.forEach(q => {
-            if (q && q.id) userMap.set(q.id, q);
+            if (q && q.id) userMap.set(String(q.id), q);
         });
     }
 
     return template.map(gq => {
-        const uq = userMap.get(gq.id) || {};
+        const uq = userMap.get(String(gq.id)) || {};
         return {
             id: gq.id,
             source: gq.source,
@@ -26016,9 +26026,9 @@ function loadUserSpecificProgress(email) {
     const user = state.users.find(u => u.email === email);
     if (!user) return;
 
-    // Load base questions and merge with global template or seed
+    // Load base questions and merge with global template or seed for the active course
     const rawUserQuestions = Array.isArray(user.questions) ? user.questions : [];
-    state.questions = mergeQuestionsWithGlobal(rawUserQuestions, globalQuestionsCache);
+    state.questions = mergeQuestionsWithGlobal(rawUserQuestions, globalQuestionsCache, state.activeGroup);
 
     // Load or initialize tests
     state.tests = Array.isArray(user.tests) ? user.tests : [];
@@ -26026,11 +26036,48 @@ function loadUserSpecificProgress(email) {
     // Load or initialize notebook notes
     state.notebookNotes = Array.isArray(user.notebookNotes) ? user.notebookNotes : [];
 
-    // Load or initialize flashcards
-    if (user.flashcards && user.flashcards.length > 0) {
+    // Load or initialize flashcards (course isolated seed)
+    if (Array.isArray(user.flashcards) && user.flashcards.length > 0) {
         state.flashcards = user.flashcards;
     } else {
-        state.flashcards = [
+        const isDerma = (state.activeGroup || "").toLowerCase() === "dermatology";
+        state.flashcards = isDerma ? [
+            {
+                id: "fc_derma_1",
+                category: "Papulosquamous Disorders",
+                front: "What is the Auspitz sign in Psoriasis?",
+                back: "Pinpoint bleeding after the removal of psoriatic scales due to thinned suprapapillary plates over dilated capillaries.",
+                status: "review"
+            },
+            {
+                id: "fc_derma_2",
+                category: "Infectious Dermatology",
+                front: "What is the pathognomonic clinical feature of Scabies?",
+                back: "Intensely pruritic, serpiginous burrows in web spaces of fingers, wrists, and genitalia, worse at night.",
+                status: "review"
+            },
+            {
+                id: "fc_derma_3",
+                category: "Autoimmune Bullous",
+                front: "How do Pemphigus Vulgaris and Bullous Pemphigoid differ regarding Nikolsky's sign?",
+                back: "Pemphigus Vulgaris is Nikolsky-positive (intraepidermal blister); Bullous Pemphigoid is Nikolsky-negative (subepidermal blister).",
+                status: "review"
+            },
+            {
+                id: "fc_derma_4",
+                category: "Dermatological Oncology",
+                front: "What are the ABCDE criteria for Melanoma evaluation?",
+                back: "Asymmetry, Border irregularity, Color variegation, Diameter (>6mm), Evolution/Enlargement over time.",
+                status: "review"
+            },
+            {
+                id: "fc_derma_5",
+                category: "Drug Eruptions",
+                front: "What distinguishes Stevens-Johnson Syndrome (SJS) from Toxic Epidermal Necrolysis (TEN)?",
+                back: "Body surface area (BSA) epidermal detachment: SJS < 10%, SJS/TEN overlap 10-30%, TEN > 30%.",
+                status: "review"
+            }
+        ] : [
             {
                 id: "fc_1",
                 category: "Virology",
@@ -26070,7 +26117,7 @@ function loadUserSpecificProgress(email) {
     }
 
     // Load or initialize report task progress
-    if (!user.reportTaskProgress) {
+    if (!user.reportTaskProgress || typeof user.reportTaskProgress !== "object") {
         user.reportTaskProgress = {};
     }
 
@@ -26467,7 +26514,7 @@ window.startReportTaskStudent = function(rtId) {
         saveStateToStorage();
     }
 
-    // Launch active test screen
+    // Launch active test screen with immutable question snapshot
     state.activeTest = {
         testId: rt.id,
         currentQuestionIdx: 0,
@@ -26478,7 +26525,7 @@ window.startReportTaskStudent = function(rtId) {
         timeRemaining: testObj.timeRemaining,
         isReportTask: true,
         rtId: rt.id,
-        rtQuestions: rt.questions,
+        rtQuestions: JSON.parse(JSON.stringify(rt.questions || [])),
         rtDuration: rt.duration
     };
 

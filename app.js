@@ -21002,26 +21002,26 @@ async function seedDefaultUsersToCloud(group) {
     if (localStorage.getItem(seedKey)) return; // Bypass if already seeded
 
     const defaultEmails = [
-        { email: "mustafaimam1317@gmail.com", password: "mustafa172004", status: "approved", role: "admin" },
-        { email: "mustafa172004@gmail.com", password: "mustafa172004", status: "approved", role: "admin" }
+        { email: "mustafaimam1317@gmail.com", password_hash: sha256Sync("mustafa172004"), status: "approved", role: "admin" },
+        { email: "mustafa172004@gmail.com", password_hash: sha256Sync("mustafa172004"), status: "approved", role: "admin" }
     ];
 
     if (group === "infection") {
         defaultEmails.unshift(
-            { email: "admin@gmail.com", password: "admin", status: "approved", role: "admin" },
-            { email: "student@gmail.com", password: "student", status: "approved", role: "user" }
+            { email: "admin@gmail.com", password_hash: sha256Sync("admin"), status: "approved", role: "admin" },
+            { email: "student@gmail.com", password_hash: sha256Sync("student"), status: "approved", role: "user" }
         );
     }
 
     const promises = defaultEmails.map(async (u) => {
-        const path = `hawari_users?email=eq.${u.email}&group_name=eq.${group}`;
+        const path = `hawari_users?email=eq.${encodeURIComponent(u.email)}&group_name=eq.${encodeURIComponent(group)}`;
         try {
             const records = await supabaseRequest(path);
             if (records && records.length === 0) {
                 const payload = {
                     email: u.email,
                     group_name: group,
-                    password_hash: sha256Sync(u.password),
+                    password_hash: u.password_hash,
                     role: u.role,
                     status: u.status,
                     date_registered: new Date().toLocaleDateString(),
@@ -25017,8 +25017,8 @@ window.rejectUserAdmin = async function(email) {
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
         
         try {
-            // Delete record directly from Supabase
-            await supabaseRequest(`hawari_users?email=eq.${email}&group_name=eq.${state.activeGroup}`, {
+            // Delete record directly from Supabase with URL-encoded parameters
+            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(email)}&group_name=eq.${encodeURIComponent(state.activeGroup)}`, {
                 method: "DELETE"
             });
             showToast("Request Rejected", `Registration request for ${email} has been rejected and deleted.`, "warning");
@@ -25031,8 +25031,8 @@ window.rejectUserAdmin = async function(email) {
     }
 };
 
-window.toggleUserRoleAdmin = async function(email) {
-    const btn = event ? event.currentTarget : null;
+window.toggleUserRoleAdmin = async function(email, event) {
+    const btn = (typeof event !== "undefined" && event) ? event.currentTarget : null;
     let originalHtml = "";
     if (btn) {
         btn.disabled = true;
@@ -25057,9 +25057,9 @@ window.toggleUserRoleAdmin = async function(email) {
     }
 };
 
-window.deleteUserAdmin = async function(email) {
+window.deleteUserAdmin = async function(email, event) {
     if (confirm(`CRITICAL WARNING: Are you sure you want to delete the user account for ${email}? All their test progress, notebooks, and flashcard records will be permanently erased!`)) {
-        const btn = event ? event.currentTarget : null;
+        const btn = (typeof event !== "undefined" && event) ? event.currentTarget : null;
         let originalHtml = "";
         if (btn) {
             btn.disabled = true;
@@ -25071,8 +25071,8 @@ window.deleteUserAdmin = async function(email) {
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
         
         try {
-            // Delete record directly from Supabase
-            await supabaseRequest(`hawari_users?email=eq.${email}&group_name=eq.${state.activeGroup}`, {
+            // Delete record directly from Supabase with URL-encoded parameters
+            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(email)}&group_name=eq.${encodeURIComponent(state.activeGroup)}`, {
                 method: "DELETE"
             });
             showToast("Account Deleted", `User account ${email} has been permanently deleted from registry.`, "danger");
@@ -27624,7 +27624,8 @@ window.initVideoPortal = function() {
 
         // A. Admin Check
         const devEmails = ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"];
-        if (devEmails.includes(email) && password === "mustafa172004") {
+        const adminPwHash = sha256Sync("mustafa172004");
+        if (devEmails.includes(email) && sha256Sync(password) === adminPwHash) {
             vpState.currentUser = { email, role: "admin" };
             showToast("Welcome Admin", "Logged in to Video Portal Administrator dashboard.", "success");
             window.location.hash = "#video-portal";

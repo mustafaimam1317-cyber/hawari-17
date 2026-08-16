@@ -1,4 +1,19 @@
 
+// ================= CENTRALIZED SUPABASE CONFIGURATION =================
+const SUPABASE_CONFIG = {
+    url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, ""),
+    anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c"
+};
+
+function getSupabaseAuthHeaders(jwtToken = null, extraHeaders = {}) {
+    const token = jwtToken || SUPABASE_CONFIG.anonKey;
+    return {
+        "apikey": SUPABASE_CONFIG.anonKey,
+        "Authorization": `Bearer ${token}`,
+        ...extraHeaders
+    };
+}
+
 async function processBookPdfUpload({ title, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
     console.log("[BookUpload] START processBookPdfUpload — title:", title, "file size:", file ? file.size : 0);
 
@@ -41,9 +56,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         if (progressText) progressText.innerText = "40%";
 
         const jwtToken = await getValidSupabaseAccessToken();
-        const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-        const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+        const cleanUrl = SUPABASE_CONFIG.url;
 
         const fileExt = file.name.split('.').pop();
         const group = (state.activeGroup || "infection").toLowerCase();
@@ -54,11 +67,9 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         try {
             const uploadRes = await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
                 method: "POST",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${jwtToken || anonKey}`,
+                headers: getSupabaseAuthHeaders(jwtToken, {
                     "Content-Type": file.type || "application/pdf"
-                },
+                }),
                 body: file
             });
             if (uploadRes.ok) {
@@ -481,48 +492,38 @@ async function getValidSupabaseAccessToken() {
 }
 
 async function loginToSupabaseAuth(email, password) {
-    console.log("[AUTH-TRACE] GoTrue login function called");
-    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const cleanUrl = SUPABASE_CONFIG.url;
     const cleanEmail = email.trim().toLowerCase();
 
     try {
         // Official GoTrue password login
-        let res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+        let res = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
             method: "POST",
-            headers: { "apikey": anonKey, "Content-Type": "application/json" },
+            headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
             body: JSON.stringify({ email: cleanEmail, password: password })
         });
         let data = await res.json();
 
         // If auth fails due to sync requirement, attempt auth-sync edge function
         if (!data || !data.access_token) {
-            console.log("[AUTH-TRACE] GoTrue password login returned:", data.msg || data.error_description || "no token");
             try {
-                const syncRes = await fetch(`${url.replace(/\/$/, '')}/functions/v1/auth-sync`, {
+                const syncRes = await fetch(`${cleanUrl}/functions/v1/auth-sync`, {
                     method: "POST",
-                    headers: { "apikey": anonKey, "Content-Type": "application/json" },
+                    headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
                     body: JSON.stringify({ email: cleanEmail, password: password })
                 });
                 if (syncRes.ok) {
-                    console.log("[AUTH-TRACE] Auth-sync function completed, retrying GoTrue login...");
-                    res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=password`, {
+                    res = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
                         method: "POST",
-                        headers: { "apikey": anonKey, "Content-Type": "application/json" },
+                        headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
                         body: JSON.stringify({ email: cleanEmail, password: password })
                     });
                     data = await res.json();
                 }
             } catch (syncErr) {
-                console.warn("[AUTH-TRACE] Auth-sync edge function unavailable:", syncErr.message);
+                console.warn("[Auth] Auth-sync edge function unavailable:", syncErr.message);
             }
         }
-
-        console.log("[AUTH-TRACE] GoTrue HTTP status:", res.status);
-        console.log("[AUTH-TRACE] GoTrue response has access_token:", !!(data && data.access_token));
-        console.log("[AUTH-TRACE] GoTrue response has refresh_token:", !!(data && data.refresh_token));
-        console.log("[AUTH-TRACE] GoTrue user id:", data && data.user ? data.user.id : null);
-        console.log("[AUTH-TRACE] GoTrue user email:", data && data.user ? data.user.email : null);
 
         if (data && data.access_token) {
             const expiresAt = Date.now() + ((data.expires_in || 3600) * 1000);
@@ -533,20 +534,15 @@ async function loginToSupabaseAuth(email, password) {
                 user: data.user || { id: data.user ? data.user.id : "", email: cleanEmail }
             };
             saveSupabaseSession(sessionObj);
-
-            const decoded = parseJwtPayload(data.access_token);
-            if (decoded) {
-                console.log("[AUTH-TRACE] JWT payload: jwt.sub =", decoded.sub, "| jwt.email =", decoded.email, "| jwt.role =", decoded.role, "| jwt.aud =", decoded.aud, "| jwt.exp =", decoded.exp);
-            }
             return sessionObj;
         } else {
             const errMsg = data.msg || data.error_description || "Invalid login credentials";
-            console.warn("[AUTH-TRACE] Could not acquire Supabase Auth token for:", cleanEmail, "| Error:", errMsg);
+            console.warn("[Auth] Could not acquire Supabase Auth token for:", cleanEmail);
             showToast("Supabase Auth Warning", `Application profile exists, but Supabase Auth credentials are not valid (${errMsg}).`, "warning");
             return null;
         }
     } catch (e) {
-        console.error("[AUTH-TRACE] Login exception:", e);
+        console.error("[Auth] Login exception:", e.message);
         return null;
     }
 }

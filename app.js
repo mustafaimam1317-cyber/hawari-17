@@ -20612,7 +20612,11 @@ let state = {
     courseQuizzes: [],
     quizResults: [],
     activeQuiz: null,
-    announcement: ""
+    announcement: "",
+    grantedBookUsers: [],
+    isUserProgressLoaded: false,
+    isQuestionBankLoaded: false,
+    isInitialSyncComplete: false
 };
 
 // ================= LOCAL STORAGE MANAGER =================
@@ -20670,7 +20674,7 @@ function saveStateToStorage(skipCloudSync = false) {
             state.currentUser.role = "student";
         }
         
-        let userRecord = state.users.find(u => u.email === state.currentUser.email);
+        let userRecord = state.users.find(u => u.email.toLowerCase() === state.currentUser.email.toLowerCase());
         if (!userRecord) {
             userRecord = {
                 email: state.currentUser.email,
@@ -20679,29 +20683,40 @@ function saveStateToStorage(skipCloudSync = false) {
                 status: state.currentUser.status || "approved",
                 dateRegistered: state.currentUser.dateRegistered || new Date().toLocaleDateString(),
                 displayName: state.currentUser.displayName || "",
+                questions: [],
+                tests: [],
+                notebookNotes: [],
+                flashcards: [],
+                reportTaskProgress: {},
                 lastUpdated: Date.now()
             };
             state.users.push(userRecord);
         }
 
-        // Preserve all user-specific progress in memory & storage
-        userRecord.tests = state.tests || [];
-        userRecord.reportTaskProgress = userRecord.reportTaskProgress || {};
-        userRecord.notebookNotes = state.notebookNotes || [];
-        userRecord.flashcards = state.flashcards || [];
-        userRecord.questions = (state.questions || []).map(q => ({
-            id: q.id,
-            status: q.status || "unused",
-            marked: q.marked || false,
-            notes: q.notes || "",
-            highlightedHtml: q.highlightedHtml || "",
-            userAnswer: q.userAnswer || null
-        }));
-        userRecord.lastUpdated = Date.now();
+        // Only update progress fields if user progress has been initialized/loaded
+        // This prevents uninitialized empty arrays from overwriting loaded student progress
+        if (state.isUserProgressLoaded) {
+            userRecord.tests = state.tests || [];
+            userRecord.reportTaskProgress = userRecord.reportTaskProgress || {};
+            userRecord.notebookNotes = state.notebookNotes || [];
+            userRecord.flashcards = state.flashcards || [];
+            if (state.questions && state.questions.length > 0) {
+                userRecord.questions = state.questions.map(q => ({
+                    id: q.id,
+                    status: q.status || "unused",
+                    marked: q.marked || false,
+                    notes: q.notes || "",
+                    highlightedHtml: q.highlightedHtml || "",
+                    userAnswer: q.userAnswer || null
+                }));
+            }
+            userRecord.lastUpdated = Date.now();
+            state.currentUser.lastUpdated = userRecord.lastUpdated;
+        }
+
         if (!ALLOWED_ADMIN_EMAILS.includes(userRecord.email.trim().toLowerCase())) {
             userRecord.role = "student";
         }
-        state.currentUser.lastUpdated = userRecord.lastUpdated;
     }
 
     // Persist full state.users with all tests, progress, notes, and flashcards intact!
@@ -21367,6 +21382,13 @@ function switchView(viewName) {
     }
 }
 
+function triggerViewRefresh() {
+    updateDashboardStats();
+    if (state.activeView) {
+        switchView(state.activeView);
+    }
+}
+
 // ================= SECURITY & SANITIZATION UTILITIES =================
 function sanitizeHTML(str) {
     if (!str) return "";
@@ -21560,26 +21582,34 @@ async function supabaseRequest(path, options = {}) {
 let globalQuestionsCache = [];
 
 function mergeQuestionsWithGlobal(userQuestions, globalQuestions) {
-    if (globalQuestions && globalQuestions.length > 0) {
-        return globalQuestions.map(gq => {
-            const uq = userQuestions.find(q => q.id === gq.id) || {};
-            return {
-                id: gq.id,
-                source: gq.source,
-                topic: gq.topic,
-                text: gq.text,
-                options: gq.options,
-                correctOption: gq.correctOption,
-                explanation: gq.explanation,
-                status: uq.status || "unused",
-                marked: uq.marked || false,
-                notes: uq.notes || "",
-                highlightedHtml: uq.highlightedHtml || "",
-                userAnswer: uq.userAnswer || null
-            };
+    const template = (globalQuestions && globalQuestions.length > 0)
+        ? globalQuestions
+        : getGroupQuestionsSeed();
+
+    const userMap = new Map();
+    if (Array.isArray(userQuestions)) {
+        userQuestions.forEach(q => {
+            if (q && q.id) userMap.set(q.id, q);
         });
     }
-    return userQuestions;
+
+    return template.map(gq => {
+        const uq = userMap.get(gq.id) || {};
+        return {
+            id: gq.id,
+            source: gq.source,
+            topic: gq.topic,
+            text: gq.text,
+            options: gq.options,
+            correctOption: gq.correctOption,
+            explanation: gq.explanation,
+            status: uq.status || "unused",
+            marked: uq.marked || false,
+            notes: uq.notes || "",
+            highlightedHtml: uq.highlightedHtml || "",
+            userAnswer: uq.userAnswer !== undefined ? uq.userAnswer : null
+        };
+    });
 }
 
 /* ==========================================================================
@@ -24959,20 +24989,43 @@ function renderAdminApprovalsTab() {
 window.updateUserDisplayName = async function(email, newName) {
     const user = state.users.find(u => u.email === email);
     if (!user) return;
-    newName = newName.trim();
+    newName = (newName || "").trim();
     if (user.displayName === newName) return;
 
     user.displayName = newName;
     user.lastUpdated = Date.now();
 
-    // Trigger local state save and cloud upload sync
-    saveStateToStorage();
-    showToast("Name Updated", `Set display name for ${email} to "${newName || email}"`, "success");
+    encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+
+    const payload = [{
+        email: user.email,
+        group_name: state.activeGroup,
+        role: user.role || 'user',
+        status: user.status || 'approved',
+        display_name: user.displayName,
+        last_updated: new Date(user.lastUpdated).toISOString()
+    }];
+
+    try {
+        await supabaseRequest("hawari_users?on_conflict=email,group_name", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates"
+            },
+            body: JSON.stringify(payload)
+        });
+        showToast("Name Updated", `Set display name for ${email} to "${newName || email}"`, "success");
+    } catch (e) {
+        console.error("Direct Supabase display_name update failed, queuing offline:", e);
+        enqueueOfflineSync("hawari_users", "UPSERT", payload);
+        showToast("Name Saved Offline", `Display name saved locally and queued for cloud sync.`, "info");
+    }
+
     renderAdminApprovalsTab();
 };
 
 window.approveUserAdmin = async function(email, role = 'user') {
-    const btn = event ? event.currentTarget : null;
+    const btn = (typeof event !== "undefined" && event) ? event.currentTarget : null;
     let originalHtml = "";
     if (btn) {
         btn.disabled = true;
@@ -24984,19 +25037,43 @@ window.approveUserAdmin = async function(email, role = 'user') {
     if (user) {
         user.status = "approved";
         user.role = role;
-        user.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-        user.tests = [];
-        user.notebookNotes = [];
-        user.flashcards = [];
+        if (!user.questions || user.questions.length === 0) {
+            user.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
+        }
+        if (!user.tests) user.tests = [];
+        if (!user.notebookNotes) user.notebookNotes = [];
+        if (!user.flashcards) user.flashcards = [];
+        user.lastUpdated = Date.now();
         
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+
+        const payload = [{
+            email: user.email,
+            group_name: state.activeGroup,
+            role: user.role,
+            status: user.status,
+            display_name: user.displayName || user.email.split('@')[0],
+            questions: user.questions,
+            tests: user.tests,
+            notebook_notes: user.notebookNotes,
+            flashcards: user.flashcards,
+            report_task_progress: user.reportTaskProgress || {},
+            last_updated: new Date(user.lastUpdated).toISOString()
+        }];
         
         try {
-            await syncUsersWithCloud();
+            await supabaseRequest("hawari_users?on_conflict=email,group_name", {
+                method: "POST",
+                headers: {
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                body: JSON.stringify(payload)
+            });
             showToast("User Approved", `Gmail account ${email} is now approved as ${role.toUpperCase()}.`, "success");
         } catch (e) {
-            console.error("Cloud approval sync failed:", e);
-            showToast("Sync Warning", "Approved locally, but database sync encountered an error. Please reload.", "warning");
+            console.error("Direct cloud approval sync failed, queuing offline:", e);
+            enqueueOfflineSync("hawari_users", "UPSERT", payload);
+            showToast("Sync Warning", "Approved locally and queued for cloud sync.", "warning");
         }
         
         renderAdminApprovalsTab();
@@ -25005,7 +25082,7 @@ window.approveUserAdmin = async function(email, role = 'user') {
 
 window.rejectUserAdmin = async function(email) {
     if (confirm(`Are you sure you want to reject and remove registration request for ${email}?`)) {
-        const btn = event ? event.currentTarget : null;
+        const btn = (typeof event !== "undefined" && event) ? event.currentTarget : null;
         let originalHtml = "";
         if (btn) {
             btn.disabled = true;
@@ -25023,8 +25100,9 @@ window.rejectUserAdmin = async function(email) {
             });
             showToast("Request Rejected", `Registration request for ${email} has been rejected and deleted.`, "warning");
         } catch (e) {
-            console.error("Cloud deletion failed:", e);
-            showToast("Deletion Warning", "Deleted locally, but database sync encountered an error. Please check your network.", "warning");
+            console.error("Cloud deletion failed, queuing offline:", e);
+            enqueueOfflineSync("hawari_users", "DELETE", { email: email, group_name: state.activeGroup });
+            showToast("Deletion Warning", "Deleted locally, and queued for cloud sync.", "warning");
         }
 
         renderAdminApprovalsTab();
@@ -25043,14 +25121,31 @@ window.toggleUserRoleAdmin = async function(email, event) {
     const user = state.users.find(u => u.email === email);
     if (user) {
         user.role = user.role === "admin" ? "user" : "admin";
+        user.lastUpdated = Date.now();
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+
+        const payload = [{
+            email: user.email,
+            group_name: state.activeGroup,
+            role: user.role,
+            status: user.status || 'approved',
+            display_name: user.displayName || user.email.split('@')[0],
+            last_updated: new Date(user.lastUpdated).toISOString()
+        }];
         
         try {
-            await syncUsersWithCloud();
+            await supabaseRequest("hawari_users?on_conflict=email,group_name", {
+                method: "POST",
+                headers: {
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                body: JSON.stringify(payload)
+            });
             showToast("Role Updated", `Role for ${email} has been changed to ${user.role.toUpperCase()}.`, "success");
         } catch (e) {
-            console.error("Cloud role sync failed:", e);
-            showToast("Sync Warning", "Role updated locally, but database sync encountered an error.", "warning");
+            console.error("Direct cloud role sync failed, queuing offline:", e);
+            enqueueOfflineSync("hawari_users", "UPSERT", payload);
+            showToast("Sync Warning", "Role updated locally and queued for cloud sync.", "warning");
         }
         
         renderAdminApprovalsTab();
@@ -25077,8 +25172,9 @@ window.deleteUserAdmin = async function(email, event) {
             });
             showToast("Account Deleted", `User account ${email} has been permanently deleted from registry.`, "danger");
         } catch (e) {
-            console.error("Cloud deletion failed:", e);
-            showToast("Deletion Warning", "Deleted locally, but database sync encountered an error.", "warning");
+            console.error("Cloud deletion failed, queuing offline:", e);
+            enqueueOfflineSync("hawari_users", "DELETE", { email: email, group_name: state.activeGroup });
+            showToast("Deletion Warning", "Deleted locally and queued for cloud sync.", "warning");
         }
         
         renderAdminApprovalsTab();
@@ -25920,23 +26016,15 @@ function loadUserSpecificProgress(email) {
     const user = state.users.find(u => u.email === email);
     if (!user) return;
 
-    // Load base questions
-    const expectedLength = state.activeGroup === "dermatology" ? 1 : 550;
-    let baseQuestions = [];
-    if (user.questions && user.questions.length >= expectedLength) {
-        baseQuestions = user.questions;
-    } else {
-        baseQuestions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-    }
-    
-    // Merge with global questions template to pull in admin edits
-    state.questions = mergeQuestionsWithGlobal(baseQuestions, globalQuestionsCache);
+    // Load base questions and merge with global template or seed
+    const rawUserQuestions = Array.isArray(user.questions) ? user.questions : [];
+    state.questions = mergeQuestionsWithGlobal(rawUserQuestions, globalQuestionsCache);
 
     // Load or initialize tests
-    state.tests = user.tests || [];
+    state.tests = Array.isArray(user.tests) ? user.tests : [];
 
     // Load or initialize notebook notes
-    state.notebookNotes = user.notebookNotes || [];
+    state.notebookNotes = Array.isArray(user.notebookNotes) ? user.notebookNotes : [];
 
     // Load or initialize flashcards
     if (user.flashcards && user.flashcards.length > 0) {
@@ -25985,6 +26073,8 @@ function loadUserSpecificProgress(email) {
     if (!user.reportTaskProgress) {
         user.reportTaskProgress = {};
     }
+
+    state.isUserProgressLoaded = true;
 }
 
 function initBackupRestoreFlow() {
@@ -29179,6 +29269,17 @@ function getBookAccessLevel(user) {
     if (Array.isArray(state.grantedBookUsers)) {
         isGranted = state.grantedBookUsers.some(e => String(e).trim().toLowerCase() === cleanEmail);
     }
+    if (!isGranted) {
+        try {
+            const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
+            if (cached) {
+                const list = JSON.parse(cached);
+                if (Array.isArray(list)) {
+                    isGranted = list.some(e => String(e).trim().toLowerCase() === cleanEmail);
+                }
+            }
+        } catch (e) {}
+    }
 
     if (isAdmin || isGranted) {
         return { isFullGrant: true, maxPage: bookState.numPages || 9999 };
@@ -29190,18 +29291,34 @@ function isUserBookAuthorized(user) {
     return getBookAccessLevel(user).isFullGrant;
 }
 
-// Fetch Granted Users List from Supabase Table hawari_book_access
+// Fetch Granted Users List from Supabase Table hawari_book_access (Scoped per course)
 async function fetchGrantedUsersList() {
     try {
         const rows = await supabaseRequest("hawari_book_access?select=email,status");
+        const activeTag = `::${state.activeGroup}`;
         if (rows && Array.isArray(rows)) {
-            state.grantedBookUsers = rows.map(r => r.email).filter(Boolean);
+            const filtered = [];
+            rows.forEach(r => {
+                if (!r || !r.email) return;
+                const em = r.email.trim().toLowerCase();
+                if (em.endsWith(activeTag.toLowerCase())) {
+                    const pureEmail = em.slice(0, -activeTag.length).trim().toLowerCase();
+                    if (pureEmail && !filtered.includes(pureEmail)) filtered.push(pureEmail);
+                } else if (!em.includes("::") && state.activeGroup === "infection") {
+                    // Backward-compatibility: Untagged legacy rows belong to infection
+                    if (!filtered.includes(em)) filtered.push(em);
+                }
+            });
+            state.grantedBookUsers = filtered;
+            localStorage.setItem(getGroupKey("hawari_granted_book_users"), JSON.stringify(state.grantedBookUsers));
         } else {
-            state.grantedBookUsers = state.grantedBookUsers || [];
+            const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
+            state.grantedBookUsers = cached ? JSON.parse(cached) : [];
         }
     } catch (e) {
         console.warn("[FullGrant] Could not fetch hawari_book_access table:", e.message);
-        state.grantedBookUsers = state.grantedBookUsers || [];
+        const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
+        state.grantedBookUsers = cached ? JSON.parse(cached) : [];
     }
     renderGrantedUsersList();
 }
@@ -29209,12 +29326,12 @@ async function fetchGrantedUsersList() {
 function renderGrantedUsersList() {
     const listEl = document.getElementById("admin-book-authorized-list");
     const countEl = document.getElementById("admin-book-authorized-count");
-    if (countEl) countEl.innerText = state.grantedBookUsers.length;
+    if (countEl) countEl.innerText = (state.grantedBookUsers || []).length;
     if (!listEl) return;
 
     listEl.innerHTML = "";
-    if (state.grantedBookUsers.length === 0) {
-        listEl.innerHTML = '<div style="padding: 15px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No Full Grant users added yet.</div>';
+    if (!state.grantedBookUsers || state.grantedBookUsers.length === 0) {
+        listEl.innerHTML = '<div style="padding: 15px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No Full Grant users added yet for this course.</div>';
         return;
     }
 
@@ -29225,7 +29342,7 @@ function renderGrantedUsersList() {
         row.innerHTML = `
             <span style="font-weight: 500; font-size: 0.85rem;"><i class="fa-solid fa-user-check" style="color: var(--color-success); margin-right: 6px;"></i> ${escapeHTML(email)}</span>
             <div style="display: flex; gap: 8px; align-items: center;">
-                <span class="badge badge-success" style="font-size: 0.7rem;">FULL GRANT</span>
+                <span class="badge badge-success" style="font-size: 0.7rem;">FULL GRANT (${escapeHTML((state.activeGroup || '').toUpperCase())})</span>
                 <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem;" onclick="revokeStudentBookAccess('${escapeHTML(email)}')">
                     <i class="fa-solid fa-user-xmark"></i> Revoke
                 </button>
@@ -29238,10 +29355,11 @@ function renderGrantedUsersList() {
 async function grantBookAccess(email) {
     if (!email) return false;
     const cleanEmail = email.trim().toLowerCase();
+    const taggedEmail = `${cleanEmail}::${state.activeGroup}`;
     
     try {
         const payload = {
-            email: cleanEmail,
+            email: taggedEmail,
             status: "active",
             granted_at: new Date().toISOString()
         };
@@ -29257,10 +29375,11 @@ async function grantBookAccess(email) {
             return false;
         }
 
-        showToast("Full Grant Applied", `Full grant access granted to ${cleanEmail}`, "success");
+        showToast("Full Grant Applied", `Full grant access granted to ${cleanEmail} for ${state.activeGroup.toUpperCase()}`, "success");
         if (!state.grantedBookUsers.includes(cleanEmail)) {
             state.grantedBookUsers.push(cleanEmail);
         }
+        localStorage.setItem(getGroupKey("hawari_granted_book_users"), JSON.stringify(state.grantedBookUsers));
         renderGrantedUsersList();
         redrawBookCanvas();
         return true;
@@ -29274,14 +29393,16 @@ async function grantBookAccess(email) {
 window.revokeStudentBookAccess = async function(email) {
     if (!email) return;
     const cleanEmail = email.trim().toLowerCase();
+    const taggedEmail = `${cleanEmail}::${state.activeGroup}`;
     
     try {
-        await supabaseRequest(`hawari_book_access?email=eq.${encodeURIComponent(cleanEmail)}`, {
+        await supabaseRequest(`hawari_book_access?email=in.("${encodeURIComponent(taggedEmail)}","${encodeURIComponent(cleanEmail)}")`, {
             method: "DELETE"
         });
 
         state.grantedBookUsers = state.grantedBookUsers.filter(e => e.toLowerCase() !== cleanEmail);
-        showToast("Access Revoked", `Full grant access revoked for ${cleanEmail}`, "info");
+        localStorage.setItem(getGroupKey("hawari_granted_book_users"), JSON.stringify(state.grantedBookUsers));
+        showToast("Access Revoked", `Full grant access revoked for ${cleanEmail} (${state.activeGroup})`, "info");
         renderGrantedUsersList();
         
         // Immediately enforce page 10 limit if revoked user is active

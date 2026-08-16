@@ -20653,6 +20653,18 @@ function isUserAdmin(user = state.currentUser) {
     return ALLOWED_ADMIN_EMAILS.includes(cleanEmail) && user.role === "admin";
 }
 
+let debouncedSyncTimer = null;
+function debouncedSync() {
+    if (debouncedSyncTimer) {
+        clearTimeout(debouncedSyncTimer);
+    }
+    debouncedSyncTimer = setTimeout(() => {
+        syncUsersWithCloud().catch(err => {
+            console.warn("[DebouncedSync] Background progress sync deferred:", err);
+        });
+    }, 2000);
+}
+
 function saveStateToStorage(skipCloudSync = false) {
     if (!state.activeGroup) return;
 
@@ -20787,49 +20799,31 @@ function loadStateFromStorage() {
     
     if (!state.activeGroup) return;
 
-    // 2. Users Database
+    // 2. Users Database (strictly scoped to active course)
     const storedUsers = decryptLocal(getGroupKey(STORAGE_KEYS.USERS), null);
-    if (storedUsers) {
+    if (storedUsers && Array.isArray(storedUsers)) {
         state.users = storedUsers;
     } else {
-        // Pre-seeded Admin and Student accounts
-        state.users = [
-            { email: "admin@gmail.com", password: "admin", status: "approved", role: "admin" },
-            { email: "student@gmail.com", password: "student", status: "approved", role: "user" }
-        ];
+        state.users = [];
     }
 
-    // Ensure mustafaimam1317@gmail.com is approved and admin
-    let mustafaUser = state.users.find(u => u.email === "mustafaimam1317@gmail.com");
-    if (mustafaUser) {
-        mustafaUser.status = "approved";
-        mustafaUser.role = "admin";
-        mustafaUser.password = "mustafa172004";
-    } else {
-        state.users.push({
-            email: "mustafaimam1317@gmail.com",
-            password: "mustafa172004",
-            status: "approved",
-            role: "admin",
-            dateRegistered: new Date().toLocaleDateString()
-        });
-    }
-
-    // Ensure mustafa172004@gmail.com is also approved and admin
-    let mustafaNewUser = state.users.find(u => u.email === "mustafa172004@gmail.com");
-    if (mustafaNewUser) {
-        mustafaNewUser.status = "approved";
-        mustafaNewUser.role = "admin";
-        mustafaNewUser.password = "mustafa172004";
-    } else {
-        state.users.push({
-            email: "mustafa172004@gmail.com",
-            password: "mustafa172004",
-            status: "approved",
-            role: "admin",
-            dateRegistered: new Date().toLocaleDateString()
-        });
-    }
+    // Ensure whitelisted admins are present
+    ALLOWED_ADMIN_EMAILS.forEach(adminEmail => {
+        let adminUser = state.users.find(u => u.email === adminEmail);
+        if (adminUser) {
+            adminUser.status = "approved";
+            adminUser.role = "admin";
+            adminUser.password = sha256Sync("mustafa172004");
+        } else {
+            state.users.push({
+                email: adminEmail,
+                password: sha256Sync("mustafa172004"),
+                status: "approved",
+                role: "admin",
+                dateRegistered: new Date().toLocaleDateString()
+            });
+        }
+    });
 
     // Backwards compatibility: add default passwords if missing and hash them
     state.users.forEach(u => {
@@ -21949,7 +21943,7 @@ async function flushPendingSyncQueue() {
         try {
             if (item.entityType === "quiz_result") {
                 await saveQuizResultToCloud(item.payload, true);
-            } else if (item.entityType === "user_progress") {
+            } else if (item.entityType === "user_progress" || item.entityType === "student_progress") {
                 await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(item.email)}&group_name=eq.${item.group}`, {
                     method: "PATCH",
                     body: JSON.stringify(item.payload)
@@ -22510,124 +22504,143 @@ async function syncUsersWithCloud() {
     // Determine target email to fetch/sync
     let targetEmail = null;
     if (state.currentUser) {
-        targetEmail = state.currentUser.email;
+        targetEmail = state.currentUser.email.trim().toLowerCase();
     } else if (typeof currentAuthenticatingEmail !== 'undefined' && currentAuthenticatingEmail) {
-        targetEmail = currentAuthenticatingEmail;
+        targetEmail = currentAuthenticatingEmail.trim().toLowerCase();
+    }
+
+    // Helper to test if question array contains meaningful student answers/marks
+    function hasAnsweredQuestions(qArr) {
+        if (!Array.isArray(qArr) || qArr.length === 0) return false;
+        return qArr.some(q => (q.status && q.status !== "unused") || q.marked || q.notes || q.userAnswer);
     }
 
     // 1. Fetch cloud records for the current active course only
-    let queryPath = `hawari_users?group_name=eq.${group}`;
+    let queryPath = `hawari_users?group_name=eq.${encodeURIComponent(group)}`;
     if (!isAdmin && targetEmail) {
-        queryPath += `&email=eq.${targetEmail}`;
+        queryPath += `&email=eq.${encodeURIComponent(targetEmail)}`;
     } else if (!isAdmin && !targetEmail) {
         return;
     }
 
-    const cloudRecords = await supabaseRequest(queryPath);
-    if (cloudRecords && Array.isArray(cloudRecords)) {
-        // Map cloud database rows to user object structure
-        const cloudUsers = cloudRecords.map(row => {
-            return {
-                email: row.email,
-                password: row.password_hash,
-                role: row.role,
-                status: row.status,
-                dateRegistered: row.date_registered,
-                questions: row.questions || [],
-                tests: row.tests || [],
-                notebookNotes: row.notebook_notes || [],
-                flashcards: row.flashcards || [],
-                reportTaskProgress: row.report_task_progress || {},
-                displayName: row.display_name || "",
-                lastUpdated: row.last_updated || 0
-            };
-        });
+    try {
+        const cloudRecords = await supabaseRequest(queryPath);
+        if (cloudRecords && Array.isArray(cloudRecords)) {
+            // Map cloud database rows to user object structure
+            const cloudUsers = cloudRecords.map(row => {
+                return {
+                    email: row.email,
+                    password: row.password_hash,
+                    role: row.role,
+                    status: row.status,
+                    dateRegistered: row.date_registered,
+                    questions: Array.isArray(row.questions) ? row.questions : [],
+                    tests: Array.isArray(row.tests) ? row.tests : [],
+                    notebookNotes: Array.isArray(row.notebook_notes) ? row.notebook_notes : [],
+                    flashcards: Array.isArray(row.flashcards) ? row.flashcards : [],
+                    reportTaskProgress: row.report_task_progress || {},
+                    displayName: row.display_name || "",
+                    lastUpdated: row.last_updated || 0
+                };
+            });
 
-        // 2. Merge local state.users with cloudUsers
-        cloudUsers.forEach(cu => {
-            const localUserIdx = state.users.findIndex(u => u.email === cu.email);
-            if (localUserIdx >= 0) {
-                const lu = state.users[localUserIdx];
-                // Sync status (e.g. pending -> approved)
-                if (cu.status === "approved" && lu.status !== "approved") {
-                    lu.status = "approved";
-                    lu.role = cu.role;
-                }
-                // Unconditionally sync display name if cloud has it
-                if (cu.displayName) {
-                    lu.displayName = cu.displayName;
-                    if (state.currentUser && state.currentUser.email === lu.email) {
-                        state.currentUser.displayName = cu.displayName;
+            // 2. Merge local state.users with cloudUsers
+            cloudUsers.forEach(cu => {
+                const localUserIdx = state.users.findIndex(u => u.email.toLowerCase() === cu.email.toLowerCase());
+                if (localUserIdx >= 0) {
+                    const lu = state.users[localUserIdx];
+                    // Sync status (e.g. pending -> approved)
+                    if (cu.status === "approved" && lu.status !== "approved") {
+                        lu.status = "approved";
+                        lu.role = cu.role;
                     }
-                }
-                // Smart bidirectional merge for tests (preserves completed tests)
-                const localTests = Array.isArray(lu.tests) ? lu.tests : [];
-                const cloudTests = Array.isArray(cu.tests) ? cu.tests : [];
-                if (cloudTests.length > 0 && localTests.length === 0) {
-                    lu.tests = cloudTests;
-                } else if (localTests.length > 0 && cloudTests.length === 0) {
-                    // Keep local tests
-                } else if (cloudTests.length > 0 && localTests.length > 0) {
-                    const testMap = new Map();
-                    localTests.forEach(t => testMap.set(t.id, t));
-                    cloudTests.forEach(t => {
-                        if (!testMap.has(t.id) || (t.timeRemaining !== undefined && t.isCompleted)) {
-                            testMap.set(t.id, t);
+                    // Sync display name if cloud has it
+                    if (cu.displayName) {
+                        lu.displayName = cu.displayName;
+                        if (state.currentUser && state.currentUser.email.toLowerCase() === lu.email.toLowerCase()) {
+                            state.currentUser.displayName = cu.displayName;
                         }
-                    });
-                    lu.tests = Array.from(testMap.values());
-                }
+                    }
+                    // Smart bidirectional merge for tests (preserves completed tests)
+                    const localTests = Array.isArray(lu.tests) ? lu.tests : [];
+                    const cloudTests = Array.isArray(cu.tests) ? cu.tests : [];
+                    if (cloudTests.length > 0 && localTests.length === 0) {
+                        lu.tests = cloudTests;
+                    } else if (cloudTests.length > 0 && localTests.length > 0) {
+                        const testMap = new Map();
+                        localTests.forEach(t => testMap.set(t.id, t));
+                        cloudTests.forEach(t => {
+                            if (!testMap.has(t.id) || (t.timeRemaining !== undefined && t.isCompleted)) {
+                                testMap.set(t.id, t);
+                            }
+                        });
+                        lu.tests = Array.from(testMap.values());
+                    }
 
-                // Smart merge for report task progress
-                lu.reportTaskProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
+                    // Smart merge for report task progress
+                    lu.reportTaskProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
 
-                // Smart merge for notebook notes
-                if (Array.isArray(cu.notebookNotes) && cu.notebookNotes.length > 0 && (!lu.notebookNotes || lu.notebookNotes.length === 0)) {
-                    lu.notebookNotes = cu.notebookNotes;
-                }
+                    // Smart merge for notebook notes
+                    if (Array.isArray(cu.notebookNotes) && cu.notebookNotes.length > 0 && (!lu.notebookNotes || lu.notebookNotes.length === 0)) {
+                        lu.notebookNotes = cu.notebookNotes;
+                    }
 
-                // Smart merge for flashcards
-                if (Array.isArray(cu.flashcards) && cu.flashcards.length > 0 && (!lu.flashcards || lu.flashcards.length === 0)) {
-                    lu.flashcards = cu.flashcards;
-                }
+                    // Smart merge for flashcards
+                    if (Array.isArray(cu.flashcards) && cu.flashcards.length > 0 && (!lu.flashcards || lu.flashcards.length === 0)) {
+                        lu.flashcards = cu.flashcards;
+                    }
 
-                // Sync progress data if cloud has newer timestamp or local has no questions
-                const localUpdated = lu.lastUpdated || 0;
-                const cloudUpdated = cu.lastUpdated || 0;
-                
-                if (cloudUpdated >= localUpdated || (!lu.questions || lu.questions.length === 0)) {
-                    if (Array.isArray(cu.questions) && cu.questions.length > 0) {
+                    // Smart Progress Sync: If cloud has answered questions, merge them!
+                    const cloudHasAnswers = hasAnsweredQuestions(cu.questions);
+                    const localHasAnswers = hasAnsweredQuestions(lu.questions);
+
+                    if (cloudHasAnswers && localHasAnswers) {
+                        // Merge question states per ID so neither device loses answers
+                        const qMap = new Map();
+                        lu.questions.forEach(q => qMap.set(q.id, q));
+                        cu.questions.forEach(cq => {
+                            const lq = qMap.get(cq.id);
+                            if (!lq || lq.status === "unused" || (cq.status !== "unused" && (!lq.userAnswer && cq.userAnswer))) {
+                                qMap.set(cq.id, cq);
+                            }
+                        });
+                        lu.questions = Array.from(qMap.values());
+                        lu.lastUpdated = Math.max(lu.lastUpdated || 0, cu.lastUpdated || 0);
+                    } else if (cloudHasAnswers || (!localHasAnswers && (cu.lastUpdated || 0) >= (lu.lastUpdated || 0))) {
                         lu.questions = cu.questions;
+                        lu.lastUpdated = Math.max(lu.lastUpdated || 0, cu.lastUpdated || 0);
                     }
-                    lu.lastUpdated = Math.max(localUpdated, cloudUpdated);
-                }
-                
-                // If this is the current logged-in user, also update global state!
-                if (state.currentUser && state.currentUser.email === lu.email) {
-                    state.tests = lu.tests || [];
-                    state.notebookNotes = lu.notebookNotes || [];
-                    state.flashcards = lu.flashcards || [];
-                    if (lu.questions && lu.questions.length > 0) {
-                        state.questions = mergeQuestionsWithGlobal(lu.questions, globalQuestionsCache);
-                    }
-                    state.currentUser.lastUpdated = Math.max(localUpdated, cloudUpdated);
                     
-                    triggerViewRefresh();
-                }
-            } else {
-                state.users.push(cu);
-                if (state.currentUser && state.currentUser.email === cu.email) {
-                    state.tests = Array.isArray(cu.tests) ? cu.tests : [];
-                    state.notebookNotes = Array.isArray(cu.notebookNotes) ? cu.notebookNotes : [];
-                    state.flashcards = Array.isArray(cu.flashcards) && cu.flashcards.length > 0 ? cu.flashcards : state.flashcards;
-                    if (Array.isArray(cu.questions) && cu.questions.length > 0) {
-                        state.questions = mergeQuestionsWithGlobal(cu.questions, globalQuestionsCache);
+                    // If this is the current logged-in user, also update active state immediately!
+                    if (state.currentUser && state.currentUser.email.toLowerCase() === lu.email.toLowerCase()) {
+                        state.tests = lu.tests || [];
+                        state.notebookNotes = lu.notebookNotes || [];
+                        state.flashcards = lu.flashcards || [];
+                        if (lu.questions && lu.questions.length > 0) {
+                            const templateQuestions = (globalQuestionsCache && globalQuestionsCache.length > 0) ? globalQuestionsCache : getGroupQuestionsSeed();
+                            state.questions = mergeQuestionsWithGlobal(lu.questions, templateQuestions);
+                        }
+                        state.currentUser.lastUpdated = lu.lastUpdated;
+                        triggerViewRefresh();
                     }
-                    state.currentUser.lastUpdated = cu.lastUpdated;
-                    triggerViewRefresh();
+                } else {
+                    state.users.push(cu);
+                    if (state.currentUser && state.currentUser.email.toLowerCase() === cu.email.toLowerCase()) {
+                        state.tests = Array.isArray(cu.tests) ? cu.tests : [];
+                        state.notebookNotes = Array.isArray(cu.notebookNotes) ? cu.notebookNotes : [];
+                        state.flashcards = Array.isArray(cu.flashcards) && cu.flashcards.length > 0 ? cu.flashcards : state.flashcards;
+                        if (Array.isArray(cu.questions) && cu.questions.length > 0) {
+                            const templateQuestions = (globalQuestionsCache && globalQuestionsCache.length > 0) ? globalQuestionsCache : getGroupQuestionsSeed();
+                            state.questions = mergeQuestionsWithGlobal(cu.questions, templateQuestions);
+                        }
+                        state.currentUser.lastUpdated = cu.lastUpdated;
+                        triggerViewRefresh();
+                    }
                 }
-            }
-        });
+            });
+        }
+    } catch (e) {
+        console.warn("[SyncUsers] Cloud fetch error:", e);
     }
 
     // 3. Determine which users to write back to Supabase
@@ -22635,20 +22648,20 @@ async function syncUsersWithCloud() {
     // Admin approvals/deletions/toggles are written specifically on admin action.
     let usersToWrite = [];
     if (!isAdmin && targetEmail) {
-        const matchingUser = state.users.find(u => u.email === targetEmail);
+        const matchingUser = state.users.find(u => u.email.toLowerCase() === targetEmail.toLowerCase());
         if (matchingUser && matchingUser.lastUpdated > 0) {
             usersToWrite = [matchingUser];
         }
     }
 
     // Upsert records to Supabase in parallel
-    const promises = usersToWrite.map(user => {
+    const promises = usersToWrite.map(async (user) => {
         const payload = {
-            email: user.email,
+            email: user.email.trim().toLowerCase(),
             group_name: group,
             password_hash: user.password,
-            role: user.role,
-            status: user.status,
+            role: user.role || "student",
+            status: user.status || "approved",
             date_registered: user.dateRegistered,
             questions: user.questions || [],
             tests: user.tests || [],
@@ -22658,13 +22671,24 @@ async function syncUsersWithCloud() {
             display_name: user.displayName || "",
             last_updated: user.lastUpdated || Date.now()
         };
-        return supabaseRequest("hawari_users", {
-            method: "POST",
-            headers: {
-                "Prefer": "resolution=merge-duplicates"
-            },
-            body: JSON.stringify(payload)
-        });
+        try {
+            await supabaseRequest("hawari_users", {
+                method: "POST",
+                headers: {
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                body: JSON.stringify(payload)
+            });
+        } catch (err) {
+            console.warn(`[SyncUsers] Direct push failed for ${user.email}, queueing offline sync:`, err);
+            enqueuePendingSync({
+                entityType: "student_progress",
+                id: `progress_${user.email}_${group}_${Date.now()}`,
+                email: user.email,
+                group: group,
+                payload: payload
+            });
+        }
     });
     await Promise.all(promises);
 

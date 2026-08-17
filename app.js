@@ -101,12 +101,10 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         try {
             await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
                 method: "POST",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${jwtToken || anonKey}`,
+                headers: getSupabaseAuthHeaders(jwtToken, {
                     "Content-Type": "application/json",
                     "Prefer": "return=representation"
-                },
+                }),
                 body: JSON.stringify(dbPayload)
             });
         } catch (dbErr) {
@@ -121,11 +119,9 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
 
             await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
                 method: "PATCH",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${jwtToken || anonKey}`,
+                headers: getSupabaseAuthHeaders(jwtToken, {
                     "Content-Type": "application/json"
-                },
+                }),
                 body: JSON.stringify({
                     report_task_progress: {
                         ...(state.currentUser.report_task_progress || {}),
@@ -20927,6 +20923,9 @@ async function selectCourseTrack(groupName) {
     state.courseQuizzes = [];
     state.quizResults = [];
     state.books = [];
+    state.isUserProgressLoaded = false;
+    state.isQuestionBankLoaded = false;
+    state.isInitialSyncComplete = false;
 
     localStorage.setItem("hawari_active_group", groupName);
     
@@ -21388,6 +21387,7 @@ function triggerViewRefresh() {
         switchView(state.activeView);
     }
 }
+window.triggerViewRefresh = triggerViewRefresh;
 
 // ================= SECURITY & SANITIZATION UTILITIES =================
 function sanitizeHTML(str) {
@@ -21957,6 +21957,42 @@ function enqueueSyncItem(item) {
     scheduleQueueFlush(2000);
 }
 
+function enqueuePendingSync(item) {
+    return enqueueSyncItem(item);
+}
+
+function enqueueOfflineSync(table, operation, payload) {
+    if (table === "hawari_users") {
+        if (operation === "DELETE") {
+            const email = (payload && payload.email) ? payload.email : "";
+            const group = (payload && payload.group_name) ? payload.group_name : (state.activeGroup || "infection");
+            if (email) {
+                enqueueSyncItem({
+                    entityType: "user_deletion",
+                    id: `del_${email}_${group}_${Date.now()}`,
+                    email: email,
+                    group: group,
+                    payload: { email, group_name: group }
+                });
+            }
+        } else {
+            const records = Array.isArray(payload) ? payload : [payload];
+            records.forEach(rec => {
+                if (rec && rec.email) {
+                    const group = rec.group_name || state.activeGroup || "infection";
+                    enqueueSyncItem({
+                        entityType: "student_progress",
+                        id: `progress_${rec.email}_${group}_${Date.now()}`,
+                        email: rec.email,
+                        group: group,
+                        payload: rec
+                    });
+                }
+            });
+        }
+    }
+}
+
 let queueFlushTimer = null;
 let isFlushingQueue = false;
 
@@ -21980,9 +22016,14 @@ async function flushPendingSyncQueue() {
             if (item.entityType === "quiz_result") {
                 await saveQuizResultToCloud(item.payload, true);
             } else if (item.entityType === "user_progress" || item.entityType === "student_progress") {
-                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(item.email)}&group_name=eq.${item.group}`, {
-                    method: "PATCH",
+                await supabaseRequest("hawari_users", {
+                    method: "POST",
+                    headers: { "Prefer": "resolution=merge-duplicates" },
                     body: JSON.stringify(item.payload)
+                });
+            } else if (item.entityType === "user_deletion") {
+                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(item.email)}&group_name=eq.${encodeURIComponent(item.group)}`, {
+                    method: "DELETE"
                 });
             }
             console.log(`[SyncQueue] Successfully synced ${item.entityType} (${item.id})`);
@@ -25010,6 +25051,7 @@ window.updateUserDisplayName = async function(email, newName) {
     const payload = [{
         email: user.email,
         group_name: state.activeGroup,
+        password_hash: user.password || user.password_hash || "google_auth_user",
         role: user.role || 'user',
         status: user.status || 'approved',
         display_name: user.displayName,
@@ -25060,6 +25102,7 @@ window.approveUserAdmin = async function(email, role = 'user') {
         const payload = [{
             email: user.email,
             group_name: state.activeGroup,
+            password_hash: user.password || user.password_hash || "google_auth_user",
             role: user.role,
             status: user.status,
             display_name: user.displayName || user.email.split('@')[0],
@@ -25137,6 +25180,7 @@ window.toggleUserRoleAdmin = async function(email, event) {
         const payload = [{
             email: user.email,
             group_name: state.activeGroup,
+            password_hash: user.password || user.password_hash || "google_auth_user",
             role: user.role,
             status: user.status || 'approved',
             display_name: user.displayName || user.email.split('@')[0],

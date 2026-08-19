@@ -200,15 +200,21 @@ window.handleAdminBookUploadForm = async function(event) {
 
 
 // Safe local progress tracking fallback for missing hawari_user_book_progress table
+let isUserBookProgressCloudAvailable = null;
+
 async function saveBookReadingProgress(email, bookId, page, totalPages) {
     if (!email || !bookId) return;
+    if (isUserBookProgressCloudAvailable === false) return;
     try {
-        await supabaseRequest("hawari_user_book_progress", {
+        const res = await supabaseRequest("hawari_user_book_progress", {
             method: "POST",
             body: JSON.stringify({ email, book_id: bookId, page, total_pages: totalPages, updated_at: new Date().toISOString() })
         });
+        if (res && res.status === 404) {
+            isUserBookProgressCloudAvailable = false;
+        }
     } catch (e) {
-        console.log("[Progress] Progress sync skipped (table missing)");
+        // Silent fallback
     }
 }
 
@@ -29347,6 +29353,58 @@ let bookState = {
     userProgressMap: {}
 };
 
+// ================= CANVAS ANNOTATOR HISTORY & UNDO / REDO ENGINE =================
+function saveHistoryState(page) {
+    if (!page) page = bookState.currentPage;
+    if (!bookState.historyStack) bookState.historyStack = {};
+    if (!bookState.historyStack[page]) {
+        bookState.historyStack[page] = { undo: [], redo: [] };
+    }
+    const currentAnn = bookState.annotations[page] ? JSON.parse(JSON.stringify(bookState.annotations[page])) : [];
+    bookState.historyStack[page].undo.push(currentAnn);
+    if (bookState.historyStack[page].undo.length > 25) {
+        bookState.historyStack[page].undo.shift();
+    }
+    bookState.historyStack[page].redo = [];
+}
+window.saveHistoryState = saveHistoryState;
+
+function undoBookPageAction() {
+    const page = bookState.currentPage;
+    if (!bookState.historyStack || !bookState.historyStack[page] || !bookState.historyStack[page].undo || !bookState.historyStack[page].undo.length) {
+        showToast("Undo", "No previous actions to undo on this page.", "info");
+        return;
+    }
+    const currentAnn = bookState.annotations[page] ? JSON.parse(JSON.stringify(bookState.annotations[page])) : [];
+    if (!bookState.historyStack[page].redo) bookState.historyStack[page].redo = [];
+    bookState.historyStack[page].redo.push(currentAnn);
+    const prevState = bookState.historyStack[page].undo.pop();
+    bookState.annotations[page] = prevState || [];
+    bookState.selectedAnnotationIndex = null;
+    saveBookPageAnnotationToCloud(page);
+    redrawBookCanvas();
+    showToast("Undo", `Reverted last change on Page ${page}`, "info");
+}
+window.undoBookPageAction = undoBookPageAction;
+
+function redoBookPageAction() {
+    const page = bookState.currentPage;
+    if (!bookState.historyStack || !bookState.historyStack[page] || !bookState.historyStack[page].redo || !bookState.historyStack[page].redo.length) {
+        showToast("Redo", "No actions to redo on this page.", "info");
+        return;
+    }
+    const currentAnn = bookState.annotations[page] ? JSON.parse(JSON.stringify(bookState.annotations[page])) : [];
+    if (!bookState.historyStack[page].undo) bookState.historyStack[page].undo = [];
+    bookState.historyStack[page].undo.push(currentAnn);
+    const nextState = bookState.historyStack[page].redo.pop();
+    bookState.annotations[page] = nextState || [];
+    bookState.selectedAnnotationIndex = null;
+    saveBookPageAnnotationToCloud(page);
+    redrawBookCanvas();
+    showToast("Redo", `Redid last action on Page ${page}`, "info");
+}
+window.redoBookPageAction = redoBookPageAction;
+
 // Check if a user email is authorized for Hawari Book access
 
 // Centralized Access Level Calculator
@@ -29542,7 +29600,10 @@ function initBookDrmProtection() {
         }
 
         // Undo / Redo Shortcuts
-        if (e.ctrlKey && key === "z") {
+        if (e.ctrlKey && e.shiftKey && (key === "z" || key === "Z")) {
+            e.preventDefault();
+            redoBookPageAction();
+        } else if (e.ctrlKey && key === "z") {
             e.preventDefault();
             undoBookPageAction();
         } else if (e.ctrlKey && key === "y") {
@@ -29762,7 +29823,6 @@ async function saveUserBookProgress() {
     if (saveProgressTimeout) clearTimeout(saveProgressTimeout);
     saveProgressTimeout = setTimeout(async () => {
         const payload = {
-            id: `${email}_${docId}`,
             email: email,
             document_id: docId,
             last_page: page,
@@ -29770,7 +29830,7 @@ async function saveUserBookProgress() {
         };
 
         try {
-            await supabaseRequest("hawari_user_book_progress", {
+            await supabaseRequest("hawari_user_book_progress?on_conflict=email,document_id", {
                 method: "POST",
                 headers: { "Prefer": "resolution=merge-duplicates" },
                 body: JSON.stringify(payload)
@@ -30217,11 +30277,17 @@ async function fetchBookCloudAnnotations() {
     try {
         const query = `hawari_book_annotations?email=eq.${encodeURIComponent(email)}&document_id=eq.${docId}`;
         const records = await supabaseRequest(query);
+        if (!bookState.cloudAnnotationIds) bookState.cloudAnnotationIds = {};
         if (Array.isArray(records) && records.length > 0) {
             records.forEach(row => {
-                if (row.page_number && row.payload_json) {
-                    // Decompress annotations payload
-                    bookState.annotations[row.page_number] = decompressAnnotations(row.payload_json);
+                if (row.page_number) {
+                    if (row.id) {
+                        bookState.cloudAnnotationIds[row.page_number] = row.id;
+                    }
+                    if (row.payload_json) {
+                        // Decompress annotations payload
+                        bookState.annotations[row.page_number] = decompressAnnotations(row.payload_json);
+                    }
                 }
             });
             localStorage.setItem(`hawari_anns_${email}_${docId}`, JSON.stringify(bookState.annotations));
@@ -30268,25 +30334,53 @@ async function flushPendingAnnotationsSync() {
     const pagesArray = Array.from(pendingPagesToSync);
     pendingPagesToSync.clear();
 
+    if (!bookState.cloudAnnotationIds) bookState.cloudAnnotationIds = {};
+
     for (const p of pagesArray) {
         const pageData = bookState.annotations[p] || [];
-        const payload = {
-            id: `${email}_${state.activeGroup}_${docId}_p${p}`,
-            email: email,
-            group_name: state.activeGroup,
-            document_id: docId,
-            page_number: p,
-            payload_json: compressAnnotations(pageData), // Send compressed payload
-            updated_at: new Date().toISOString()
-        };
+        const compressedPayload = compressAnnotations(pageData);
 
         try {
-            await supabaseRequest("hawari_book_annotations", {
-                method: "POST",
-                headers: { "Prefer": "resolution=merge-duplicates" },
-                body: JSON.stringify(payload)
-            });
-            console.log(`[BookSync] Synced compressed annotations for page ${p} to cloud.`);
+            let rowId = bookState.cloudAnnotationIds[p];
+            if (!rowId) {
+                const existing = await supabaseRequest(`hawari_book_annotations?email=eq.${encodeURIComponent(email)}&document_id=eq.${encodeURIComponent(docId)}&page_number=eq.${p}&select=id`);
+                if (Array.isArray(existing) && existing.length > 0 && existing[0].id) {
+                    rowId = existing[0].id;
+                    bookState.cloudAnnotationIds[p] = rowId;
+                }
+            }
+
+            if (rowId) {
+                // Update existing record
+                await supabaseRequest(`hawari_book_annotations?id=eq.${encodeURIComponent(rowId)}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        payload_json: compressedPayload,
+                        updated_at: new Date().toISOString()
+                    })
+                });
+                console.log(`[BookSync] Synced updated compressed annotations for page ${p} to cloud.`);
+            } else {
+                // Insert new record without composite ID
+                const payload = {
+                    email: email,
+                    group_name: state.activeGroup,
+                    document_id: docId,
+                    page_number: p,
+                    payload_json: compressedPayload,
+                    updated_at: new Date().toISOString()
+                };
+                const insertRes = await supabaseRequest("hawari_book_annotations", {
+                    method: "POST",
+                    headers: { "Prefer": "return=representation", "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                if (Array.isArray(insertRes) && insertRes.length > 0 && insertRes[0].id) {
+                    bookState.cloudAnnotationIds[p] = insertRes[0].id;
+                }
+                console.log(`[BookSync] Synced new compressed annotations for page ${p} to cloud.`);
+            }
         } catch (e) {
             console.warn(`[BookSync] Cloud sync failed for page ${p}:`, e);
         }
@@ -30300,17 +30394,14 @@ async function flushPendingProgressSync() {
     const email = state.currentUser.email;
 
     const payload = {
-        id: `${email}_	ext{${docId}}`.replace('_text{', '_'),
         email: email,
         document_id: docId,
         last_page: page,
         updated_at: new Date().toISOString()
     };
-    // Fix id interpolation safely
-    payload.id = `${email}_${docId}`;
 
     try {
-        await supabaseRequest("hawari_user_book_progress", {
+        await supabaseRequest("hawari_user_book_progress?on_conflict=email,document_id", {
             method: "POST",
             headers: { "Prefer": "resolution=merge-duplicates" },
             body: JSON.stringify(payload)

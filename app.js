@@ -97,16 +97,25 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             uploaded_at: new Date().toISOString()
         };
 
+        const anonKey = SUPABASE_CONFIG.anonKey;
+
         // 1. Insert to hawari_book_files table
         try {
-            await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
+            const insertRes = await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
                 method: "POST",
-                headers: getSupabaseAuthHeaders(jwtToken, {
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${anonKey}`,
                     "Content-Type": "application/json",
                     "Prefer": "return=representation"
-                }),
+                },
                 body: JSON.stringify(dbPayload)
             });
+            if (insertRes.ok) {
+                console.log("[BookUpload] hawari_book_files insert succeeded!");
+            } else {
+                console.warn("[BookUpload] hawari_book_files insert status:", insertRes.status);
+            }
         } catch (dbErr) {
             console.warn("[BookUpload] Table insert warning:", dbErr.message);
         }
@@ -117,11 +126,14 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             const currentBooks = (state.books || []).filter(b => b.id !== bookId);
             currentBooks.unshift(dbPayload);
 
+            // Fetch or upsert admin row in hawari_users
             await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
                 method: "PATCH",
-                headers: getSupabaseAuthHeaders(jwtToken, {
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${anonKey}`,
                     "Content-Type": "application/json"
-                }),
+                },
                 body: JSON.stringify({
                     report_task_progress: {
                         ...(state.currentUser.report_task_progress || {}),
@@ -29723,33 +29735,34 @@ async function fetchBookLibraryData() {
     const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
     const cleanUrl = url.replace(/\/$/, "");
-    const jwtToken = await getValidSupabaseAccessToken();
 
     console.log("[BookLibrary] fetchBookLibraryData START — activeGroup:", activeGroup);
 
     let collectedBooks = [];
+    let serverSuccess = false;
 
-    // Strategy A: Query hawari_book_files table
+    // Strategy A: Query hawari_book_files table directly
     try {
-        const resA = await fetch(`${cleanUrl}/rest/v1/hawari_book_files?order=uploaded_at.desc`, {
-            headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken || anonKey}` }
+        const resA = await fetch(`${cleanUrl}/rest/v1/hawari_book_files?group_name=eq.${encodeURIComponent(activeGroup)}&order=uploaded_at.desc`, {
+            headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` }
         });
         if (resA.ok) {
             const dataA = await resA.json();
-            if (Array.isArray(dataA) && dataA.length > 0) {
-                const groupA = dataA.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
-                collectedBooks.push(...groupA);
-                console.log("[BookLibrary] Strategy A (hawari_book_files) fetched:", groupA.length, "books");
+            if (Array.isArray(dataA)) {
+                serverSuccess = true;
+                const activeOnly = dataA.filter(b => (!b.status || b.status === "active") && (b.group_name || "infection").toLowerCase() === activeGroup);
+                collectedBooks.push(...activeOnly);
+                console.log("[BookLibrary] Strategy A (hawari_book_files) fetched:", activeOnly.length, "books");
             }
         }
     } catch (eA) {
         console.warn("[BookLibrary] Strategy A warning:", eA.message);
     }
 
-    // Strategy B: Query admin records in hawari_users for cross-device synchronization
+    // Strategy B: Query admin records in hawari_users for fallback synchronization
     try {
         const resB = await fetch(`${cleanUrl}/rest/v1/hawari_users?role=eq.admin&group_name=eq.${activeGroup}&select=email,report_task_progress`, {
-            headers: { "apikey": anonKey, "Authorization": `Bearer ${jwtToken || anonKey}` }
+            headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` }
         });
         if (resB.ok) {
             const users = await resB.json();
@@ -29759,6 +29772,7 @@ async function fetchBookLibraryData() {
                     const matching = userBooks.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
                     collectedBooks.push(...matching);
                 });
+                if (users.length > 0) serverSuccess = true;
                 console.log("[BookLibrary] Strategy B (hawari_users admin sync) found books count:", collectedBooks.length);
             }
         }
@@ -29774,27 +29788,25 @@ async function fetchBookLibraryData() {
         }
     });
 
-    // Also include any locally cached books that haven't expired
-    const local = localStorage.getItem("hawari_books_" + activeGroup);
-    if (local) {
+    if (serverSuccess || collectedBooks.length > 0) {
+        state.books = Array.from(uniqueMap.values());
         try {
-            const parsed = JSON.parse(local);
-            if (Array.isArray(parsed)) {
-                parsed.forEach(b => {
-                    if (b && b.id && !uniqueMap.has(b.id) && (b.group_name || "infection").toLowerCase() === activeGroup) {
-                        uniqueMap.set(b.id, b);
-                    }
-                });
-            }
-        } catch(e){}
+            localStorage.setItem("hawari_books_" + activeGroup, JSON.stringify(state.books));
+        } catch(err){}
+    } else {
+        // Fallback to local cache only if server could not be reached
+        const local = localStorage.getItem("hawari_books_" + activeGroup);
+        if (local) {
+            try {
+                const parsed = JSON.parse(local);
+                if (Array.isArray(parsed)) {
+                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                }
+            } catch(e){}
+        }
     }
 
-    state.books = Array.from(uniqueMap.values());
     console.log("[BookLibrary] fetchBookLibraryData FINISHED — total distinct books:", state.books.length);
-
-    try {
-        localStorage.setItem("hawari_books_" + activeGroup, JSON.stringify(state.books));
-    } catch(err){}
 
     updateAdminActiveBookUI();
     return state.books;
@@ -29814,18 +29826,21 @@ async function saveUserBookProgress() {
 
     const docId = bookState.activeBookFile.id;
     const page = bookState.currentPage;
-    const email = state.currentUser.email;
+    const email = state.currentUser.email.trim().toLowerCase();
+    const group = (state.activeGroup || "infection").toLowerCase();
 
     // Immediately save to LocalStorage (local first)
-    localStorage.setItem(`hawari_progress_${email}_${docId}`, page);
+    localStorage.setItem(`hawari_progress_${email}_${docId}`, page.toString());
 
-    // Debounce the Supabase DB write by 5 seconds
+    // Debounce the Supabase DB write by 3 seconds
     if (saveProgressTimeout) clearTimeout(saveProgressTimeout);
     saveProgressTimeout = setTimeout(async () => {
         const payload = {
             email: email,
             document_id: docId,
             last_page: page,
+            total_pages: bookState.numPages || 1,
+            group_name: group,
             updated_at: new Date().toISOString()
         };
 
@@ -29839,30 +29854,35 @@ async function saveUserBookProgress() {
         } catch (e) {
             console.warn("[BookProgress] Debounced sync fallback:", e);
         }
-    }, 5000);
+    }, 3000);
 }
 
 async function fetchUserBookProgress(bookId) {
-    if (!state.currentUser) return 1;
-    const email = state.currentUser.email;
+    if (!state.currentUser || !bookId) return 1;
+    const email = state.currentUser.email.trim().toLowerCase();
 
-    const local = localStorage.getItem(`hawari_progress_${email}_${bookId}`);
-    if (local) {
-        const p = parseInt(local);
-        if (!isNaN(p)) return p;
-    }
-
+    // 1. Try to fetch latest reading progress from cloud
     try {
-        const query = `hawari_user_book_progress?email=eq.${encodeURIComponent(email)}&document_id=eq.${bookId}&select=last_page`;
+        const query = `hawari_user_book_progress?email=eq.${encodeURIComponent(email)}&document_id=eq.${encodeURIComponent(bookId)}&select=last_page`;
         const rows = await supabaseRequest(query);
-        if (rows && rows[0] && rows[0].last_page) {
-            const p = parseInt(rows[0].last_page);
-            localStorage.setItem(`hawari_progress_${email}_${bookId}`, p);
-            return p;
+        if (Array.isArray(rows) && rows.length > 0 && rows[0].last_page) {
+            const p = parseInt(rows[0].last_page, 10);
+            if (!isNaN(p) && p >= 1) {
+                localStorage.setItem(`hawari_progress_${email}_${bookId}`, p.toString());
+                return p;
+            }
         }
     } catch (e) {
         console.warn("[BookProgress] Cloud progress fetch fallback:", e);
     }
+
+    // 2. Fallback to local storage if cloud is unreachable
+    const local = localStorage.getItem(`hawari_progress_${email}_${bookId}`);
+    if (local) {
+        const p = parseInt(local, 10);
+        if (!isNaN(p) && p >= 1) return p;
+    }
+
     return 1;
 }
 
@@ -30117,25 +30137,31 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
         return;
     }
 
+    const group = (state.activeGroup || "infection").toLowerCase();
+    const cleanUrl = SUPABASE_CONFIG.url;
+    const anonKey = SUPABASE_CONFIG.anonKey;
+
     try {
         const book = (state.books || []).find(b => b.id === bookId);
         if (book) {
-            await supabaseRequest(`hawari_book_files?id=eq.${encodeURIComponent(bookId)}`, {
-                method: "DELETE"
+            await fetch(`${cleanUrl}/rest/v1/hawari_book_files?id=eq.${encodeURIComponent(bookId)}`, {
+                method: "DELETE",
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${anonKey}`
+                }
             });
             try {
-                const cleanPath = book.storage_url.replace(/.*\/hawari_books\//, "");
-                const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-                const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-                const jwtToken = await getValidSupabaseAccessToken();
-                const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
-                await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`, {
-                    method: "DELETE",
-                    headers: {
-                        "apikey": anonKey,
-                        "Authorization": `Bearer ${jwtToken || anonKey}`
-                    }
-                });
+                const cleanPath = (book.storage_url || "").replace(/.*\/hawari_books\//, "");
+                if (cleanPath) {
+                    await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                        method: "DELETE",
+                        headers: {
+                            "apikey": anonKey,
+                            "Authorization": `Bearer ${anonKey}`
+                        }
+                    });
+                }
             } catch (storageErr) {
                 console.warn("[BookDelete] Storage cleanup warning:", storageErr.message);
             }
@@ -30143,11 +30169,34 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
 
         if (bookState.activeBookFile && bookState.activeBookFile.id === bookId) {
             bookState.activeBookFile = null;
-            bookState.numPages = 10;
+            bookState.pdfDoc = null;
+            localStorage.removeItem("hawari_active_book_" + group);
         }
 
         state.books = (state.books || []).filter(b => b.id !== bookId);
-        localStorage.setItem("hawari_books_" + state.activeGroup, JSON.stringify(state.books));
+        localStorage.setItem("hawari_books_" + group, JSON.stringify(state.books));
+
+        // Sync deletion with hawari_users admin row for immediate cross-device sync
+        try {
+            const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "mustafaimam1317@gmail.com").toLowerCase();
+            await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
+                method: "PATCH",
+                headers: {
+                    "apikey": anonKey,
+                    "Authorization": `Bearer ${anonKey}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    report_task_progress: {
+                        ...(state.currentUser?.report_task_progress || {}),
+                        books: state.books
+                    },
+                    last_updated: Date.now()
+                })
+            });
+        } catch (syncErr) {
+            console.warn("[BookDelete] Syncing deleted book to admin row warning:", syncErr.message);
+        }
         
         showToast("Book Deleted", `Successfully deleted "${bookTitle}"`, "info");
         updateAdminActiveBookUI();
@@ -30330,7 +30379,8 @@ async function saveBookPageAnnotationToCloud(page) {
 async function flushPendingAnnotationsSync() {
     if (!state.currentUser || !state.activeGroup || !bookState.activeBookFile) return;
     const docId = bookState.activeBookFile.id;
-    const email = state.currentUser.email;
+    const email = state.currentUser.email.trim().toLowerCase();
+    const group = (state.activeGroup || "infection").toLowerCase();
     const pagesArray = Array.from(pendingPagesToSync);
     pendingPagesToSync.clear();
 
@@ -30341,46 +30391,25 @@ async function flushPendingAnnotationsSync() {
         const compressedPayload = compressAnnotations(pageData);
 
         try {
-            let rowId = bookState.cloudAnnotationIds[p];
-            if (!rowId) {
-                const existing = await supabaseRequest(`hawari_book_annotations?email=eq.${encodeURIComponent(email)}&document_id=eq.${encodeURIComponent(docId)}&page_number=eq.${p}&select=id`);
-                if (Array.isArray(existing) && existing.length > 0 && existing[0].id) {
-                    rowId = existing[0].id;
-                    bookState.cloudAnnotationIds[p] = rowId;
-                }
-            }
+            const payload = {
+                email: email,
+                group_name: group,
+                document_id: docId,
+                page_number: p,
+                payload_json: compressedPayload,
+                updated_at: new Date().toISOString()
+            };
 
-            if (rowId) {
-                // Update existing record
-                await supabaseRequest(`hawari_book_annotations?id=eq.${encodeURIComponent(rowId)}`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        payload_json: compressedPayload,
-                        updated_at: new Date().toISOString()
-                    })
-                });
-                console.log(`[BookSync] Synced updated compressed annotations for page ${p} to cloud.`);
-            } else {
-                // Insert new record without composite ID
-                const payload = {
-                    email: email,
-                    group_name: state.activeGroup,
-                    document_id: docId,
-                    page_number: p,
-                    payload_json: compressedPayload,
-                    updated_at: new Date().toISOString()
-                };
-                const insertRes = await supabaseRequest("hawari_book_annotations", {
-                    method: "POST",
-                    headers: { "Prefer": "return=representation", "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                if (Array.isArray(insertRes) && insertRes.length > 0 && insertRes[0].id) {
-                    bookState.cloudAnnotationIds[p] = insertRes[0].id;
-                }
-                console.log(`[BookSync] Synced new compressed annotations for page ${p} to cloud.`);
+            // Atomic upsert by (email, document_id, page_number)
+            const insertRes = await supabaseRequest("hawari_book_annotations?on_conflict=email,document_id,page_number", {
+                method: "POST",
+                headers: { "Prefer": "resolution=merge-duplicates,return=representation", "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (Array.isArray(insertRes) && insertRes.length > 0 && insertRes[0].id) {
+                bookState.cloudAnnotationIds[p] = insertRes[0].id;
             }
+            console.log(`[BookSync] Atomic upserted compressed annotations for page ${p} to cloud.`);
         } catch (e) {
             console.warn(`[BookSync] Cloud sync failed for page ${p}:`, e);
         }
@@ -30390,20 +30419,23 @@ async function flushPendingAnnotationsSync() {
 async function flushPendingProgressSync() {
     if (!state.currentUser || !bookState.activeBookFile) return;
     const docId = bookState.activeBookFile.id;
-    const page = bookState.currentPage;
-    const email = state.currentUser.email;
+    const page = bookState.currentPage || 1;
+    const email = state.currentUser.email.trim().toLowerCase();
+    const group = (state.activeGroup || "infection").toLowerCase();
 
     const payload = {
         email: email,
         document_id: docId,
         last_page: page,
+        total_pages: bookState.numPages || 1,
+        group_name: group,
         updated_at: new Date().toISOString()
     };
 
     try {
         await supabaseRequest("hawari_user_book_progress?on_conflict=email,document_id", {
             method: "POST",
-            headers: { "Prefer": "resolution=merge-duplicates" },
+            headers: { "Prefer": "resolution=merge-duplicates,return=representation" },
             body: JSON.stringify(payload)
         });
         console.log(`[BookProgress] Flushed page progress ${page} to cloud.`);

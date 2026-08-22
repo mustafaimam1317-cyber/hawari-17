@@ -14,8 +14,18 @@ function getSupabaseAuthHeaders(jwtToken = null, extraHeaders = {}) {
     };
 }
 
+let _bookUploadInProgress = false;
+
 async function processBookPdfUpload({ title, file, progressContainer, progressBar, progressText, modalToClose, formToReset }) {
     console.log("[BookUpload] START processBookPdfUpload — title:", title, "file size:", file ? file.size : 0);
+
+    // Guard against double-click / concurrent uploads
+    if (_bookUploadInProgress) {
+        console.warn("[BookUpload] BLOCKED: Upload already in progress, ignoring duplicate call.");
+        showToast("جاري الرفع", "يتم رفع الكتاب حالياً، يرجى الانتظار...", "warning");
+        return false;
+    }
+    _bookUploadInProgress = true;
 
     const hasSession = !!(state.currentUser && state.currentUser.email);
     const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
@@ -24,6 +34,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         console.error("[BookUpload] FAILED: Admin session invalid or missing");
         showToast("جلسة غير صالحة", "رفع الكتب متاح فقط للمشرفين. يرجى تسجيل الدخول بحساب مسؤول.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
+        _bookUploadInProgress = false;
         return false;
     }
 
@@ -31,6 +42,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         console.error("[BookUpload] FAILED: Missing title or file");
         showToast("Missing Required Fields", "Please enter a title and select a PDF file.", "warning");
         if (progressContainer) progressContainer.classList.add("hidden");
+        _bookUploadInProgress = false;
         return false;
     }
 
@@ -169,12 +181,14 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             updateAdminActiveBookUI();
         }, 600);
 
+        _bookUploadInProgress = false;
         return true;
 
     } catch (err) {
         console.error("[BookUpload] Exception:", err);
         showToast("Upload Error", err.message || "Failed to upload book.", "danger");
         if (progressContainer) progressContainer.classList.add("hidden");
+        _bookUploadInProgress = false;
         return false;
     }
 }
@@ -22949,7 +22963,6 @@ function initAuthFlow() {
                 console.log("[AUTH-TRACE] custom login success");
                 state.currentUser = user;
                 await loginToSupabaseAuth(currentAuthenticatingEmail, password);
-                await loginToSupabaseAuth(currentAuthenticatingEmail, password);
 
                 try {
                     // Force sync cloud progress to avoid overwriting newer progress from other devices
@@ -29816,13 +29829,6 @@ async function fetchBookLibraryData() {
 let saveProgressTimeout = null;
 async function saveUserBookProgress() {
     if (!state.currentUser || !bookState.activeBookFile) return;
-    
-    // Only save progress for Full Grant Access students
-    const accessInfo = getBookAccessLevel(state.currentUser);
-    if (!accessInfo.isFullGrant) {
-        console.log("[BookProgress] Page progress sync skipped (Premium feature for Full Grant only)");
-        return;
-    }
 
     const docId = bookState.activeBookFile.id;
     const page = bookState.currentPage;
@@ -29845,12 +29851,16 @@ async function saveUserBookProgress() {
         };
 
         try {
-            await supabaseRequest("hawari_user_book_progress?on_conflict=email,document_id", {
+            const result = await supabaseRequest("hawari_user_book_progress?on_conflict=email,document_id", {
                 method: "POST",
                 headers: { "Prefer": "resolution=merge-duplicates" },
                 body: JSON.stringify(payload)
             });
-            console.log(`[BookProgress] Debounced sync: Saved page progress ${page} of ${docId} to cloud.`);
+            if (result && result.success === false) {
+                console.warn(`[BookProgress] Cloud sync returned error (${result.status}):`, result.error);
+            } else {
+                console.log(`[BookProgress] Debounced sync: Saved page progress ${page} of ${docId} to cloud.`);
+            }
         } catch (e) {
             console.warn("[BookProgress] Debounced sync fallback:", e);
         }

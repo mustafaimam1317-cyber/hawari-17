@@ -21018,12 +21018,13 @@ async function selectCourseTrack(groupName) {
     // Load state from the dynamic storage keys of this track
     loadStateFromStorage();
 
-    // Fetch report tasks, quizzes, quiz results, and announcements in parallel to avoid UI lag
+    // Fetch report tasks, quizzes, quiz results, announcements, and book library in parallel to avoid UI lag
     await Promise.all([
         fetchReportTasksFromCloud(groupName),
         fetchCourseQuizzes(groupName),
         fetchQuizResults(groupName),
-        fetchAnnouncement(groupName)
+        fetchAnnouncement(groupName),
+        fetchBookLibraryData(groupName)
     ]);
 
     // Seed default admin/student to cloud if they are missing (async non-blocking)
@@ -29742,39 +29743,44 @@ function updateAdminActiveBookUI() {
     container.innerHTML = html;
 }
 
-// Fetch list of books from Supabase / localStorage
-async function fetchBookLibraryData() {
-    const activeGroup = (state.activeGroup || "infection").toLowerCase();
+// Fetch list of books from Supabase / localStorage with course-awareness & race condition protection
+let _activeBookFetchId = 0;
+
+async function fetchBookLibraryData(targetGroup = null) {
+    const requestedGroup = (targetGroup || state.activeGroup || "infection").toLowerCase().trim();
+    const currentFetchId = ++_activeBookFetchId;
     const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
     const cleanUrl = url.replace(/\/$/, "");
 
-    console.log("[BookLibrary] fetchBookLibraryData START — activeGroup:", activeGroup);
+    console.log(`[BookDebug] Fetching books from Supabase for: ${requestedGroup} (Fetch ID: ${currentFetchId})`);
 
     let collectedBooks = [];
     let serverSuccess = false;
 
     // Strategy A: Query hawari_book_files table directly
     try {
-        const resA = await fetch(`${cleanUrl}/rest/v1/hawari_book_files?group_name=eq.${encodeURIComponent(activeGroup)}&order=uploaded_at.desc`, {
+        const resA = await fetch(`${cleanUrl}/rest/v1/hawari_book_files?group_name=eq.${encodeURIComponent(requestedGroup)}&order=uploaded_at.desc`, {
             headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` }
         });
         if (resA.ok) {
             const dataA = await resA.json();
             if (Array.isArray(dataA)) {
                 serverSuccess = true;
-                const activeOnly = dataA.filter(b => (!b.status || b.status === "active") && (b.group_name || "infection").toLowerCase() === activeGroup);
+                const activeOnly = dataA.filter(b => (!b.status || b.status === "active") && (b.group_name || "infection").toLowerCase().trim() === requestedGroup);
                 collectedBooks.push(...activeOnly);
-                console.log("[BookLibrary] Strategy A (hawari_book_files) fetched:", activeOnly.length, "books");
+                console.log(`[BookDebug] Supabase returned: ${activeOnly.length} books for ${requestedGroup}`);
             }
+        } else {
+            console.warn(`[BookDebug] Strategy A (hawari_book_files) response not ok: ${resA.status}`);
         }
     } catch (eA) {
-        console.warn("[BookLibrary] Strategy A warning:", eA.message);
+        console.warn("[BookDebug] Strategy A warning:", eA.message);
     }
 
     // Strategy B: Query admin records in hawari_users for fallback synchronization
     try {
-        const resB = await fetch(`${cleanUrl}/rest/v1/hawari_users?role=eq.admin&group_name=eq.${activeGroup}&select=email,report_task_progress`, {
+        const resB = await fetch(`${cleanUrl}/rest/v1/hawari_users?role=eq.admin&group_name=eq.${encodeURIComponent(requestedGroup)}&select=email,report_task_progress`, {
             headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` }
         });
         if (resB.ok) {
@@ -29782,15 +29788,15 @@ async function fetchBookLibraryData() {
             if (Array.isArray(users)) {
                 users.forEach(u => {
                     const userBooks = (u.report_task_progress && Array.isArray(u.report_task_progress.books)) ? u.report_task_progress.books : [];
-                    const matching = userBooks.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                    const matching = userBooks.filter(b => (b.group_name || "infection").toLowerCase().trim() === requestedGroup);
                     collectedBooks.push(...matching);
                 });
                 if (users.length > 0) serverSuccess = true;
-                console.log("[BookLibrary] Strategy B (hawari_users admin sync) found books count:", collectedBooks.length);
+                console.log(`[BookDebug] Strategy B found books count: ${collectedBooks.length}`);
             }
         }
     } catch (eB) {
-        console.warn("[BookLibrary] Strategy B warning:", eB.message);
+        console.warn("[BookDebug] Strategy B warning:", eB.message);
     }
 
     // Deduplicate collected books by ID and Title
@@ -29801,26 +29807,40 @@ async function fetchBookLibraryData() {
         }
     });
 
-    if (serverSuccess || collectedBooks.length > 0) {
-        state.books = Array.from(uniqueMap.values());
+    const finalBooks = Array.from(uniqueMap.values());
+
+    // Race condition check: Verify active course didn't change while awaiting fetch
+    const currentActive = (state.activeGroup || "infection").toLowerCase().trim();
+    if (currentActive !== requestedGroup) {
+        console.log(`[BookDebug] Ignoring stale response for: ${requestedGroup}, current group: ${currentActive}`);
+        // Still save to local storage for the requested group so it's ready when user returns
+        if (serverSuccess || finalBooks.length > 0) {
+            try {
+                localStorage.setItem("hawari_books_" + requestedGroup, JSON.stringify(finalBooks));
+            } catch(e){}
+        }
+        return state.books;
+    }
+
+    if (serverSuccess || finalBooks.length > 0) {
+        state.books = finalBooks;
         try {
-            localStorage.setItem("hawari_books_" + activeGroup, JSON.stringify(state.books));
+            localStorage.setItem("hawari_books_" + requestedGroup, JSON.stringify(state.books));
         } catch(err){}
     } else {
         // Fallback to local cache only if server could not be reached
-        const local = localStorage.getItem("hawari_books_" + activeGroup);
+        const local = localStorage.getItem("hawari_books_" + requestedGroup);
         if (local) {
             try {
                 const parsed = JSON.parse(local);
                 if (Array.isArray(parsed)) {
-                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
+                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase().trim() === requestedGroup);
                 }
             } catch(e){}
         }
     }
 
-    console.log("[BookLibrary] fetchBookLibraryData FINISHED — total distinct books:", state.books.length);
-
+    console.log(`[BookDebug] fetchBookLibraryData FINISHED for ${requestedGroup} — state.books count: ${state.books.length}`);
     updateAdminActiveBookUI();
     return state.books;
 }
@@ -29898,7 +29918,6 @@ async function fetchUserBookProgress(bookId) {
 
 // Render book cards inside book-library-grid
 async function renderBookLibrary(filterCategory = "all", searchQuery = "", skipCloudFetch = false) {
-    console.log("[BookLibrary] renderBookLibrary CALLED — filter:", filterCategory, "search:", searchQuery, "skipCloud:", skipCloudFetch);
     const gridEl = document.getElementById("book-library-grid");
     const emptyEl = document.getElementById("book-library-empty");
     if (!gridEl) {
@@ -29906,39 +29925,87 @@ async function renderBookLibrary(filterCategory = "all", searchQuery = "", skipC
         return;
     }
 
-    const activeGroup = (state.activeGroup || "infection").toLowerCase();
+    const activeGroup = (state.activeGroup || "infection").toLowerCase().trim();
+    console.log(`[BookDebug] renderBookLibrary CALLED — activeGroup: ${activeGroup}, filter: ${filterCategory}, skipCloud: ${skipCloudFetch}`);
 
-    // 1. Local-first: Ensure state.books has cached books from localStorage if empty
-    if (!state.books || state.books.length === 0) {
+    // 1. Local-first: Check if state.books has matching books for the current group
+    let hasMatchingMemoryBooks = Array.isArray(state.books) && state.books.some(b => (b.group_name || "infection").toLowerCase().trim() === activeGroup);
+
+    if (!hasMatchingMemoryBooks) {
         const local = localStorage.getItem("hawari_books_" + activeGroup);
         if (local) {
             try {
                 const parsed = JSON.parse(local);
                 if (Array.isArray(parsed) && parsed.length > 0) {
-                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
-                    console.log("[BookLibrary] Pre-loaded from localStorage for instant render:", state.books.length, "books");
+                    state.books = parsed.filter(b => (b.group_name || "infection").toLowerCase().trim() === activeGroup);
+                    console.log(`[BookDebug] Pre-loaded from localStorage for instant render: ${state.books.length} books`);
                 }
             } catch(e){}
         }
     }
 
-    let booksList = (state.books || []).filter(b => (b.group_name || "infection").toLowerCase() === activeGroup);
-    
+    let booksList = (state.books || []).filter(b => (b.group_name || "infection").toLowerCase().trim() === activeGroup);
+
     // Apply search filter
     if (searchQuery && searchQuery.trim()) {
         const q = searchQuery.trim().toLowerCase();
         booksList = booksList.filter(b => (b.title || "").toLowerCase().includes(q));
     }
 
-    gridEl.innerHTML = "";
+    console.log(`[BookDebug] Local books count before cloud check: ${booksList.length}`);
 
-    if (booksList.length === 0) {
-        gridEl.classList.add("hidden");
-        if (emptyEl) emptyEl.classList.remove("hidden");
+    // CASE A: Cached/in-memory books exist -> render immediately, then refresh from cloud in background
+    if (booksList.length > 0) {
+        _renderBookCards(booksList, gridEl, emptyEl, filterCategory, searchQuery);
         updateAdminActiveBookUI();
+
+        if (!skipCloudFetch) {
+            fetchBookLibraryData(activeGroup).then((updatedBooks) => {
+                const currentGroup = (state.activeGroup || "infection").toLowerCase().trim();
+                if (currentGroup === activeGroup) {
+                    renderBookLibrary(filterCategory, searchQuery, true);
+                }
+            }).catch(err => {
+                console.error("[BookDebug] Async cloud fetch failed:", err);
+            });
+        }
         return;
     }
 
+    // CASE B: No local books exist -> Show loading spinner and fetch from Supabase
+    if (!skipCloudFetch) {
+        gridEl.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+                <i class="fa-solid fa-spinner fa-spin" style="font-size: 2rem; color: var(--primary-color); margin-bottom: 12px; display: block;"></i>
+                <span style="font-weight: 500; font-size: 0.95rem;">جاري تحميل كتب المساق من السحابة...</span>
+            </div>
+        `;
+        gridEl.classList.remove("hidden");
+        if (emptyEl) emptyEl.classList.add("hidden");
+
+        fetchBookLibraryData(activeGroup).then((freshBooks) => {
+            const currentGroup = (state.activeGroup || "infection").toLowerCase().trim();
+            if (currentGroup === activeGroup) {
+                renderBookLibrary(filterCategory, searchQuery, true);
+            }
+        }).catch(err => {
+            console.error("[BookDebug] Initial cloud fetch error:", err);
+            gridEl.classList.add("hidden");
+            if (emptyEl) emptyEl.classList.remove("hidden");
+            updateAdminActiveBookUI();
+        });
+        return;
+    }
+
+    // CASE C: Cloud fetch already completed (skipCloudFetch === true) and returned 0 books -> Show proper empty state
+    gridEl.innerHTML = "";
+    gridEl.classList.add("hidden");
+    if (emptyEl) emptyEl.classList.remove("hidden");
+    updateAdminActiveBookUI();
+}
+
+function _renderBookCards(booksList, gridEl, emptyEl, filterCategory, searchQuery) {
+    gridEl.innerHTML = "";
     gridEl.classList.remove("hidden");
     if (emptyEl) emptyEl.classList.add("hidden");
 
@@ -29954,7 +30021,8 @@ async function renderBookLibrary(filterCategory = "all", searchQuery = "", skipC
         return 1;
     };
 
-    // Render cards
+    console.log(`[BookDebug] Rendering: ${booksList.length} book cards`);
+
     for (const book of booksList) {
         try {
             const cachedPage = getLocalProgress(book.id);
@@ -30000,19 +30068,8 @@ async function renderBookLibrary(filterCategory = "all", searchQuery = "", skipC
             `;
             gridEl.appendChild(card);
         } catch (cardErr) {
-            console.error("[BookLibrary] Failed to render card for book:", book.id, book.title, cardErr);
+            console.error("[BookDebug] Failed to render card for book:", book.id, book.title, cardErr);
         }
-    }
-
-    updateAdminActiveBookUI();
-
-    // 2. Background Cloud Fetch & Refresh (Non-Blocking)
-    if (!skipCloudFetch) {
-        fetchBookLibraryData().then(() => {
-            renderBookLibrary(filterCategory, searchQuery, true);
-        }).catch(err => {
-            console.error("[BookLibrary] Async cloud fetch failed:", err);
-        });
     }
 }
 

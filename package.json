@@ -1,6 +1,7 @@
 {
   "name": "hawari-infection",
   "version": "1.0.0",
+  "type": "module",
   "description": "Premium UWorld Quiz System for Hawari Infection",
   "main": "index.html",
   "scripts": {

@@ -36,8 +36,8 @@
         }
     </style>
 
-  <script type="module" crossorigin src="/assets/index-B_q_w9lX.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-WIllIQPe.css">
+  <script type="module" crossorigin src="/assets/index-l4WDaD7S.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DWEGEEDe.css">
 </head>
 <body class="light-theme theme-clay">
     
@@ -918,73 +918,122 @@
                 </div>
             </section>
 
-            <!-- ================= FLASHCARDS VIEW ================= -->
+            <!-- ================= FLASHCARDS VIEW (ANKI / SM-2 ENGINE) ================= -->
             <section id="flashcards-view" class="view-section hidden">
                 <div class="page-header" style="flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
                     <div>
-                        <h2>Flashcards Deck</h2>
-                        <p>Flip interactive cards to reinforce high-yield infection topics.</p>
+                        <h2><i class="fa-solid fa-brain" style="color: var(--primary-color); margin-right: 8px;"></i> Spaced Repetition Flashcards (Anki SM-2)</h2>
+                        <p>Master high-yield clinical facts with active recall and intelligent spaced intervals.</p>
                     </div>
 
-                    <!-- Dual Flashcards Sub-Tab Switcher -->
+                    <!-- Dual Flashcards Sub-Tab Switcher & New Card Button -->
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <div class="admin-tabs-bar" style="margin-top: 0; border-bottom: none; padding: 4px; background: rgba(30, 41, 59, 0.4); border-radius: 12px; display: inline-flex; gap: 4px;">
                             <button class="admin-tab-btn active" id="btn-tab-fc-official" style="padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">
-                                <i class="fa-solid fa-certificate" style="color: var(--primary-color); margin-right: 6px;"></i> Official Flashcards
+                                <i class="fa-solid fa-certificate" style="color: var(--primary-color); margin-right: 6px;"></i> Official Decks
                             </button>
                             <button class="admin-tab-btn" id="btn-tab-fc-personal" style="padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease;">
-                                <i class="fa-solid fa-user-pen" style="color: var(--color-success); margin-right: 6px;"></i> My Personal Flashcards
+                                <i class="fa-solid fa-user-pen" style="color: var(--color-success); margin-right: 6px;"></i> My Decks
                             </button>
                         </div>
                         <button id="btn-create-personal-flashcard" class="btn btn-primary" style="padding: 8px 14px; font-size: 0.85rem; border-radius: 8px;">
-                            <i class="fa-solid fa-plus"></i> New Flashcard
+                            <i class="fa-solid fa-plus"></i> New Card
                         </button>
                     </div>
                 </div>
 
-                <div class="flashcards-stats-header" style="display: flex; gap: 16px; font-size: 0.9rem; background: var(--bg-secondary); padding: 10px 18px; border-radius: 10px; border: 1px solid var(--border-color); margin-bottom: 20px;">
-                    <span>Mastered: <strong id="flashcard-stat-mastered" class="text-success">0</strong></span>
-                    <span>Review: <strong id="flashcard-stat-review" class="text-warning">0</strong></span>
-                    <span>Total Cards: <strong id="flashcard-stat-total">0</strong></span>
+                <!-- Deck / Category Selector Bar -->
+                <div style="margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                        <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);"><i class="fa-solid fa-layer-group"></i> Select Deck / Topic:</span>
+                        <span id="flashcard-deck-count-lbl" style="font-size: 0.78rem; color: var(--text-muted);">Showing All</span>
+                    </div>
+                    <div class="anki-deck-selector-bar" id="flashcard-deck-chips">
+                        <!-- Populated dynamically with deck chips -->
+                    </div>
                 </div>
 
+                <!-- Anki SM-2 Stats Header -->
+                <div class="flashcards-stats-header" style="display: flex; gap: 20px; font-size: 0.88rem; background: var(--bg-secondary); padding: 12px 18px; border-radius: 12px; border: 1px solid var(--border-color); margin-bottom: 20px; flex-wrap: wrap;">
+                    <span title="Cards due for review now"><i class="fa-solid fa-fire text-danger" style="margin-right: 4px;"></i> Due Today: <strong id="flashcard-stat-due" class="text-danger">0</strong></span>
+                    <span title="Cards in learning phase"><i class="fa-solid fa-book-open text-warning" style="margin-right: 4px;"></i> Learning: <strong id="flashcard-stat-learning" class="text-warning">0</strong></span>
+                    <span title="Cards fully mastered with long intervals"><i class="fa-solid fa-circle-check text-success" style="margin-right: 4px;"></i> Mastered: <strong id="flashcard-stat-mastered" class="text-success">0</strong></span>
+                    <span title="Total cards in current deck"><i class="fa-solid fa-layer-group" style="color: var(--primary-color); margin-right: 4px;"></i> Total: <strong id="flashcard-stat-total">0</strong></span>
+                </div>
+
+                <!-- Empty State -->
                 <div id="flashcards-empty-state" class="grid-card empty-state hidden" style="text-align: center; padding: 48px 24px; min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
                     <i class="fa-solid fa-layer-group empty-icon" style="font-size: 4rem; color: var(--primary-color); margin-bottom: 24px; opacity: 0.8;"></i>
-                    <h3>No Flashcards Available</h3>
-                    <p style="color: var(--text-muted); max-width: 480px;">Go to the Admin Panel to create some high-yield cards first.</p>
+                    <h3>No Flashcards in this Deck</h3>
+                    <p style="color: var(--text-muted); max-width: 480px;">No cards found matching the selected deck or category. Choose another deck or add a new card.</p>
                 </div>
 
-                <div id="flashcards-play-layout" class="flashcards-play-layout" style="display: flex; flex-direction: column; align-items: center; gap: 24px; max-width: 600px; margin: 0 auto; width: 100%;">
+                <!-- Study Session Complete Screen -->
+                <div id="flashcards-session-complete" class="grid-card hidden" style="text-align: center; padding: 48px 24px; min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 600px; margin: 0 auto; width: 100%; border: 1px solid var(--border-color); border-radius: 20px;">
+                    <div style="width: 70px; height: 70px; border-radius: 50%; background: rgba(16, 185, 129, 0.15); color: #10b981; display: flex; align-items: center; justify-content: center; font-size: 2rem; margin-bottom: 20px;">
+                        <i class="fa-solid fa-trophy"></i>
+                    </div>
+                    <h3 style="font-size: 1.4rem; font-weight: 700; margin-bottom: 8px;">Congratulations! Deck Reviewed</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 440px; margin-bottom: 20px;">You've completed all due cards in this deck for now. According to the SM-2 algorithm, these concepts are now consolidating in your long-term memory.</p>
+                    <button class="btn btn-primary" id="btn-restart-deck-study" style="padding: 10px 24px; font-size: 0.9rem; border-radius: 10px;">
+                        <i class="fa-solid fa-rotate-right"></i> Review All Cards Again
+                    </button>
+                </div>
+
+                <!-- Interactive Flashcard Play Layout -->
+                <div id="flashcards-play-layout" class="flashcards-play-layout" style="display: flex; flex-direction: column; align-items: center; gap: 20px; max-width: 620px; margin: 0 auto; width: 100%;">
                     <div class="flashcard-container" id="active-flashcard-box">
                         <div class="flashcard-card">
+                            <!-- FRONT -->
                             <div class="flashcard-face flashcard-front">
-                                <span class="card-category" id="card-front-category">Category</span>
+                                <div class="anki-card-meta-bar">
+                                    <span class="card-category" id="card-front-category">Category</span>
+                                    <span id="card-front-sm2-badge" class="badge" style="font-size: 0.72rem; padding: 3px 8px; background: rgba(96, 165, 250, 0.1); color: var(--primary-color);">New</span>
+                                </div>
                                 <div class="card-text" id="card-front-text">Question front text?</div>
-                                <span class="card-hint"><i class="fa-solid fa-rotate"></i> Click card to flip</span>
+                                <span class="card-hint"><i class="fa-solid fa-rotate"></i> Click card or press Space to show answer</span>
                             </div>
+                            <!-- BACK -->
                             <div class="flashcard-face flashcard-back">
-                                <span class="card-category" id="card-back-category">Category</span>
+                                <div class="anki-card-meta-bar">
+                                    <span class="card-category" id="card-back-category">Category</span>
+                                    <span id="card-back-sm2-badge" class="badge" style="font-size: 0.72rem; padding: 3px 8px; background: rgba(255, 255, 255, 0.2); color: #ffffff;">Review</span>
+                                </div>
                                 <div class="card-text" id="card-back-text">Answer back text!</div>
                                 <span class="card-hint"><i class="fa-solid fa-rotate"></i> Click card to flip back</span>
                             </div>
                         </div>
                     </div>
 
-                    <div class="flashcard-actions" style="display: flex; gap: 16px; width: 100%;">
-                        <button id="btn-fc-review" class="btn btn-warning btn-block" style="flex: 1; padding: 12px 20px;">
-                            <i class="fa-solid fa-triangle-exclamation"></i> Needs Review
-                        </button>
-                        <button id="btn-fc-mastered" class="btn btn-success btn-block" style="flex: 1; padding: 12px 20px;">
-                            <i class="fa-solid fa-circle-check"></i> Mastered
-                        </button>
+                    <!-- Anki SM-2 4-Rating Action Buttons -->
+                    <div class="flashcard-actions" id="anki-action-buttons-wrapper" style="width: 100%;">
+                        <div class="anki-actions-grid">
+                            <button id="btn-anki-again" class="btn-anki btn-anki-again" title="Failed to recall (Hotkey: 1)">
+                                <span class="anki-label">Again</span>
+                                <span class="anki-interval" id="anki-interval-again">&lt; 10m</span>
+                            </button>
+                            <button id="btn-anki-hard" class="btn-anki btn-anki-hard" title="Recalled with effort (Hotkey: 2)">
+                                <span class="anki-label">Hard</span>
+                                <span class="anki-interval" id="anki-interval-hard">1d</span>
+                            </button>
+                            <button id="btn-anki-good" class="btn-anki btn-anki-good" title="Recalled correctly (Hotkey: 3)">
+                                <span class="anki-label">Good</span>
+                                <span class="anki-interval" id="anki-interval-good">3d</span>
+                            </button>
+                            <button id="btn-anki-easy" class="btn-anki btn-anki-easy" title="Very easy recall (Hotkey: 4)">
+                                <span class="anki-label">Easy</span>
+                                <span class="anki-interval" id="anki-interval-easy">7d</span>
+                            </button>
+                        </div>
                     </div>
 
-                    <div class="flashcards-navigation" style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 12px;">
-                        <button id="btn-fc-prev" class="btn btn-secondary btn-outline" style="padding: 8px 16px;">
+                    <!-- Navigation Footer -->
+                    <div class="flashcards-navigation" style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 8px;">
+                        <button id="btn-fc-prev" class="btn btn-secondary btn-outline" style="padding: 6px 14px; font-size: 0.85rem;">
                             <i class="fa-solid fa-chevron-left"></i> Previous
                         </button>
-                        <span id="flashcard-progress-indicator" style="font-weight: 500; font-size: 0.95rem; color: var(--text-secondary);">Card 1 of 10</span>
-                        <button id="btn-fc-next" class="btn btn-secondary btn-outline" style="padding: 8px 16px;">
+                        <span id="flashcard-progress-indicator" style="font-weight: 600; font-size: 0.88rem; color: var(--text-secondary);">Card 1 of 10</span>
+                        <button id="btn-fc-next" class="btn btn-secondary btn-outline" style="padding: 6px 14px; font-size: 0.85rem;">
                             Next <i class="fa-solid fa-chevron-right"></i>
                         </button>
                     </div>
@@ -1156,8 +1205,12 @@
                                 <input type="hidden" id="edit-flashcard-id" value="">
                                 
                                 <div class="input-group">
-                                    <label for="admin-fc-category">Category / Topic</label>
-                                    <input type="text" id="admin-fc-category" placeholder="e.g. Immunization, Virology, General" required>
+                                    <label for="admin-fc-category">Deck / Topic (Select or Type New)</label>
+                                    <input type="text" id="admin-fc-category" list="admin-fc-category-list" placeholder="e.g. Herpes, Virology, Bacterial Infections" required autocomplete="off">
+                                    <datalist id="admin-fc-category-list">
+                                        <!-- Dynamically populated with unique decks -->
+                                    </datalist>
+                                    <small style="font-size:0.75rem;color:var(--text-muted);margin-top:3px;display:block">Tip: Type a new deck name to automatically create a new section.</small>
                                 </div>
                                 
                                 <div class="input-group">
@@ -1177,18 +1230,26 @@
                             </form>
                         </div>
 
-                        <!-- Flashcards List -->
+                        <!-- Flashcards List Grouped by Decks -->
                         <div class="grid-card">
-                            <div class="card-header-flex">
-                                <h3>Existing Flashcards</h3>
-                                <div class="search-input-wrapper">
-                                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
-                                    <input type="text" id="admin-fc-search" placeholder="Search cards by category or content...">
+                            <div class="card-header-flex" style="flex-wrap:wrap;gap:10px;">
+                                <div>
+                                    <h3 style="margin-bottom:2px;">Existing Flashcards</h3>
+                                    <span id="admin-fc-total-badge" style="font-size:0.8rem;color:var(--text-muted);">0 Cards across 0 Decks</span>
+                                </div>
+                                <div style="display:flex;gap:8px;align-items:center;">
+                                    <select id="admin-fc-deck-filter" style="padding:6px 12px;font-size:0.82rem;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary);">
+                                        <option value="all">📁 All Decks</option>
+                                    </select>
+                                    <div class="search-input-wrapper" style="max-width:180px;">
+                                        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                        <input type="text" id="admin-fc-search" placeholder="Search...">
+                                    </div>
                                 </div>
                             </div>
-                            <div class="admin-questions-list-wrapper">
+                            <div class="admin-questions-list-wrapper" style="margin-top:12px;">
                                 <div class="admin-q-list" id="admin-flashcards-list-container">
-                                    <!-- Populated dynamically -->
+                                    <!-- Populated dynamically grouped by Decks -->
                                 </div>
                             </div>
                         </div>

@@ -332,14 +332,26 @@ body.theme-clay .card-icon {
 /* ---------------- 6. QUESTION BANK & QUIZ CHOICES ---------------- */
 body.theme-clay .q-card,
 body.theme-clay .question-container,
-body.theme-clay .test-setup-card {
+body.theme-clay .test-setup-card,
+body.theme-clay .question-prompt-card {
     background: var(--clay-card-bg) !important;
     border-radius: var(--clay-radius-xl) !important;
     box-shadow: var(--clay-shadow-card) !important;
     border: none !important;
-    padding: 26px;
+    padding: 24px;
+    color: var(--clay-text-title) !important;
+    font-size: 1.05rem;
+    line-height: 1.6;
 }
 
+body.theme-clay.dark-theme .question-prompt-card,
+body.theme-clay.dark-theme .q-card {
+    background: #142034 !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(168, 85, 247, 0.25) !important;
+}
+
+/* Base Choice Button in Clay Light */
 body.theme-clay .choice-btn,
 body.theme-clay .quiz-option {
     background: #F3E6F7 !important;
@@ -349,38 +361,184 @@ body.theme-clay .quiz-option {
     padding: 16px 20px;
     margin-bottom: 12px;
     font-weight: 500;
-    color: var(--clay-text-body) !important;
-    transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    color: #3A1C36 !important;
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    cursor: pointer;
+}
+
+body.theme-clay .choice-letter {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 2px solid rgba(155, 113, 178, 0.4);
+    background: rgba(255, 255, 255, 0.7);
+    color: #3A1C36;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+body.theme-clay .choice-text {
+    flex-grow: 1;
+    font-size: 0.98rem;
+    line-height: 1.5;
+    color: inherit !important;
 }
 
 body.theme-clay .choice-btn:hover {
     background: #FCF6FD !important;
-    transform: translateX(-4px) scale(1.01);
+    transform: translateX(-3px);
     box-shadow: var(--clay-shadow-card) !important;
+    border-color: rgba(155, 113, 178, 0.3) !important;
 }
 
+/* Light Clay Selected during exam (Full Box Transformation) */
 body.theme-clay .choice-btn.selected,
 body.theme-clay .choice-btn.active {
-    background: #FCF6FD !important;
-    border-color: var(--clay-primary) !important;
-    box-shadow: 
-        inset 2px 2px 5px rgba(155, 113, 178, 0.15),
-        inset -2px -2px 5px rgba(255, 255, 255, 0.7),
-        3px 5px 12px rgba(155, 113, 178, 0.12) !important;
+    background: linear-gradient(135deg, rgba(155, 113, 178, 0.18), rgba(183, 142, 206, 0.15)) !important;
+    border-color: #9B71B2 !important;
+    color: #3A1C36 !important;
+    box-shadow: 0 4px 14px rgba(155, 113, 178, 0.22) !important;
 }
 
+body.theme-clay .choice-btn.selected .choice-letter {
+    background: #9B71B2 !important;
+    color: #ffffff !important;
+    border-color: #9B71B2 !important;
+}
+
+/* Light Clay Correct Choice (Full Box Transformation) */
+body.theme-clay .choice-btn.correct-choice,
 body.theme-clay .choice-btn.correct {
-    background: #ecfdf5 !important;
-    border-color: #10b981 !important;
-    color: #065f46 !important;
-    box-shadow: inset 2px 2px 5px rgba(16, 185, 129, 0.2) !important;
+    background: linear-gradient(135deg, #ecfdf5, #d1fae5) !important;
+    border: 2px solid #10b981 !important;
+    color: #064e3b !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.22) !important;
 }
 
+body.theme-clay .choice-btn.correct-choice .choice-letter,
+body.theme-clay .choice-btn.correct .choice-letter {
+    background: #10b981 !important;
+    color: #ffffff !important;
+    border-color: #10b981 !important;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.4) !important;
+}
+
+/* Light Clay Incorrect Choice (Full Box Transformation) */
+body.theme-clay .choice-btn.incorrect-choice,
 body.theme-clay .choice-btn.incorrect {
-    background: #fef2f2 !important;
+    background: linear-gradient(135deg, #fef2f2, #fee2e2) !important;
+    border: 2px solid #ef4444 !important;
+    color: #7f1d1d !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.22) !important;
+}
+
+body.theme-clay .choice-btn.incorrect-choice .choice-letter,
+body.theme-clay .choice-btn.incorrect .choice-letter {
+    background: #ef4444 !important;
+    color: #ffffff !important;
     border-color: #ef4444 !important;
-    color: #991b1b !important;
-    box-shadow: inset 2px 2px 5px rgba(239, 68, 68, 0.2) !important;
+    box-shadow: 0 2px 6px rgba(239, 68, 68, 0.4) !important;
+}
+
+/* ================= DARK MODE CLAY CHOICES (CRISP & HIGH CONTRAST) ================= */
+body.theme-clay.dark-theme .choice-btn,
+body.theme-clay.dark-theme .quiz-option {
+    background: #172439 !important;
+    border-radius: var(--clay-radius-lg) !important;
+    box-shadow: 4px 6px 14px rgba(0, 0, 0, 0.35), inset 1px 1px 2px rgba(255, 255, 255, 0.06) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.08) !important;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    font-weight: 500;
+    color: #f8fafc !important;
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body.theme-clay.dark-theme .choice-letter {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    background: rgba(15, 23, 42, 0.8);
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+body.theme-clay.dark-theme .choice-btn:hover {
+    background: #1f304c !important;
+    border-color: rgba(168, 85, 247, 0.4) !important;
+    color: #ffffff !important;
+    transform: translateX(-3px);
+    box-shadow: 6px 8px 18px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Dark Clay Selected during exam (Full Box Neon Glow) */
+body.theme-clay.dark-theme .choice-btn.selected,
+body.theme-clay.dark-theme .choice-btn.active {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(99, 102, 241, 0.2)) !important;
+    border-color: #a855f7 !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 20px rgba(168, 85, 247, 0.35), inset 0 0 10px rgba(168, 85, 247, 0.15) !important;
+}
+
+body.theme-clay.dark-theme .choice-btn.selected .choice-letter {
+    background: #a855f7 !important;
+    color: #ffffff !important;
+    border-color: #a855f7 !important;
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.6) !important;
+}
+
+/* Dark Clay Correct Choice (Full Box Vivid Emerald) */
+body.theme-clay.dark-theme .choice-btn.correct-choice,
+body.theme-clay.dark-theme .choice-btn.correct {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(5, 150, 105, 0.35)) !important;
+    border: 2px solid #10b981 !important;
+    color: #ecfdf5 !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 22px rgba(16, 185, 129, 0.4), inset 0 0 12px rgba(16, 185, 129, 0.2) !important;
+}
+
+body.theme-clay.dark-theme .choice-btn.correct-choice .choice-letter,
+body.theme-clay.dark-theme .choice-btn.correct .choice-letter {
+    background: #10b981 !important;
+    color: #ffffff !important;
+    border-color: #10b981 !important;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.8) !important;
+}
+
+/* Dark Clay Incorrect Choice (Full Box Vivid Crimson) */
+body.theme-clay.dark-theme .choice-btn.incorrect-choice,
+body.theme-clay.dark-theme .choice-btn.incorrect {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.28), rgba(220, 38, 38, 0.35)) !important;
+    border: 2px solid #ef4444 !important;
+    color: #fee2e2 !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 22px rgba(239, 68, 68, 0.4), inset 0 0 12px rgba(239, 68, 68, 0.2) !important;
+}
+
+body.theme-clay.dark-theme .choice-btn.incorrect-choice .choice-letter,
+body.theme-clay.dark-theme .choice-btn.incorrect .choice-letter {
+    background: #ef4444 !important;
+    color: #ffffff !important;
+    border-color: #ef4444 !important;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.8) !important;
 }
 
 /* ---------------- 7. HAWARI BOOK LIBRARY & VIEWER ---------------- */

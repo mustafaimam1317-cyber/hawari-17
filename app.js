@@ -25413,8 +25413,116 @@ function populateAdminTopicSelect(selectedTopic) {
     }
 }
 
+// ================= ANKI / SM-2 SPACED REPETITION ENGINE & DECK SYSTEM =================
+
 let activeFlashcardIdx = 0;
 let activeFlashcardTab = "official"; // "official" | "personal"
+let activeFlashcardDeck = "all"; // "all" | specific deck name
+let _isFlashcardKeybound = false;
+
+function normalizeSm2Card(card) {
+    if (!card) return card;
+    if (typeof card !== "object") return card;
+    if (card.repetitions === undefined) card.repetitions = (card.status === "mastered" ? 3 : 0);
+    if (card.interval === undefined) card.interval = (card.status === "mastered" ? 7 : 0);
+    if (card.easeFactor === undefined) card.easeFactor = 2.5;
+    if (card.nextReviewDate === undefined) {
+        card.nextReviewDate = card.status === "mastered" ? (Date.now() + 7 * 86400000) : 0;
+    }
+    if (!card.deck) card.deck = card.category || "General";
+    if (!card.category) card.category = card.deck;
+    if (!card.state) {
+        card.state = card.status === "mastered" ? "mastered" : (card.repetitions > 0 ? "learning" : "new");
+    }
+    return card;
+}
+
+function isCardDueForReview(card) {
+    if (!card) return false;
+    normalizeSm2Card(card);
+    if (!card.nextReviewDate || card.nextReviewDate === 0) return true;
+    return card.nextReviewDate <= Date.now();
+}
+
+function calculateSm2Interval(card, grade) {
+    // grade: 1 = Again (Failed), 2 = Hard (Effort), 3 = Good (Correct), 4 = Easy (Instant)
+    normalizeSm2Card(card);
+    let repetitions = card.repetitions || 0;
+    let interval = card.interval || 0;
+    let easeFactor = card.easeFactor || 2.5;
+    let nextReviewDate = Date.now();
+    let state = card.state || "new";
+
+    if (grade === 1) { // AGAIN (< 10m)
+        repetitions = 0;
+        interval = 0;
+        nextReviewDate = Date.now() + 10 * 60 * 1000; // 10 minutes
+        easeFactor = Math.max(1.3, easeFactor - 0.2);
+        state = "learning";
+    } else if (grade === 2) { // HARD (1d or interval * 1.2)
+        if (repetitions === 0) {
+            interval = 1;
+        } else {
+            interval = Math.max(1, Math.round(interval * 1.2));
+        }
+        repetitions += 1;
+        nextReviewDate = Date.now() + interval * 86400000;
+        easeFactor = Math.max(1.3, easeFactor - 0.15);
+        state = repetitions >= 3 ? "mastered" : "learning";
+    } else if (grade === 3) { // GOOD (1d -> 3d -> interval * EF)
+        if (repetitions === 0) {
+            interval = 1;
+        } else if (repetitions === 1) {
+            interval = 3;
+        } else {
+            interval = Math.max(1, Math.round(interval * easeFactor));
+        }
+        repetitions += 1;
+        nextReviewDate = Date.now() + interval * 86400000;
+        state = repetitions >= 3 ? "mastered" : "learning";
+    } else if (grade === 4) { // EASY (4d -> 7d -> interval * EF * 1.3)
+        if (repetitions === 0) {
+            interval = 4;
+        } else if (repetitions === 1) {
+            interval = 7;
+        } else {
+            interval = Math.max(1, Math.round(interval * easeFactor * 1.3));
+        }
+        repetitions += 1;
+        easeFactor = Math.min(3.5, easeFactor + 0.15);
+        nextReviewDate = Date.now() + interval * 86400000;
+        state = "mastered";
+    }
+
+    return {
+        repetitions,
+        interval,
+        easeFactor: parseFloat(easeFactor.toFixed(2)),
+        nextReviewDate,
+        lastReviewDate: Date.now(),
+        state,
+        status: state === "mastered" ? "mastered" : "review"
+    };
+}
+
+function getSm2ButtonLabels(card) {
+    normalizeSm2Card(card);
+    const rep = card.repetitions || 0;
+    const ef = card.easeFactor || 2.5;
+    const curInt = card.interval || 0;
+
+    const againLabel = "< 10m";
+    const hardDays = rep === 0 ? 1 : Math.max(1, Math.round(curInt * 1.2));
+    const goodDays = rep === 0 ? 1 : (rep === 1 ? 3 : Math.max(1, Math.round(curInt * ef)));
+    const easyDays = rep === 0 ? 4 : (rep === 1 ? 7 : Math.max(1, Math.round(curInt * ef * 1.3)));
+
+    return {
+        againLabel,
+        hardLabel: `${hardDays}d`,
+        goodLabel: `${goodDays}d`,
+        easyLabel: `${easyDays}d`
+    };
+}
 
 function renderFlashcardsView() {
     // Bind Tab Switchers
@@ -25428,6 +25536,7 @@ function renderFlashcardsView() {
             activeFlashcardTab = "official";
             btnOfficial.classList.add("active");
             if (btnPersonal) btnPersonal.classList.remove("active");
+            activeFlashcardDeck = "all";
             activeFlashcardIdx = 0;
             renderFlashcardsView();
         };
@@ -25439,6 +25548,7 @@ function renderFlashcardsView() {
             activeFlashcardTab = "personal";
             btnPersonal.classList.add("active");
             if (btnOfficial) btnOfficial.classList.remove("active");
+            activeFlashcardDeck = "all";
             activeFlashcardIdx = 0;
             renderFlashcardsView();
         };
@@ -25467,12 +25577,20 @@ function renderFlashcardsView() {
                 return;
             }
 
+            const deckName = cat || "Personal Notes";
             const newCard = {
                 id: "fc_pers_" + Date.now() + Math.random().toString(36).substring(2, 6),
-                category: cat || "Personal Notes",
+                category: deckName,
+                deck: deckName,
                 front: front,
                 back: back,
                 status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
                 isOfficial: false,
                 authorEmail: state.currentUser ? state.currentUser.email : "guest"
             };
@@ -25481,7 +25599,7 @@ function renderFlashcardsView() {
             state.flashcards.unshift(newCard);
             saveStateToStorage();
 
-            showToast("Flashcard Added", "Created new card in My Personal Flashcards!", "success");
+            showToast("Flashcard Added", `Created new card in deck "${deckName}"!`, "success");
             createForm.reset();
             const modal = document.getElementById("modal-create-flashcard");
             if (modal) modal.classList.add("hidden");
@@ -25490,45 +25608,103 @@ function renderFlashcardsView() {
             activeFlashcardTab = "personal";
             if (btnPersonal) btnPersonal.classList.add("active");
             if (btnOfficial) btnOfficial.classList.remove("active");
+            activeFlashcardDeck = "all";
             activeFlashcardIdx = 0;
             renderFlashcardsView();
         };
     }
 
+    // Normalize all flashcards in state
+    if (!state.flashcards) state.flashcards = [];
+    state.flashcards.forEach(c => normalizeSm2Card(c));
+
     // Filter Flashcards according to active tab
     const allCards = state.flashcards || [];
-    let list = [];
+    let tabCards = [];
     if (activeFlashcardTab === "official") {
-        list = allCards.filter(c => c.isOfficial !== false);
+        tabCards = allCards.filter(c => c.isOfficial !== false);
     } else {
         const userEmail = state.currentUser ? state.currentUser.email : "";
-        list = allCards.filter(c => c.isOfficial === false && (!c.authorEmail || c.authorEmail === userEmail));
+        tabCards = allCards.filter(c => c.isOfficial === false && (!c.authorEmail || c.authorEmail === userEmail));
     }
-    
+
+    // Extract unique Decks and build Deck Chips
+    const deckChipsContainer = document.getElementById("flashcard-deck-chips");
+    const deckCountLbl = document.getElementById("flashcard-deck-count-lbl");
+    if (deckChipsContainer) {
+        deckChipsContainer.innerHTML = "";
+        const decksMap = {};
+        tabCards.forEach(c => {
+            const d = c.deck || c.category || "General";
+            decksMap[d] = (decksMap[d] || 0) + 1;
+        });
+
+        const uniqueDecks = Object.keys(decksMap).sort();
+
+        // "All Decks" chip
+        const allChip = document.createElement("button");
+        allChip.className = `anki-deck-chip ${activeFlashcardDeck === "all" ? "active" : ""}`;
+        allChip.innerHTML = `<i class="fa-solid fa-layer-group"></i> All Decks (${tabCards.length})`;
+        allChip.onclick = () => {
+            activeFlashcardDeck = "all";
+            activeFlashcardIdx = 0;
+            renderFlashcardsView();
+        };
+        deckChipsContainer.appendChild(allChip);
+
+        // Individual Deck chips
+        uniqueDecks.forEach(d => {
+            const chip = document.createElement("button");
+            chip.className = `anki-deck-chip ${activeFlashcardDeck === d ? "active" : ""}`;
+            chip.innerHTML = `<i class="fa-regular fa-folder"></i> ${d} (${decksMap[d]})`;
+            chip.onclick = () => {
+                activeFlashcardDeck = d;
+                activeFlashcardIdx = 0;
+                renderFlashcardsView();
+            };
+            deckChipsContainer.appendChild(chip);
+        });
+
+        if (deckCountLbl) {
+            deckCountLbl.innerText = activeFlashcardDeck === "all" ? `Showing All (${uniqueDecks.length} Decks)` : `Deck: ${activeFlashcardDeck}`;
+        }
+    }
+
+    // Filter cards by selected Deck
+    let list = tabCards;
+    if (activeFlashcardDeck !== "all") {
+        list = tabCards.filter(c => (c.deck || c.category || "General") === activeFlashcardDeck);
+    }
+
+    // Stats calculations
+    const dueLbl = document.getElementById("flashcard-stat-due");
+    const learningLbl = document.getElementById("flashcard-stat-learning");
     const masteredLbl = document.getElementById("flashcard-stat-mastered");
-    const reviewLbl = document.getElementById("flashcard-stat-review");
     const totalLbl = document.getElementById("flashcard-stat-total");
 
     const emptyState = document.getElementById("flashcards-empty-state");
     const playLayout = document.getElementById("flashcards-play-layout");
+    const sessionCompleteEl = document.getElementById("flashcards-session-complete");
 
-    if (!masteredLbl) return;
+    const dueCount = list.filter(c => isCardDueForReview(c)).length;
+    const learningCount = list.filter(c => c.state === "learning" || (c.repetitions > 0 && c.repetitions < 3)).length;
+    const masteredCount = list.filter(c => c.status === "mastered" || c.state === "mastered").length;
 
-    // Stats count
-    const masteredCount = list.filter(c => c.status === "mastered").length;
-    const reviewCount = list.filter(c => c.status === "review").length;
+    if (dueLbl) dueLbl.innerText = dueCount;
+    if (learningLbl) learningLbl.innerText = learningCount;
+    if (masteredLbl) masteredLbl.innerText = masteredCount;
+    if (totalLbl) totalLbl.innerText = list.length;
 
-    masteredLbl.innerText = masteredCount;
-    reviewLbl.innerText = reviewCount;
-    totalLbl.innerText = list.length;
-
+    // Handle Empty State
     if (list.length === 0) {
-        emptyState.classList.remove("hidden");
-        playLayout.classList.add("hidden");
+        if (emptyState) emptyState.classList.remove("hidden");
+        if (playLayout) playLayout.classList.add("hidden");
+        if (sessionCompleteEl) sessionCompleteEl.classList.add("hidden");
         return;
     } else {
-        emptyState.classList.add("hidden");
-        playLayout.classList.remove("hidden");
+        if (emptyState) emptyState.classList.add("hidden");
+        if (sessionCompleteEl) sessionCompleteEl.classList.add("hidden");
+        if (playLayout) playLayout.classList.remove("hidden");
     }
 
     // Bounds check index
@@ -25540,8 +25716,9 @@ function renderFlashcardsView() {
     }
 
     const activeCard = list[activeFlashcardIdx];
+    normalizeSm2Card(activeCard);
 
-    // Reset card flip view (make sure front is shown)
+    // Reset card flip view (make sure front is shown initially)
     const cardBox = document.getElementById("active-flashcard-box");
     if (cardBox) {
         cardBox.classList.remove("flipped");
@@ -25550,23 +25727,88 @@ function renderFlashcardsView() {
         };
     }
 
-    // Pop front
+    // Populate Front
     const fCat = document.getElementById("card-front-category");
     const fTxt = document.getElementById("card-front-text");
-    if (fCat) fCat.innerText = activeCard.category || "General";
-    if (fTxt) fTxt.innerText = activeCard.front;
+    const fSm2Badge = document.getElementById("card-front-sm2-badge");
+    const deckName = activeCard.deck || activeCard.category || "General";
 
-    // Pop back
+    if (fCat) fCat.innerText = deckName;
+    if (fTxt) fTxt.innerText = activeCard.front;
+    if (fSm2Badge) {
+        const isDue = isCardDueForReview(activeCard);
+        if (isDue) {
+            fSm2Badge.className = "badge badge-danger";
+            fSm2Badge.innerText = "Due for Review";
+        } else if (activeCard.state === "mastered") {
+            fSm2Badge.className = "badge badge-success";
+            fSm2Badge.innerText = `Mastered (${activeCard.interval}d)`;
+        } else {
+            fSm2Badge.className = "badge badge-warning";
+            fSm2Badge.innerText = `Learning (${activeCard.interval}d)`;
+        }
+    }
+
+    // Populate Back
     const bCat = document.getElementById("card-back-category");
     const bTxt = document.getElementById("card-back-text");
-    if (bCat) bCat.innerText = activeCard.category || "General";
+    const bSm2Badge = document.getElementById("card-back-sm2-badge");
+    if (bCat) bCat.innerText = deckName;
     if (bTxt) bTxt.innerText = activeCard.back;
+    if (bSm2Badge) {
+        bSm2Badge.innerText = `EF: ${activeCard.easeFactor || 2.5} • Reps: ${activeCard.repetitions || 0}`;
+    }
 
-    // Nav progress indicator
+    // Navigation progress indicator
     const prog = document.getElementById("flashcard-progress-indicator");
     if (prog) prog.innerText = `Card ${activeFlashcardIdx + 1} of ${list.length}`;
 
-    // Nav controls
+    // Update dynamic Anki button intervals
+    const btnLabels = getSm2ButtonLabels(activeCard);
+    const intAgain = document.getElementById("anki-interval-again");
+    const intHard = document.getElementById("anki-interval-hard");
+    const intGood = document.getElementById("anki-interval-good");
+    const intEasy = document.getElementById("anki-interval-easy");
+
+    if (intAgain) intAgain.innerText = btnLabels.againLabel;
+    if (intHard) intHard.innerText = btnLabels.hardLabel;
+    if (intGood) intGood.innerText = btnLabels.goodLabel;
+    if (intEasy) intEasy.innerText = btnLabels.easyLabel;
+
+    // Helper to process SM-2 rating
+    function rateCurrentCard(grade) {
+        const update = calculateSm2Interval(activeCard, grade);
+        Object.assign(activeCard, update);
+        saveStateToStorage();
+
+        const toastMsgs = {
+            1: { title: "Again (< 10m)", text: "Card will be reviewed again in this session.", type: "danger" },
+            2: { title: `Hard (${update.interval}d)`, text: `Next review scheduled in ${update.interval} day(s).`, type: "warning" },
+            3: { title: `Good (${update.interval}d)`, text: `Next review scheduled in ${update.interval} day(s).`, type: "info" },
+            4: { title: `Easy (${update.interval}d)`, text: `Mastered! Next review in ${update.interval} day(s).`, type: "success" }
+        };
+
+        const msg = toastMsgs[grade] || { title: "Reviewed", text: "Flashcard updated.", type: "success" };
+        showToast(msg.title, msg.text, msg.type);
+
+        setTimeout(() => {
+            activeFlashcardIdx++;
+            renderFlashcardsView();
+        }, 250);
+    }
+
+    // Bind Anki SM-2 4 Rating Buttons
+    const btnAgain = document.getElementById("btn-anki-again");
+    const btnHard = document.getElementById("btn-anki-hard");
+    const btnGood = document.getElementById("btn-anki-good");
+    const btnEasy = document.getElementById("btn-anki-easy");
+
+    if (btnAgain) btnAgain.onclick = (e) => { e.stopPropagation(); rateCurrentCard(1); };
+    if (btnHard) btnHard.onclick = (e) => { e.stopPropagation(); rateCurrentCard(2); };
+    if (btnGood) btnGood.onclick = (e) => { e.stopPropagation(); rateCurrentCard(3); };
+    if (btnEasy) btnEasy.onclick = (e) => { e.stopPropagation(); rateCurrentCard(4); };
+
+    // Navigation Controls
     const btnPrev = document.getElementById("btn-fc-prev");
     const btnNext = document.getElementById("btn-fc-next");
     if (btnPrev) {
@@ -25575,7 +25817,6 @@ function renderFlashcardsView() {
             renderFlashcardsView();
         };
     }
-
     if (btnNext) {
         btnNext.onclick = () => {
             activeFlashcardIdx++;
@@ -25583,31 +25824,47 @@ function renderFlashcardsView() {
         };
     }
 
-    // Card status actions
-    const btnMastered = document.getElementById("btn-fc-mastered");
-    const btnReview = document.getElementById("btn-fc-review");
-    if (btnMastered) {
-        btnMastered.onclick = () => {
-            activeCard.status = "mastered";
-            saveStateToStorage();
-            showToast("Mastered", "Marked as mastered! Keep going.", "success");
-            setTimeout(() => {
-                activeFlashcardIdx++;
-                renderFlashcardsView();
-            }, 300);
+    // Restart study session button
+    const btnRestartStudy = document.getElementById("btn-restart-deck-study");
+    if (btnRestartStudy) {
+        btnRestartStudy.onclick = () => {
+            activeFlashcardIdx = 0;
+            renderFlashcardsView();
         };
     }
 
-    if (btnReview) {
-        btnReview.onclick = () => {
-            activeCard.status = "review";
-            saveStateToStorage();
-            showToast("Needs Review", "Marked for review.", "warning");
-            setTimeout(() => {
-                activeFlashcardIdx++;
-                renderFlashcardsView();
-            }, 300);
-        };
+    // Keyboard Hotkeys binding (Space = Flip, 1 = Again, 2 = Hard, 3 = Good, 4 = Easy)
+    if (!_isFlashcardKeybound) {
+        _isFlashcardKeybound = true;
+        document.addEventListener("keydown", (e) => {
+            if (state.activeView !== "flashcards") return;
+            const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+            if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+            const box = document.getElementById("active-flashcard-box");
+            if (!box) return;
+
+            if (e.code === "Space") {
+                e.preventDefault();
+                box.classList.toggle("flipped");
+            } else if (e.key === "1") {
+                e.preventDefault();
+                const b = document.getElementById("btn-anki-again");
+                if (b) b.click();
+            } else if (e.key === "2") {
+                e.preventDefault();
+                const b = document.getElementById("btn-anki-hard");
+                if (b) b.click();
+            } else if (e.key === "3") {
+                e.preventDefault();
+                const b = document.getElementById("btn-anki-good");
+                if (b) b.click();
+            } else if (e.key === "4") {
+                e.preventDefault();
+                const b = document.getElementById("btn-anki-easy");
+                if (b) b.click();
+            }
+        });
     }
 }
 
@@ -25617,47 +25874,123 @@ function renderAdminFlashcardsTab() {
     const listContainer = document.getElementById("admin-flashcards-list-container");
     if (!listContainer) return;
 
-    // Search query filter
+    if (!state.flashcards) state.flashcards = [];
+    state.flashcards.forEach(c => normalizeSm2Card(c));
+
+    // Populate Datalist with existing Decks for smart autocomplete
+    const datalist = document.getElementById("admin-fc-category-list");
+    const deckFilterSelect = document.getElementById("admin-fc-deck-filter");
+    const totalBadge = document.getElementById("admin-fc-total-badge");
+
+    const decksMap = {};
+    state.flashcards.forEach(c => {
+        const d = c.deck || c.category || "General";
+        decksMap[d] = (decksMap[d] || 0) + 1;
+    });
+    const uniqueDecks = Object.keys(decksMap).sort();
+
+    if (datalist) {
+        datalist.innerHTML = uniqueDecks.map(d => `<option value="${d}">`).join("");
+    }
+
+    // Populate Deck Filter dropdown in Admin List
+    if (deckFilterSelect && !deckFilterSelect.dataset.bound) {
+        deckFilterSelect.dataset.bound = "true";
+        deckFilterSelect.onchange = () => {
+            renderAdminFlashcardsTab();
+        };
+    }
+
+    if (deckFilterSelect) {
+        const currentVal = deckFilterSelect.value || "all";
+        deckFilterSelect.innerHTML = `<option value="all">📁 All Decks (${state.flashcards.length})</option>` +
+            uniqueDecks.map(d => `<option value="${d}" ${currentVal === d ? "selected" : ""}>📁 ${d} (${decksMap[d]})</option>`).join("");
+    }
+
+    if (totalBadge) {
+        totalBadge.innerText = `${state.flashcards.length} Cards across ${uniqueDecks.length} Decks`;
+    }
+
+    // Search query & Deck filter
     const searchInput = document.getElementById("admin-fc-search");
+    if (searchInput && !searchInput.dataset.bound) {
+        searchInput.dataset.bound = "true";
+        searchInput.oninput = () => {
+            renderAdminFlashcardsTab();
+        };
+    }
     const query = searchInput ? searchInput.value.trim().toLowerCase() : "";
+    const selectedDeck = deckFilterSelect ? deckFilterSelect.value : "all";
 
     listContainer.innerHTML = "";
 
     let filteredCards = [...state.flashcards].reverse();
+
+    if (selectedDeck !== "all") {
+        filteredCards = filteredCards.filter(c => (c.deck || c.category || "General") === selectedDeck);
+    }
+
     if (query) {
         filteredCards = filteredCards.filter(c => 
-            c.category.toLowerCase().includes(query) || 
-            c.front.toLowerCase().includes(query) || 
-            c.back.toLowerCase().includes(query)
+            (c.deck && c.deck.toLowerCase().includes(query)) ||
+            (c.category && c.category.toLowerCase().includes(query)) || 
+            (c.front && c.front.toLowerCase().includes(query)) || 
+            (c.back && c.back.toLowerCase().includes(query))
         );
     }
 
     if (filteredCards.length === 0) {
-        listContainer.innerHTML = `<span class="text-muted" style="padding:15px;display:block;text-align:center">No flashcards found.</span>`;
+        listContainer.innerHTML = `<span class="text-muted" style="padding:20px;display:block;text-align:center">No flashcards found. Create your first card on the left.</span>`;
+        return;
     }
 
+    // Group cards by Deck
+    const grouped = {};
     filteredCards.forEach(c => {
-        const item = document.createElement("div");
-        item.className = "admin-q-item";
-        item.innerHTML = `
-            <div class="admin-q-content">
-                <h4>Q: ${c.front}</h4>
-                <p style="font-size:0.85rem;color:var(--text-secondary);margin-top:6px">A: ${c.back}</p>
-                <div class="admin-q-meta">
-                    <span class="badge" style="background-color:var(--primary-color-soft);color:var(--primary-color)">${c.category}</span>
-                    <span class="badge ${c.status === 'mastered' ? 'badge-success' : 'badge-warning'}">${c.status === 'mastered' ? 'Mastered' : 'Needs Review'}</span>
-                </div>
-            </div>
-            <div class="admin-q-actions">
-                <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem" onclick="editFlashcardAdmin('${c.id}')">
-                    <i class="fa-regular fa-edit"></i> Edit
-                </button>
-                <button class="btn btn-danger" style="padding:6px 12px;font-size:0.8rem" onclick="deleteFlashcardAdmin('${c.id}')">
-                    <i class="fa-regular fa-trash-can"></i> Delete
-                </button>
-            </div>
+        const d = c.deck || c.category || "General";
+        if (!grouped[d]) grouped[d] = [];
+        grouped[d].push(c);
+    });
+
+    Object.keys(grouped).sort().forEach(deckName => {
+        const deckCards = grouped[deckName];
+
+        // Deck Section Header
+        const header = document.createElement("div");
+        header.className = "admin-deck-group-header";
+        header.innerHTML = `
+            <span><i class="fa-solid fa-folder-open" style="color:var(--primary-color);margin-right:6px"></i> Deck: <strong>${deckName}</strong></span>
+            <span class="badge" style="background:var(--primary-color-soft);color:var(--primary-color);font-size:0.75rem">${deckCards.length} Card(s)</span>
         `;
-        listContainer.appendChild(item);
+        listContainer.appendChild(header);
+
+        // Deck Cards
+        deckCards.forEach(c => {
+            const item = document.createElement("div");
+            item.className = "admin-q-item";
+            item.innerHTML = `
+                <div class="admin-q-content">
+                    <h4>Q: ${c.front}</h4>
+                    <p style="font-size:0.85rem;color:var(--text-secondary);margin-top:6px">A: ${c.back}</p>
+                    <div class="admin-q-meta" style="margin-top:8px;gap:8px;display:flex;flex-wrap:wrap;align-items:center;">
+                        <span class="badge" style="background-color:var(--primary-color-soft);color:var(--primary-color)">📁 ${c.deck || c.category}</span>
+                        <span class="badge ${c.status === 'mastered' ? 'badge-success' : 'badge-warning'}">${c.status === 'mastered' ? 'Mastered' : 'Review'}</span>
+                        <span style="font-size:0.75rem;color:var(--text-muted);">Interval: <strong>${c.interval || 0}d</strong></span>
+                        <span style="font-size:0.75rem;color:var(--text-muted);">EF: <strong>${c.easeFactor || 2.5}</strong></span>
+                        <span style="font-size:0.75rem;color:var(--text-muted);">Reps: <strong>${c.repetitions || 0}</strong></span>
+                    </div>
+                </div>
+                <div class="admin-q-actions">
+                    <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem" onclick="editFlashcardAdmin('${c.id}')">
+                        <i class="fa-regular fa-edit"></i> Edit
+                    </button>
+                    <button class="btn btn-danger" style="padding:6px 12px;font-size:0.8rem" onclick="deleteFlashcardAdmin('${c.id}')">
+                        <i class="fa-regular fa-trash-can"></i> Delete
+                    </button>
+                </div>
+            `;
+            listContainer.appendChild(item);
+        });
     });
 
     // Form submit listener
@@ -25669,26 +26002,40 @@ function renderAdminFlashcardsTab() {
         const frontVal = sanitizeHTML(document.getElementById("admin-fc-front").value.trim());
         const backVal = sanitizeHTML(document.getElementById("admin-fc-back").value.trim());
 
+        if (!categoryVal || !frontVal || !backVal) {
+            showToast("Missing Info", "Please fill out deck name, front text, and back text.", "warning");
+            return;
+        }
+
         if (fcIdInput) {
             // EDIT
             const existing = state.flashcards.find(c => c.id === fcIdInput);
             if (existing) {
                 existing.category = categoryVal;
+                existing.deck = categoryVal;
                 existing.front = frontVal;
                 existing.back = backVal;
-                showToast("Flashcard Updated", "Flashcard updated successfully.", "success");
+                showToast("Flashcard Updated", `Card updated in deck "${categoryVal}".`, "success");
             }
         } else {
             // CREATE
             const newFC = {
                 id: "fc_" + Date.now(),
                 category: categoryVal,
+                deck: categoryVal,
                 front: frontVal,
                 back: backVal,
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             };
             state.flashcards.push(newFC);
-            showToast("Flashcard Created", "New flashcard added successfully.", "success");
+            showToast("Flashcard Created", `New card added to deck "${categoryVal}".`, "success");
         }
 
         saveStateToStorage();
@@ -25715,7 +26062,7 @@ window.editFlashcardAdmin = function(fcId) {
     const card = state.flashcards.find(c => c.id === fcId);
     if (card) {
         document.getElementById("edit-flashcard-id").value = card.id;
-        document.getElementById("admin-fc-category").value = card.category;
+        document.getElementById("admin-fc-category").value = card.deck || card.category || "";
         document.getElementById("admin-fc-front").value = card.front;
         document.getElementById("admin-fc-back").value = card.back;
 
@@ -25733,7 +26080,7 @@ window.deleteFlashcardAdmin = function(fcId) {
     if (confirm("Are you sure you want to delete this flashcard?")) {
         state.flashcards = state.flashcards.filter(c => c.id !== fcId);
         saveStateToStorage();
-        showToast("Flashcard Deleted", "Flashcard was deleted from the database.", "warning");
+        showToast("Flashcard Deleted", "Flashcard was deleted successfully.", "warning");
         renderAdminFlashcardsTab();
         
         // Refresh flashcards view if open
@@ -26114,82 +26461,163 @@ function loadUserSpecificProgress(email) {
 
     // Load or initialize flashcards (course isolated seed)
     if (Array.isArray(user.flashcards) && user.flashcards.length > 0) {
-        state.flashcards = user.flashcards;
+        state.flashcards = user.flashcards.map(c => normalizeSm2Card(c));
     } else {
         const isDerma = (state.activeGroup || "").toLowerCase() === "dermatology";
-        state.flashcards = isDerma ? [
+        const seedCards = isDerma ? [
             {
                 id: "fc_derma_1",
+                deck: "Papulosquamous Disorders",
                 category: "Papulosquamous Disorders",
                 front: "What is the Auspitz sign in Psoriasis?",
                 back: "Pinpoint bleeding after the removal of psoriatic scales due to thinned suprapapillary plates over dilated capillaries.",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_derma_2",
+                deck: "Infectious Dermatology",
                 category: "Infectious Dermatology",
                 front: "What is the pathognomonic clinical feature of Scabies?",
                 back: "Intensely pruritic, serpiginous burrows in web spaces of fingers, wrists, and genitalia, worse at night.",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_derma_3",
+                deck: "Autoimmune Bullous",
                 category: "Autoimmune Bullous",
                 front: "How do Pemphigus Vulgaris and Bullous Pemphigoid differ regarding Nikolsky's sign?",
                 back: "Pemphigus Vulgaris is Nikolsky-positive (intraepidermal blister); Bullous Pemphigoid is Nikolsky-negative (subepidermal blister).",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_derma_4",
+                deck: "Dermatological Oncology",
                 category: "Dermatological Oncology",
                 front: "What are the ABCDE criteria for Melanoma evaluation?",
                 back: "Asymmetry, Border irregularity, Color variegation, Diameter (>6mm), Evolution/Enlargement over time.",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_derma_5",
+                deck: "Drug Eruptions",
                 category: "Drug Eruptions",
                 front: "What distinguishes Stevens-Johnson Syndrome (SJS) from Toxic Epidermal Necrolysis (TEN)?",
                 back: "Body surface area (BSA) epidermal detachment: SJS < 10%, SJS/TEN overlap 10-30%, TEN > 30%.",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             }
         ] : [
             {
                 id: "fc_1",
+                deck: "Virology",
                 category: "Virology",
                 front: "What is the primary mode of transmission of Rift Valley Fever virus to humans?",
                 back: "Direct contact with blood/body fluids of infected animals (e.g. during slaughtering or veterinary procedures), or mosquito bites.",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_2",
+                deck: "Bacteriology",
                 category: "Bacteriology",
                 front: "What is the recommended antibiotic combination for treating Brucellosis?",
                 back: "Doxycycline + Rifampicin (or Streptomycin/Gentamicin).",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_3",
+                deck: "Meningitis",
                 category: "Meningitis",
                 front: "What CSF profile findings suggest Tuberculous Meningitis?",
                 back: "Cloudy appearance, elevated opening pressure, raised protein count, extremely low glucose level, and lymphocyte predominance (e.g. 70-98% lymphocytes).",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_4",
+                deck: "Pharmacology",
                 category: "Pharmacology",
                 front: "What is the drug of choice for treating invasive Aspergillosis?",
                 back: "Voriconazole.",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             },
             {
                 id: "fc_5",
+                deck: "Infection Control",
                 category: "Infection Control",
                 front: "What type of hand hygiene is required for contact with Clostridium difficile spores?",
                 back: "Washing hands with soap and water (alcohol-based hand rubs are ineffective against C. difficile spores).",
-                status: "review"
+                status: "review",
+                state: "new",
+                repetitions: 0,
+                interval: 0,
+                easeFactor: 2.5,
+                nextReviewDate: 0,
+                lastReviewDate: null,
+                isOfficial: true
             }
         ];
+        state.flashcards = seedCards.map(c => normalizeSm2Card(c));
     }
 
     // Load or initialize report task progress

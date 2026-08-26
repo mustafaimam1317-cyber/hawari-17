@@ -21136,17 +21136,36 @@ function switchCourseTrack() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    // Check if group track was previously selected
-    const savedGroup = localStorage.getItem("hawari_active_group");
-    if (savedGroup) {
-        selectCourseTrack(savedGroup);
-    } else {
-        // No active group, show course selector page
+    // 1. Direct Deep Linking via URL hash (#infection, #dermatology, #videos) or path (/infection, /dermatology, /videos)
+    const rawHash = (window.location.hash || "").toLowerCase().replace(/^#\/?/, "");
+    const rawPath = (window.location.pathname || "").toLowerCase().replace(/^\//, "");
+
+    let directTargetGroup = null;
+    if (rawHash === "infection" || rawHash.startsWith("infection/") || rawPath === "infection") {
+        directTargetGroup = "infection";
+    } else if (rawHash === "dermatology" || rawHash.startsWith("dermatology/") || rawPath === "dermatology" || rawHash === "derma") {
+        directTargetGroup = "dermatology";
+    }
+
+    if (directTargetGroup) {
+        selectCourseTrack(directTargetGroup);
+    } else if (rawHash === "videos" || rawHash.startsWith("video-portal") || rawPath === "videos") {
+        // Will be routed by initRouter
         const selectorPage = document.getElementById("course-selector-page");
-        if (selectorPage) selectorPage.classList.remove("hidden");
-        document.getElementById("landing-page").classList.add("hidden");
-        document.getElementById("auth-overlay").classList.add("hidden");
-        document.getElementById("app-layout").classList.add("hidden");
+        if (selectorPage) selectorPage.classList.add("hidden");
+    } else {
+        // Check if group track was previously selected
+        const savedGroup = localStorage.getItem("hawari_active_group");
+        if (savedGroup) {
+            selectCourseTrack(savedGroup);
+        } else {
+            // No active group, show course selector page
+            const selectorPage = document.getElementById("course-selector-page");
+            if (selectorPage) selectorPage.classList.remove("hidden");
+            document.getElementById("landing-page").classList.add("hidden");
+            document.getElementById("auth-overlay").classList.add("hidden");
+            document.getElementById("app-layout").classList.add("hidden");
+        }
     }
 
     // Bind Course Selection click listeners
@@ -21273,11 +21292,32 @@ function initAppTheme() {
 }
 function initRouter() {
     const handleRoute = () => {
-        let hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";
-        
-        // Intercept video portal hashes
-        if (hash.startsWith("video-portal") || hash.startsWith("video-subscribe")) {
-            handleVideoPortalRouting(hash);
+        let rawHash = (window.location.hash || "").toLowerCase().replace(/^#\/?/, "");
+        let rawPath = (window.location.pathname || "").toLowerCase().replace(/^\//, "");
+
+        // 1. Intercept video portal hashes
+        if (rawHash === "videos" || rawHash.startsWith("video-portal") || rawHash.startsWith("video-subscribe") || rawPath === "videos") {
+            handleVideoPortalRouting(rawHash || "video-portal");
+            return;
+        }
+
+        // 2. Direct Course Track Deep Linking
+        let targetGroup = null;
+        let subView = "";
+        if (rawHash === "infection" || rawHash.startsWith("infection/") || rawPath === "infection") {
+            targetGroup = "infection";
+            subView = rawHash.replace(/^infection\/?/, "");
+        } else if (rawHash === "dermatology" || rawHash.startsWith("dermatology/") || rawPath === "dermatology" || rawHash === "derma") {
+            targetGroup = "dermatology";
+            subView = rawHash.replace(/^(dermatology|derma)\/?/, "");
+        }
+
+        if (targetGroup && state.activeGroup !== targetGroup) {
+            selectCourseTrack(targetGroup).then(() => {
+                if (subView && state.currentUser) {
+                    switchView(subView);
+                }
+            });
             return;
         }
 
@@ -21308,7 +21348,7 @@ function initRouter() {
             return;
         }
         
-        hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";
+        let hash = window.location.hash.replace(/^#\/?/, "") || "dashboard";
         
         // Prevent accessing admin panel if not admin
         if (hash === "admin-panel" && state.currentUser.role !== "admin") {

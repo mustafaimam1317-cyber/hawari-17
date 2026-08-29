@@ -146,7 +146,7 @@
             <div id="auth-email-step" class="auth-step active">
                 <div class="input-group">
                     <label for="auth-email"><i class="fa-regular fa-envelope"></i> Enter Gmail Address</label>
-                    <input type="email" id="auth-email" placeholder="e.g. name@gmail.com" maxlength="80" required>
+                    <input type="email" id="auth-email" name="email" autocomplete="username" placeholder="e.g. name@gmail.com" maxlength="80" required>
                     <span class="input-help">Only Gmail accounts are accepted.</span>
                 </div>
                 <button id="btn-send-code" class="btn btn-primary btn-block" style="margin-bottom: 12px;">
@@ -160,6 +160,7 @@
             <!-- Password Login Step -->
             <div id="auth-password-step" class="auth-step">
                 <form id="auth-login-form" onsubmit="event.preventDefault();">
+                    <input type="email" name="username" autocomplete="username" style="display:none;" tabindex="-1" aria-hidden="true">
                     <div class="code-header" style="margin-bottom: 15px;">
                         <h3>Sign In</h3>
                         <p>Enter the password for <strong id="login-email-display"></strong></p>
@@ -1511,11 +1512,11 @@
                             <form id="admin-direct-user-form">
                                 <div class="input-group">
                                     <label for="admin-direct-email"><i class="fa-regular fa-envelope"></i> Gmail Address</label>
-                                    <input type="email" id="admin-direct-email" placeholder="e.g. mustafa@gmail.com" required>
+                                    <input type="email" id="admin-direct-email" name="email" autocomplete="username" placeholder="e.g. mustafa@gmail.com" required>
                                 </div>
                                 <div class="input-group" style="margin-top: 10px;">
                                     <label for="admin-direct-password"><i class="fa-solid fa-lock"></i> Password</label>
-                                    <input type="password" id="admin-direct-password" placeholder="••••••••" required>
+                                    <input type="password" id="admin-direct-password" name="password" autocomplete="new-password" placeholder="••••••••" required>
                                 </div>
                                 <div class="input-group" style="margin-top: 10px;">
                                     <label for="admin-direct-role">Role</label>
@@ -1922,22 +1923,22 @@
             <form id="vp-subscribe-form" onsubmit="event.preventDefault();">
                 <div class="input-group" style="margin-bottom: 16px;">
                     <label for="vp-sub-name" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Full Name</label>
-                    <input type="text" id="vp-sub-name" placeholder="John Doe" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    <input type="text" id="vp-sub-name" name="name" autocomplete="name" placeholder="John Doe" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                 </div>
 
                 <div class="input-group" style="margin-bottom: 16px;">
                     <label for="vp-sub-email" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Email Address (Gmail)</label>
-                    <input type="email" id="vp-sub-email" placeholder="example@gmail.com" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    <input type="email" id="vp-sub-email" name="email" autocomplete="email" placeholder="example@gmail.com" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                 </div>
 
                 <div class="input-group" style="margin-bottom: 16px;">
                     <label for="vp-sub-phone" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Phone Number (WhatsApp)</label>
-                    <input type="tel" id="vp-sub-phone" placeholder="e.g. 0123456789" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    <input type="tel" id="vp-sub-phone" name="tel" autocomplete="tel" placeholder="e.g. 0123456789" required style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                 </div>
 
                 <div class="input-group" style="margin-bottom: 16px;">
                     <label for="vp-sub-code" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Student Code / ID (Optional)</label>
-                    <input type="text" id="vp-sub-code" placeholder="e.g. STU123" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                    <input type="text" id="vp-sub-code" name="code" autocomplete="off" placeholder="e.g. STU123" style="width: 100%; padding: 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                 </div>
 
                 <div class="input-group" style="margin-bottom: 20px;">
@@ -1971,19 +1972,19 @@
                 <form id="vp-admin-course-form" onsubmit="event.preventDefault();" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; align-items: flex-end;">
                     <div class="input-group">
                         <label for="vp-course-name" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Course Title</label>
-                        <input type="text" id="vp-course-name" required placeholder="e.g. Infection Control Course" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                        <input type="text" id="vp-course-name" name="course-name" autocomplete="off" required placeholder="e.g. Infection Control Course" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
                     <div class="input-group">
                         <label for="vp-course-start-date" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Start Date</label>
-                        <input type="date" id="vp-course-start-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                        <input type="date" id="vp-course-start-date" name="start-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
                     <div class="input-group">
                         <label for="vp-course-end-date" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">End Date (Expiration)</label>
-                        <input type="date" id="vp-course-end-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                        <input type="date" id="vp-course-end-date" name="end-date" required style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
                     <div class="input-group">
                         <label for="vp-course-instructor" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Instructor Email</label>
-                        <input type="email" id="vp-course-instructor" required placeholder="instructor@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                        <input type="email" id="vp-course-instructor" name="instructor-email" autocomplete="email" required placeholder="instructor@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                     </div>
                     <div class="input-group">
                         <label for="vp-course-password" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block;">Instructor Password</label>
@@ -2236,7 +2237,7 @@
                             <form id="vp-invite-assistant-form" onsubmit="event.preventDefault();" style="display: flex; flex-direction: column; gap: 12px;">
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Email</label>
-                                    <input type="email" id="vp-assistant-email" required placeholder="assistant@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="email" id="vp-assistant-email" name="assistant-email" autocomplete="email" required placeholder="assistant@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Password</label>
@@ -2261,19 +2262,19 @@
                             <form id="vp-manual-student-form" style="display: flex; flex-direction: column; gap: 12px;">
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Name</label>
-                                    <input type="text" id="vp-manual-name" required placeholder="Student Full Name" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="text" id="vp-manual-name" name="name" autocomplete="name" required placeholder="Student Full Name" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Email</label>
-                                    <input type="email" id="vp-manual-email" required placeholder="student@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="email" id="vp-manual-email" name="email" autocomplete="email" required placeholder="student@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Phone Number</label>
-                                    <input type="tel" id="vp-manual-phone" required placeholder="01012345678" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="tel" id="vp-manual-phone" name="tel" autocomplete="tel" required placeholder="01012345678" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Student Code</label>
-                                    <input type="text" id="vp-manual-code" required placeholder="e.g. STU444" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                    <input type="text" id="vp-manual-code" name="code" autocomplete="off" required placeholder="e.g. STU444" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                 </div>
                                 <div class="input-group">
                                     <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Initial Password</label>
@@ -2326,11 +2327,11 @@
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                                     <div class="input-group">
                                         <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Instructor Email</label>
-                                        <input type="email" id="vp-edit-inst-email" required placeholder="instructor@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                        <input type="email" id="vp-edit-inst-email" name="inst-email" autocomplete="email" required placeholder="instructor@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
                                     <div class="input-group">
                                         <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Instructor Password</label>
-                                        <input type="password" id="vp-edit-inst-pass" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                        <input type="password" id="vp-edit-inst-pass" name="inst-pass" autocomplete="new-password" required placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
                                 </div>
 
@@ -2339,11 +2340,11 @@
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                                     <div class="input-group">
                                         <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Email (Optional)</label>
-                                        <input type="email" id="vp-edit-asst-email" placeholder="assistant@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                        <input type="email" id="vp-edit-asst-email" name="asst-email" autocomplete="email" placeholder="assistant@gmail.com" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
                                     <div class="input-group">
                                         <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; display: block;">Assistant Password (Optional)</label>
-                                        <input type="password" id="vp-edit-asst-pass" placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
+                                        <input type="password" id="vp-edit-asst-pass" name="asst-pass" autocomplete="new-password" placeholder="••••••••" style="width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); outline: none;">
                                     </div>
                                 </div>
                                 <button type="submit" class="btn btn-success" style="margin-top: 10px; padding: 11px; border-radius: 8px;">

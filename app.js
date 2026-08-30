@@ -3078,14 +3078,31 @@ function initAuthFlow() {
     if (btnLogout) {
         btnLogout.addEventListener("click", () => {
             showToast("Logged Out", "You have successfully logged out.", "info");
-            switchCourseTrack();
             
-            // Reset fields
-            emailInput.value = "";
-            passwordLoginInput.value = "";
-            passwordRegInput.value = "";
-            passwordRegConfirmInput.value = "";
+            // Save state before clearing user session
+            saveStateToStorage();
+
+            const currentTrack = state.activeGroup || "infection";
+
+            // Clear user session for the current group while keeping the course track isolated
+            const activeGroupKey = state.activeGroup ? getGroupKey(STORAGE_KEYS.CURRENT_USER) : null;
+            state.currentUser = null;
+            if (activeGroupKey) {
+                encryptLocal(activeGroupKey, null);
+            }
+            localStorage.removeItem(`hawari_jwt_${currentTrack}`);
+            localStorage.removeItem("hawari_jwt_token");
+
+            // Reset auth input fields
+            if (emailInput) emailInput.value = "";
+            if (passwordLoginInput) passwordLoginInput.value = "";
+            if (passwordRegInput) passwordRegInput.value = "";
+            if (passwordRegConfirmInput) passwordRegConfirmInput.value = "";
             showAuthStep("auth-email-step");
+
+            // Return to this specific course's landing page (e.g. Welcome to Hawari Infection)
+            showLandingPage();
+            window.location.hash = `#${currentTrack}`;
         });
     }
 }
@@ -3094,17 +3111,22 @@ function showAuthStep(stepId) {
     document.querySelectorAll(".auth-step").forEach(step => {
         step.classList.remove("active");
     });
-    document.getElementById(stepId).classList.add("active");
+    const targetStep = document.getElementById(stepId);
+    if (targetStep) targetStep.classList.add("active");
 }
 
 function showLandingPage() {
-    if (!state.activeGroup) {
-        switchCourseTrack();
-        return;
-    }
-    document.getElementById("app-layout").classList.add("hidden");
-    document.getElementById("auth-overlay").classList.add("hidden");
-    document.getElementById("landing-page").classList.remove("hidden");
+    const selectorPage = document.getElementById("course-selector-page");
+    if (selectorPage) selectorPage.classList.add("hidden");
+
+    const appLayout = document.getElementById("app-layout");
+    if (appLayout) appLayout.classList.add("hidden");
+
+    const authOverlay = document.getElementById("auth-overlay");
+    if (authOverlay) authOverlay.classList.add("hidden");
+
+    const landingPage = document.getElementById("landing-page");
+    if (landingPage) landingPage.classList.remove("hidden");
 }
 
 function showAuthOverlay() {

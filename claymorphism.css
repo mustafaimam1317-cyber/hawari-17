@@ -722,3 +722,18 @@ body.theme-clay .admin-tab-btn.active {
     color: #ffffff;
     box-shadow: 0 6px 18px rgba(155, 113, 178, 0.28);
 }
+
+/* ---------------- 12. GPU ACCELERATION & RENDERING OPTIMIZATIONS ---------------- */
+.clay-card, .clay-btn, .hawari-book-card, .test-card, .stat-card {
+    will-change: transform;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    contain: layout style;
+}
+
+html {
+    scroll-behavior: smooth;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}

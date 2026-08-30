@@ -28,7 +28,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
     _bookUploadInProgress = true;
 
     const hasSession = !!(state.currentUser && state.currentUser.email);
-    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
+    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor");
 
     if (!hasSession || !isAdmin) {
         console.error("[BookUpload] FAILED: Admin session invalid or missing");
@@ -134,7 +134,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
 
         // 2. Persist to hawari_users admin row for 100% reliable cross-device sync
         try {
-            const adminEmail = (state.currentUser.email || "mustafaimam1317@gmail.com").toLowerCase();
+            const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").toLowerCase();
             const currentBooks = (state.books || []).filter(b => b.id !== bookId);
             currentBooks.unshift(dbPayload);
 
@@ -650,13 +650,9 @@ function getGroupQuestionsSeed(group = state.activeGroup) {
     return SEED_QUESTIONS;
 }
 
-// Immutable Whitelist of Admin Emails
-const ALLOWED_ADMIN_EMAILS = ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"];
-
 function isUserAdmin(user = state.currentUser) {
-    if (!user || !user.email) return false;
-    const cleanEmail = user.email.trim().toLowerCase();
-    return ALLOWED_ADMIN_EMAILS.includes(cleanEmail) && user.role === "admin";
+    if (!user) return false;
+    return user.role === "admin" || user.role === "instructor" || user.is_admin === true;
 }
 
 let debouncedSyncTimer = null;
@@ -675,11 +671,6 @@ function saveStateToStorage(skipCloudSync = false) {
     if (!state.activeGroup) return;
 
     if (state.currentUser) {
-        // Enforce anti-elevation: if email is not whitelisted, force role to student
-        if (!ALLOWED_ADMIN_EMAILS.includes(state.currentUser.email.trim().toLowerCase())) {
-            state.currentUser.role = "student";
-        }
-        
         let userRecord = state.users.find(u => u.email.toLowerCase() === state.currentUser.email.toLowerCase());
         if (!userRecord) {
             userRecord = {
@@ -718,10 +709,6 @@ function saveStateToStorage(skipCloudSync = false) {
             }
             userRecord.lastUpdated = Date.now();
             state.currentUser.lastUpdated = userRecord.lastUpdated;
-        }
-
-        if (!ALLOWED_ADMIN_EMAILS.includes(userRecord.email.trim().toLowerCase())) {
-            userRecord.role = "student";
         }
     }
 
@@ -824,20 +811,10 @@ function loadStateFromStorage() {
         state.users = [];
     }
 
-    // Ensure whitelisted admins are present and marked with admin role
-    ALLOWED_ADMIN_EMAILS.forEach(adminEmail => {
-        let adminUser = state.users.find(u => u.email === adminEmail);
-        if (adminUser) {
-            adminUser.status = "approved";
-            adminUser.role = "admin";
-        } else {
-            state.users.push({
-                email: adminEmail,
-                password: "",
-                status: "approved",
-                role: "admin",
-                dateRegistered: new Date().toLocaleDateString()
-            });
+    // Ensure existing admins in stored users retain admin status
+    state.users.forEach(u => {
+        if (u.role === "admin") {
+            u.status = "approved";
         }
     });
 
@@ -986,35 +963,39 @@ async function selectCourseTrack(groupName) {
     const selectorPage = document.getElementById("course-selector-page");
     if (selectorPage) selectorPage.classList.add("hidden");
 
-    // Fetch global questions from cloud before loading
-    await fetchGlobalQuestions(groupName);
-
-    // Load state from the dynamic storage keys of this track
+    // 1. Instant local state initialization (0ms latency)
     loadStateFromStorage();
 
-    // Fetch report tasks, quizzes, quiz results, announcements, and book library in parallel to avoid UI lag
-    await Promise.all([
-        fetchReportTasksFromCloud(groupName),
-        fetchCourseQuizzes(groupName),
-        fetchQuizResults(groupName),
-        fetchAnnouncement(groupName),
-        fetchBookLibraryData(groupName)
-    ]);
-
-    // Seed default admin/student to cloud if they are missing (async non-blocking)
-    seedDefaultUsersToCloud(groupName);
-
-    // Check auth status
+    // 2. Check auth status & render immediately
     if (state.currentUser) {
-        // Await user-specific cloud progress sync before entering workspace
-        try {
-            await syncUsersWithCloud();
-        } catch (e) {
-            console.warn("[Sync] Initial user cloud sync deferred:", e);
-        }
         enterWorkspace();
+        // Background non-blocking sync of cloud data to avoid UI freeze
+        setTimeout(async () => {
+            try {
+                await Promise.allSettled([
+                    fetchGlobalQuestions(groupName),
+                    fetchReportTasksFromCloud(groupName),
+                    fetchCourseQuizzes(groupName),
+                    fetchQuizResults(groupName),
+                    fetchAnnouncement(groupName),
+                    fetchBookLibraryData(groupName),
+                    syncUsersWithCloud()
+                ]);
+            } catch (e) {
+                console.warn("[StagedLoad] Background sync:", e);
+            }
+        }, 10);
     } else {
         showLandingPage();
+        // Background fetch of public metadata
+        setTimeout(async () => {
+            try {
+                await Promise.allSettled([
+                    fetchAnnouncement(groupName),
+                    fetchBookLibraryData(groupName)
+                ]);
+            } catch(e){}
+        }, 10);
     }
 }
 
@@ -1786,25 +1767,55 @@ async function revalidateQuestionBankVersion(group, cachedVersion) {
     }
 }
 
-// Full download from Supabase (Only when cache is missing or version mismatch)
+// Full download from Supabase with zero-leakage question sanitization for students
 async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
     const metrics = window.HawariCacheMetricsByGroup[group] || window.HawariCacheMetricsByGroup.infection;
     metrics.fullCloudDownloads++;
     console.log(`[QuestionCache] FULL DOWNLOAD executing for course "${group}"...`);
     try {
-        const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
-        if (records && records.length > 0 && records[0].questions) {
-            const questions = records[0].questions;
-            const version = records[0].last_updated || targetVersion || Date.now();
-            
+        let loadedQuestions = [];
+        let version = targetVersion || Date.now();
+
+        // 1. Try secure sanitized RPC function
+        try {
+            const rpcRes = await supabaseRequest(`rpc/get_sanitized_questions`, {
+                method: "POST",
+                body: JSON.stringify({ p_group: group })
+            });
+            if (rpcRes && Array.isArray(rpcRes) && rpcRes.length > 0) {
+                loadedQuestions = rpcRes;
+            }
+        } catch (rpcErr) {
+            console.warn("[QuestionCache] Sanitized RPC fallback:", rpcErr.message);
+        }
+
+        // 2. Fallback to table query if RPC not yet invoked, with client-side sanitization
+        if (loadedQuestions.length === 0) {
+            const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
+            if (records && records.length > 0 && Array.isArray(records[0].questions)) {
+                version = records[0].last_updated || version;
+                const isAdmin = state.currentUser && state.currentUser.role === "admin";
+                loadedQuestions = records[0].questions.map(q => ({
+                    id: q.id,
+                    source: q.source,
+                    topic: q.topic,
+                    text: q.text,
+                    options: q.options,
+                    // Only include answers/explanations if active user is verified admin editing questions
+                    ...(isAdmin ? { correctOption: q.correctOption, explanation: q.explanation } : {})
+                }));
+            }
+        }
+
+        if (loadedQuestions.length > 0) {
             // 1. Update In-Memory
             window.HawariQuestionCacheMemory[group] = {
                 groupName: group,
                 version: version,
                 lastCheckedAt: Date.now(),
                 generatedAt: Date.now(),
-                questionCount: questions.length,
-                questions: questions
+                questionCount: loadedQuestions.length,
+                questions: loadedQuestions
             };
             
             // 2. Update IndexedDB
@@ -1812,10 +1823,10 @@ async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
             
             // 3. Update globalQuestionsCache if this is the active course
             if (state && state.activeGroup === group) {
-                globalQuestionsCache = questions;
+                globalQuestionsCache = loadedQuestions;
             }
             metrics.cacheUpdates++;
-            console.log(`[QuestionCache] CACHE UPDATED for ${group}: ${questions.length} questions, version ${version}`);
+            console.log(`[QuestionCache] CACHE UPDATED for ${group}: ${loadedQuestions.length} questions, version ${version}`);
             
             // 4. Notify other tabs via BroadcastChannel & localStorage
             if (questionBankSyncChannel) {
@@ -1829,22 +1840,13 @@ async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
                 localStorage.setItem("hawari_qb_sync_" + group, String(version));
             } catch (e) {}
 
-            return questions;
+            return loadedQuestions;
         } else {
-            const seed = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-            if (state && state.activeGroup === group) {
-                globalQuestionsCache = seed;
-            }
-            await saveGlobalQuestionsToCloud();
-            return seed;
+            return [];
         }
     } catch (e) {
         console.error(`[QuestionCache] Full cloud download failed for ${group}:`, e);
-        const fallback = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-        if (state && state.activeGroup === group) {
-            globalQuestionsCache = fallback;
-        }
-        return fallback;
+        return [];
     }
 }
 
@@ -2986,15 +2988,14 @@ function initAuthFlow() {
             }
 
             // Create pending account awaiting admin approval
-            const isTargetAdmin = ALLOWED_ADMIN_EMAILS.includes(currentAuthenticatingEmail.trim().toLowerCase());
             const newUser = {
                 email: currentAuthenticatingEmail,
                 password: sha256Sync(password),
                 displayName: name,
-                status: isTargetAdmin ? "approved" : "pending",
-                role: isTargetAdmin ? "admin" : "student",
+                status: "pending",
+                role: "student",
                 dateRegistered: new Date().toLocaleDateString(),
-                questions: JSON.parse(JSON.stringify(getGroupQuestionsSeed())),
+                questions: [],
                 tests: [],
                 notebookNotes: [],
                 flashcards: [],
@@ -3006,17 +3007,9 @@ function initAuthFlow() {
             // Sync registry with cloud so admin can see and approve the user immediately
             syncUsersWithCloud();
 
-            if (isTargetAdmin) {
-                showToast("Admin Account Ready", "تم تفعيل حساب المشرف! يمكنك الآن تسجيل الدخول مباشرة.", "success");
-                showAuthStep("auth-password-step");
-                document.getElementById("login-email-display").innerText = currentAuthenticatingEmail;
-                passwordLoginInput.value = "";
-                passwordLoginInput.focus();
-            } else {
-                showToast("طلب التسجيل قيد الانتظار", "تم إرسال طلب تسجيلك بنجاح وهو الآن في انتظار موافقة المشرف.", "warning");
-                showAuthStep("auth-pending-step");
-                document.getElementById("pending-email-display").innerText = currentAuthenticatingEmail;
-            }
+            showToast("طلب التسجيل قيد الانتظار", "تم إرسال طلب تسجيلك بنجاح وهو الآن في انتظار موافقة المشرف.", "info");
+            showAuthStep("auth-pending-step");
+            document.getElementById("pending-email-display").innerText = currentAuthenticatingEmail;
         });
     }
 
@@ -5324,12 +5317,9 @@ function initSidebarCollapse() {
 }
 
 function initSecurityProtections() {
-    // Helper to check if current logged in user is the developer
+    // Helper to check if current logged in user is admin/developer
     const isDev = () => {
-        return state.currentUser && (
-            state.currentUser.email === "mustafaimam1317@gmail.com" || 
-            state.currentUser.email === "mustafa172004@gmail.com"
-        );
+        return Boolean(state.currentUser && state.currentUser.role === "admin");
     };
 
     // 1. Prevent iframe embedding (Clickjacking protection)
@@ -8298,12 +8288,11 @@ window.initVideoPortal = function() {
             return;
         }
 
-        // A. Admin Check
-        const devEmails = ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"];
-        if (devEmails.includes(email)) {
-            let adminUser = state.users.find(u => u.email === email);
+        // A. Admin / Instructor Check
+        let existingUser = state.users.find(u => u.email === email);
+        if (existingUser && (existingUser.role === "admin" || existingUser.role === "instructor")) {
             let authed = false;
-            if (adminUser && adminUser.password && sha256Sync(password) === adminUser.password) {
+            if (existingUser.password && sha256Sync(password) === existingUser.password) {
                 authed = true;
             } else {
                 const session = await loginToSupabaseAuth(email, password);
@@ -9846,7 +9835,6 @@ let bookState = {
     historyStack: {}, // { [pageNumber]: { undo: [], redo: [] } }
     bookmarks: [], // array of page numbers e.g. [1, 5, 12]
     extraPages: {}, // { [pageNumber]: 'blank' | 'lined' }
-    authorizedEmails: ["mustafaimam1317@gmail.com", "mustafa172004@gmail.com"],
     activeBookFile: null, // Dynamic active book object. NO DEFAULT 120-page dummy fallback!
     userProgressMap: {}
 };
@@ -9910,7 +9898,7 @@ function getBookAccessLevel(user) {
     if (!user || !user.email) return { isFullGrant: false, maxPage: 10 };
     
     const cleanEmail = user.email.trim().toLowerCase();
-    const isAdmin = user.role === "admin" || cleanEmail === "mustafaimam1317@gmail.com" || cleanEmail === "mustafa172004@gmail.com";
+    const isAdmin = user.role === "admin" || user.role === "instructor" || user.is_admin === true;
     
     let isGranted = false;
     if (Array.isArray(state.grantedBookUsers)) {
@@ -10481,7 +10469,7 @@ function _renderBookCards(booksList, gridEl, emptyEl, filterCategory, searchQuer
     gridEl.classList.remove("hidden");
     if (emptyEl) emptyEl.classList.add("hidden");
 
-    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
+    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
     const email = state.currentUser ? (state.currentUser.email || "").trim().toLowerCase() : "";
 
     const getLocalProgress = (bookId) => {
@@ -10666,7 +10654,7 @@ window.closeBookViewerAndReturnToLibrary = function() {
 };
 
 window.deleteAdminBook = async function(bookId, bookTitle) {
-    const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.email === "mustafaimam1317@gmail.com" || state.currentUser.email === "mustafa172004@gmail.com");
+    const isAdmin = isUserAdmin(state.currentUser);
     if (!isAdmin) {
         showToast("غير مصرح", "حذف الكتب من المكتبة متاح فقط للمشرفين والمسؤولين.", "danger");
         return;
@@ -10720,7 +10708,7 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
 
         // 3. Sync deletion with hawari_users admin row for 100% cross-device consistency
         try {
-            const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "mustafaimam1317@gmail.com").toLowerCase();
+            const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").toLowerCase();
             await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
                 method: "PATCH",
                 headers: authHeaders,

@@ -1,4 +1,4 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 
 console.log('=== RUNNING COMPREHENSIVE PLATFORM INTEGRITY AUDIT ===\n');
 
@@ -25,7 +25,7 @@ assert('app.js is non-empty and well-formed', appCode.length > 500000);
 
 // 2. Auth & Login Preservation
 assert('Custom SHA-256 password hashing preserved', appCode.includes('hashPasswordSHA256') || appCode.includes('SHA-256') || appCode.includes('crypto.subtle'));
-assert('Admin whitelist allowed emails preserved', appCode.includes('ALLOWED_ADMIN_EMAILS'));
+assert('Role-based admin access control preserved', appCode.includes('isUserAdmin') && appCode.includes('role === "admin"'));
 assert('Registration and login handlers intact', appCode.includes('form-login') || appCode.includes('loginUser') || appCode.includes('loginToSupabaseAuth'));
 
 // 3. Course Isolation & Track Switching

@@ -111,16 +111,16 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
 
         const anonKey = SUPABASE_CONFIG.anonKey;
 
+        const uploadAuthHeaders = getSupabaseAuthHeaders(jwtToken, {
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        });
+
         // 1. Insert to hawari_book_files table
         try {
             const insertRes = await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
                 method: "POST",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${anonKey}`,
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation"
-                },
+                headers: uploadAuthHeaders,
                 body: JSON.stringify(dbPayload)
             });
             if (insertRes.ok) {
@@ -141,11 +141,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             // Fetch or upsert admin row in hawari_users
             await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
                 method: "PATCH",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${anonKey}`,
-                    "Content-Type": "application/json"
-                },
+                headers: getSupabaseAuthHeaders(jwtToken, { "Content-Type": "application/json" }),
                 body: JSON.stringify({
                     report_task_progress: {
                         ...(state.currentUser.report_task_progress || {}),
@@ -10660,27 +10656,30 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
 
     const group = (state.activeGroup || "infection").toLowerCase();
     const cleanUrl = SUPABASE_CONFIG.url;
-    const anonKey = SUPABASE_CONFIG.anonKey;
+    const jwtToken = await getValidSupabaseAccessToken();
+    const authHeaders = getSupabaseAuthHeaders(jwtToken, { "Content-Type": "application/json" });
 
     try {
         const book = (state.books || []).find(b => b.id === bookId);
-        if (book) {
+        
+        // 1. Delete from hawari_book_files table with authenticated admin headers
+        try {
             await fetch(`${cleanUrl}/rest/v1/hawari_book_files?id=eq.${encodeURIComponent(bookId)}`, {
                 method: "DELETE",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${anonKey}`
-                }
+                headers: authHeaders
             });
+        } catch (dbErr) {
+            console.warn("[BookDelete] Table delete warning:", dbErr.message);
+        }
+
+        // 2. Delete binary from Storage bucket
+        if (book && book.storage_url) {
             try {
                 const cleanPath = (book.storage_url || "").replace(/.*\/hawari_books\//, "");
                 if (cleanPath) {
                     await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`, {
                         method: "DELETE",
-                        headers: {
-                            "apikey": anonKey,
-                            "Authorization": `Bearer ${anonKey}`
-                        }
+                        headers: authHeaders
                     });
                 }
             } catch (storageErr) {
@@ -10697,16 +10696,12 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
         state.books = (state.books || []).filter(b => b.id !== bookId);
         localStorage.setItem("hawari_books_" + group, JSON.stringify(state.books));
 
-        // Sync deletion with hawari_users admin row for immediate cross-device sync
+        // 3. Sync deletion with hawari_users admin row for 100% cross-device consistency
         try {
             const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "mustafaimam1317@gmail.com").toLowerCase();
             await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
                 method: "PATCH",
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${anonKey}`,
-                    "Content-Type": "application/json"
-                },
+                headers: authHeaders,
                 body: JSON.stringify({
                     report_task_progress: {
                         ...(state.currentUser?.report_task_progress || {}),

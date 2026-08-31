@@ -11094,6 +11094,7 @@ function bindBookToolbarEvents() {
         btnZoomIn.dataset.bound = "true";
         btnZoomIn.onclick = () => {
             if (bookState.zoom < 2.5) {
+                bookState.userCustomZoom = true;
                 bookState.zoom += 0.15;
                 bookState.fitMode = "normal";
                 redrawBookCanvas();
@@ -11105,6 +11106,7 @@ function bindBookToolbarEvents() {
         btnZoomOut.dataset.bound = "true";
         btnZoomOut.onclick = () => {
             if (bookState.zoom > 0.5) {
+                bookState.userCustomZoom = true;
                 bookState.zoom -= 0.15;
                 bookState.fitMode = "normal";
                 redrawBookCanvas();
@@ -11117,6 +11119,7 @@ function bindBookToolbarEvents() {
         btnFitWidth.onclick = () => {
             const viewport = document.getElementById("book-canvas-viewport");
             if (viewport) {
+                bookState.userCustomZoom = true;
                 const viewportWidth = viewport.clientWidth - 40;
                 bookState.zoom = Math.max(0.6, viewportWidth / 720);
                 bookState.fitMode = "fit-width";
@@ -11128,6 +11131,7 @@ function bindBookToolbarEvents() {
     if (btnFitPage && !btnFitPage.dataset.bound) {
         btnFitPage.dataset.bound = "true";
         btnFitPage.onclick = () => {
+            bookState.userCustomZoom = false;
             bookState.zoom = 1.0;
             bookState.fitMode = "fit-page";
             redrawBookCanvas();
@@ -11583,17 +11587,14 @@ function initBookKeyboardShortcuts() {
 
         const key = e.key ? e.key.toLowerCase() : "";
 
-        if (key === "v") {
-            const btn = document.getElementById("btn-tool-select");
-            if (btn) btn.click();
-        } else if (key === "p") {
+        if (key === "p") {
             const btn = document.getElementById("btn-tool-pen");
             if (btn) btn.click();
         } else if (key === "h") {
             const btn = document.getElementById("btn-tool-highlighter");
             if (btn) btn.click();
-        } else if (key === "t") {
-            const btn = document.getElementById("btn-tool-text");
+        } else if (key === "u") {
+            const btn = document.getElementById("btn-tool-underline");
             if (btn) btn.click();
         } else if (key === "e") {
             const btn = document.getElementById("btn-tool-eraser");
@@ -11601,15 +11602,9 @@ function initBookKeyboardShortcuts() {
         } else if (key === "l") {
             const btn = document.getElementById("btn-tool-laser");
             if (btn) btn.click();
-        } else if (e.ctrlKey && key === "c") {
-            copySelectedAnnotation();
-        } else if (e.ctrlKey && key === "v") {
-            pasteSelectedAnnotation();
-        } else if (e.ctrlKey && key === "d") {
-            e.preventDefault();
-            duplicateSelectedAnnotation();
-        } else if (key === "delete" || key === "backspace") {
-            deleteSelectedAnnotation();
+        } else if (key === "m") {
+            const btn = document.getElementById("btn-tool-pan");
+            if (btn) btn.click();
         }
     });
 }
@@ -11774,28 +11769,20 @@ function initBookCanvasDrawing() {
             clientY = e.changedTouches[0].clientY;
         }
         
-        const zoom = bookState.zoom || 1.0;
         const cssX = (clientX !== undefined ? clientX : 0) - rect.left;
         const cssY = (clientY !== undefined ? clientY : 0) - rect.top;
         
-        const baseX = cssX / zoom;
-        const baseY = cssY / zoom;
+        const ratioX = rect.width > 0 ? Math.max(0, Math.min(1, cssX / rect.width)) : 0;
+        const ratioY = rect.height > 0 ? Math.max(0, Math.min(1, cssY / rect.height)) : 0;
 
-        const maxBaseWidth = rect.width / zoom;
-        const maxBaseHeight = rect.height / zoom;
-        const clampedX = Math.max(0, Math.min(baseX, maxBaseWidth));
-        let clampedY = Math.max(0, Math.min(baseY, maxBaseHeight));
+        const zoom = bookState.zoom || 1.0;
+        const baseWidth = (animCanvas.style.width ? parseFloat(animCanvas.style.width) : (rect.width || 720)) / zoom;
+        const baseHeight = (animCanvas.style.height ? parseFloat(animCanvas.style.height) : (rect.height || 980)) / zoom;
 
-        const ruler = document.getElementById("book-ruler-widget");
-        if (ruler && !ruler.classList.contains("hidden")) {
-            const rRect = ruler.getBoundingClientRect();
-            const rulerTopCanvas = (rRect.top - rect.top) / zoom;
-            if (Math.abs(clampedY - rulerTopCanvas) < 25) {
-                clampedY = rulerTopCanvas;
-            }
-        }
-
-        return { x: clampedX, y: clampedY };
+        return {
+            x: ratioX * baseWidth,
+            y: ratioY * baseHeight
+        };
     };
 
     const startDraw = (e) => {
@@ -11814,27 +11801,6 @@ function initBookCanvasDrawing() {
         startX = coords.x;
         startY = coords.y;
 
-        if (tool === "select") {
-            const page = bookState.currentPage;
-            const annList = bookState.annotations[page] || [];
-            let hitIdx = null;
-
-            for (let i = annList.length - 1; i >= 0; i--) {
-                const a = annList[i];
-                const bbox = getAnnotationBBox(a);
-                if (coords.x >= bbox.x && coords.x <= bbox.x + bbox.width &&
-                    coords.y >= bbox.y && coords.y <= bbox.y + bbox.height) {
-                    hitIdx = i;
-                    break;
-                }
-            }
-
-            bookState.selectedAnnotationIndex = hitIdx;
-            redrawCurrentPageAnnotations();
-            if (hitIdx !== null) isDrawing = true;
-            return;
-        }
-
         if (tool === "laser") {
             laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
             isDrawing = true;
@@ -11845,35 +11811,12 @@ function initBookCanvasDrawing() {
         if (!bookState.annotations[page]) bookState.annotations[page] = [];
         saveHistoryState(page);
 
-        if (tool === "text") {
-            let snappedY = snapYToRuledLine(coords.y, bookState.zoom);
-            const textContent = prompt("Enter text annotation:", "");
-            if (textContent && textContent.trim()) {
-                const textObj = {
-                    type: "text",
-                    text: textContent.trim(),
-                    x: coords.x,
-                    y: snappedY,
-                    color: bookState.activeColor || "#2563eb",
-                    size: 16
-                };
-                bookState.annotations[page].push(textObj);
-                saveBookPageAnnotationToCloud(page);
-                redrawCurrentPageAnnotations();
-            }
-            return;
-        }
-
         if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
-            const pressure = (e.pressure && e.pressure > 0) ? e.pressure : 0.5;
-            const sizeMult = tool === "pen" ? (pressure * 1.4) : 1.0;
-            const baseSize = tool === "highlighter" ? 18 : (tool === "eraser" ? 24 : (bookState.strokeSize || 3));
-            const actualSize = Math.max(1, Math.round(baseSize * sizeMult));
-
+            const currentSize = tool === "highlighter" ? Math.max(12, (bookState.strokeSize || 3) * 5) : (tool === "eraser" ? 24 : (bookState.strokeSize || 3));
             currentStroke = {
                 type: tool,
                 color: bookState.activeColor || "#2563eb",
-                size: actualSize,
+                size: currentSize,
                 points: [{ x: coords.x, y: coords.y }]
             };
         }
@@ -11889,28 +11832,6 @@ function initBookCanvasDrawing() {
         if (e.preventDefault) e.preventDefault();
 
         const coords = getCoords(e);
-
-        if (tool === "select" && bookState.selectedAnnotationIndex !== null) {
-            const page = bookState.currentPage;
-            const target = bookState.annotations[page][bookState.selectedAnnotationIndex];
-            if (target) {
-                const dx = coords.x - lastX;
-                const dy = coords.y - lastY;
-
-                target.x = (target.x || 0) + dx;
-                target.y = (target.y || 0) + dy;
-                if (target.fromX !== undefined) { target.fromX += dx; target.toX += dx; }
-                if (target.fromY !== undefined) { target.fromY += dy; target.toY += dy; }
-                if (target.points && Array.isArray(target.points)) {
-                    target.points.forEach(pt => { pt.x += dx; pt.y += dy; });
-                }
-
-                lastX = coords.x;
-                lastY = coords.y;
-                redrawCurrentPageAnnotations();
-            }
-            return;
-        }
 
         if (tool === "laser") {
             laserDots.push({ x: coords.x, y: coords.y, time: Date.now() });
@@ -11934,7 +11855,7 @@ function initBookCanvasDrawing() {
                 if (tool === "highlighter") {
                     ctx.strokeStyle = currentStroke.color || "#fde047";
                     ctx.globalAlpha = 0.4;
-                    ctx.lineWidth = currentStroke.size || 18;
+                    ctx.lineWidth = currentStroke.size || Math.max(12, (bookState.strokeSize || 3) * 5);
                     ctx.lineCap = "square";
                 } else if (tool === "eraser") {
                     ctx.globalCompositeOperation = "destination-out";
@@ -11943,7 +11864,7 @@ function initBookCanvasDrawing() {
                 } else {
                     ctx.strokeStyle = currentStroke.color || "#2563eb";
                     ctx.globalAlpha = 1.0;
-                    ctx.lineWidth = currentStroke.size || 3;
+                    ctx.lineWidth = currentStroke.size || bookState.strokeSize || 3;
                     ctx.lineCap = "round";
                     ctx.lineJoin = "round";
                 }
@@ -11952,7 +11873,7 @@ function initBookCanvasDrawing() {
             }
             lastX = coords.x;
             lastY = coords.y;
-        } else if (tool === "rectangle" || tool === "circle" || tool === "arrow" || tool === "underline" || tool === "strikethrough") {
+        } else if (tool === "underline") {
             redrawCurrentPageAnnotations();
             const ctx = animCanvas.getContext("2d");
             const dpr = window.devicePixelRatio || 1.5;
@@ -11960,15 +11881,13 @@ function initBookCanvasDrawing() {
             ctx.save();
             ctx.scale(renderScale, renderScale);
             const previewShape = {
-                type: tool,
+                type: "underline",
                 color: bookState.activeColor || "#2563eb",
-                size: 3,
+                size: bookState.strokeSize || 3,
                 x: startX,
                 y: startY,
                 toX: coords.x,
-                toY: coords.y,
-                width: coords.x - startX,
-                height: coords.y - startY
+                toY: startY
             };
             drawSingleStroke(ctx, previewShape);
             ctx.restore();
@@ -11982,27 +11901,25 @@ function initBookCanvasDrawing() {
         isDrawing = false;
 
         const tool = bookState.activeTool || "pen";
-        if (tool === "laser" || tool === "pan" || tool === "select") return;
+        if (tool === "laser" || tool === "pan") return;
 
         const page = bookState.currentPage;
         if (!bookState.annotations[page]) bookState.annotations[page] = [];
 
-        if (tool === "underline" || tool === "strikethrough" || tool === "circle" || tool === "rectangle" || tool === "arrow") {
+        if (tool === "underline") {
             let endCoords = { x: lastX, y: lastY };
             if (e && (e.clientX !== undefined)) {
                 endCoords = getCoords(e);
             }
 
             const shapeObj = {
-                type: tool,
+                type: "underline",
                 color: bookState.activeColor || "#2563eb",
-                size: 3,
+                size: bookState.strokeSize || 3,
                 x: startX,
                 y: startY,
                 toX: endCoords.x,
-                toY: endCoords.y,
-                width: endCoords.x - startX,
-                height: endCoords.y - startY
+                toY: startY
             };
 
             bookState.annotations[page].push(shapeObj);
@@ -12140,7 +12057,8 @@ function drawSingleStroke(ctx, s) {
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(s.toX, s.y);
         ctx.strokeStyle = s.color || "#2563eb";
-        ctx.lineWidth = 3;
+        ctx.lineWidth = s.size || 3;
+        ctx.lineCap = "round";
         ctx.stroke();
 
     } else if (s.type === "strikethrough") {
@@ -12535,8 +12453,22 @@ async function redrawBookCanvas() {
             }
 
             const page = await bookState.pdfDoc.getPage(pageNum);
-            const scale = (bookState.zoom || 1.0) * (window.devicePixelRatio || 1.5);
-            const displayScale = bookState.zoom || 1.0;
+            const basePageViewport = page.getViewport({ scale: 1.0 });
+
+            const viewportEl = document.getElementById("book-canvas-viewport");
+            const availWidth = viewportEl ? Math.max(260, viewportEl.clientWidth - 16) : (window.innerWidth - 20);
+
+            let effectiveZoom = bookState.zoom || 1.0;
+            // On mobile devices (< 768px), auto-fit to container width seamlessly
+            if (window.innerWidth < 768 && (!bookState.userCustomZoom || bookState.zoom === 1.0)) {
+                effectiveZoom = Math.min(1.0, availWidth / basePageViewport.width);
+                bookState.zoom = effectiveZoom;
+                if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
+            }
+
+            const dpr = window.devicePixelRatio || 1.5;
+            const scale = effectiveZoom * dpr;
+            const displayScale = effectiveZoom;
             const viewport = page.getViewport({ scale: scale });
             const displayViewport = page.getViewport({ scale: displayScale });
 

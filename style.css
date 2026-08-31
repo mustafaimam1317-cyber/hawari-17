@@ -3402,17 +3402,21 @@ body.group-dermatology.dark-theme {
         background: var(--bg-secondary) !important;
     }
     #book-canvas-viewport {
-        min-height: 360px !important;
+        min-height: auto !important;
         padding: 4px !important;
         width: 100% !important;
+        display: flex !important;
+        justify-content: center !important;
+        align-items: flex-start !important;
     }
     #book-canvas-stack {
         max-width: 100% !important;
         box-sizing: border-box !important;
+        margin: 0 auto !important;
     }
     #book-canvas-stack canvas {
+        display: block !important;
         max-width: 100% !important;
-        height: auto !important;
     }
 }
 

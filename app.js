@@ -1780,33 +1780,47 @@ async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
     try {
         let loadedQuestions = [];
         let version = targetVersion || Date.now();
+        const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
 
-        // 1. Try secure sanitized RPC function
-        try {
-            const rpcRes = await supabaseRequest(`rpc/get_sanitized_questions`, {
-                method: "POST",
-                body: JSON.stringify({ p_group: group })
-            });
-            if (rpcRes && Array.isArray(rpcRes) && rpcRes.length > 0) {
-                loadedQuestions = rpcRes;
+        // 1. If Admin, fetch master bank with answers/explanations for questions management
+        if (isAdmin) {
+            try {
+                const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
+                if (records && records.length > 0 && Array.isArray(records[0].questions) && records[0].questions.length > 0) {
+                    version = records[0].last_updated || version;
+                    loadedQuestions = records[0].questions;
+                }
+            } catch (adminFetchErr) {
+                console.warn("[QuestionCache] Admin master fetch fallback:", adminFetchErr.message);
             }
-        } catch (rpcErr) {
-            console.warn("[QuestionCache] Sanitized RPC fallback:", rpcErr.message);
         }
 
-        // 2. Fallback to table query if RPC not yet invoked, with client-side sanitization
+        // 2. If student or admin fetch didn't return, fetch sanitized questions
+        if (loadedQuestions.length === 0) {
+            try {
+                const rpcRes = await supabaseRequest(`rpc/get_sanitized_questions`, {
+                    method: "POST",
+                    body: JSON.stringify({ p_group: group })
+                });
+                if (rpcRes && Array.isArray(rpcRes) && rpcRes.length > 0) {
+                    loadedQuestions = rpcRes;
+                }
+            } catch (rpcErr) {
+                console.warn("[QuestionCache] Sanitized RPC fallback:", rpcErr.message);
+            }
+        }
+
+        // 3. Fallback to direct table query with client-side sanitization
         if (loadedQuestions.length === 0) {
             const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
-            if (records && records.length > 0 && Array.isArray(records[0].questions)) {
+            if (records && records.length > 0 && Array.isArray(records[0].questions) && records[0].questions.length > 0) {
                 version = records[0].last_updated || version;
-                const isAdmin = state.currentUser && state.currentUser.role === "admin";
                 loadedQuestions = records[0].questions.map(q => ({
                     id: q.id,
                     source: q.source,
                     topic: q.topic,
                     text: q.text,
                     options: q.options,
-                    // Only include answers/explanations if active user is verified admin editing questions
                     ...(isAdmin ? { correctOption: q.correctOption, explanation: q.explanation } : {})
                 }));
             }
@@ -1826,9 +1840,19 @@ async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
             // 2. Update IndexedDB
             await setCachedQuestionBank(group, window.HawariQuestionCacheMemory[group]);
             
-            // 3. Update globalQuestionsCache if this is the active course
+            // 3. Update globalQuestionsCache and live UI if this is the active course
             if (state && state.activeGroup === group) {
                 globalQuestionsCache = loadedQuestions;
+                if (state.currentUser) {
+                    loadUserSpecificProgress(state.currentUser.email);
+                    if (state.activeView === "dashboard" || !state.activeView) {
+                        renderDashboard();
+                    } else if (state.activeView === "generate-test") {
+                        renderGenerateTest();
+                    } else if (state.activeView === "my-tests") {
+                        renderMyTests();
+                    }
+                }
             }
             metrics.cacheUpdates++;
             console.log(`[QuestionCache] CACHE UPDATED for ${group}: ${loadedQuestions.length} questions, version ${version}`);
@@ -1861,9 +1885,9 @@ async function fetchGlobalQuestions(group, forceRefresh = false) {
 
     const metrics = window.HawariCacheMetricsByGroup[group] || window.HawariCacheMetricsByGroup.infection;
 
-    // LAYER 1: In-Memory Cache (0ms latency)
+    // LAYER 1: In-Memory Cache (must be non-empty)
     const mem = window.HawariQuestionCacheMemory[group];
-    if (mem && mem.questions && !forceRefresh) {
+    if (mem && mem.questions && Array.isArray(mem.questions) && mem.questions.length > 0 && !forceRefresh) {
         if (state && state.activeGroup === group) {
             globalQuestionsCache = mem.questions;
         }
@@ -1887,9 +1911,9 @@ async function fetchGlobalQuestions(group, forceRefresh = false) {
 
     const asyncFetchOperation = async () => {
         try {
-            // LAYER 2: IndexedDB Cache
+            // LAYER 2: IndexedDB Cache (must be non-empty)
             const idbRecord = await getCachedQuestionBank(group);
-            if (idbRecord && idbRecord.questions && !forceRefresh) {
+            if (idbRecord && idbRecord.questions && Array.isArray(idbRecord.questions) && idbRecord.questions.length > 0 && !forceRefresh) {
                 if (state && state.activeGroup === group) {
                     globalQuestionsCache = idbRecord.questions;
                 }

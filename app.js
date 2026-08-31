@@ -722,11 +722,6 @@ function saveStateToStorage(skipCloudSync = false) {
     if (!skipCloudSync) {
         debouncedSync();
     }
-
-    // If active user is Admin, also upload the global questions template!
-    if (isUserAdmin(state.currentUser)) {
-        saveGlobalQuestionsToCloud();
-    }
 }
 
 // Synchronous SHA-256 implementation for secure password hashing
@@ -981,6 +976,16 @@ async function selectCourseTrack(groupName) {
                     fetchBookLibraryData(groupName),
                     syncUsersWithCloud()
                 ]);
+                if (state.currentUser) {
+                    loadUserSpecificProgress(state.currentUser.email);
+                    if (state.activeView === "dashboard" || !state.activeView) {
+                        renderDashboard();
+                    } else if (state.activeView === "generate-test") {
+                        renderGenerateTest();
+                    } else if (state.activeView === "my-tests") {
+                        renderMyTests();
+                    }
+                }
             } catch (e) {
                 console.warn("[StagedLoad] Background sync:", e);
             }
@@ -2149,6 +2154,11 @@ window.debugNetworkMetrics = function() {
 async function saveGlobalQuestionsToCloud() {
     const group = state.activeGroup;
     if (!group) return;
+
+    if (!state.questions || !Array.isArray(state.questions) || state.questions.length === 0) {
+        console.warn("[Sync] saveGlobalQuestionsToCloud aborted: state.questions is empty!");
+        return;
+    }
 
     // Strip student-specific answers/status from global template
     const cleanQuestions = state.questions.map(q => {

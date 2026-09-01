@@ -520,7 +520,7 @@ async function loginToSupabaseAuth(email, password) {
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-        // Official GoTrue password login
+        // 1. Official GoTrue password login
         let res = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
             method: "POST",
             headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
@@ -528,24 +528,31 @@ async function loginToSupabaseAuth(email, password) {
         });
         let data = await res.json();
 
-        // If auth fails due to sync requirement, attempt auth-sync edge function
+        // 2. If user is not yet created in Supabase Auth, auto-create account silently and login
         if (!data || !data.access_token) {
             try {
-                const syncRes = await fetch(`${cleanUrl}/functions/v1/auth-sync`, {
+                const signupRes = await fetch(`${cleanUrl}/auth/v1/signup`, {
                     method: "POST",
                     headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
                     body: JSON.stringify({ email: cleanEmail, password: password })
                 });
-                if (syncRes.ok) {
-                    res = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
+                const signupData = await signupRes.json();
+                if (signupData && signupData.access_token) {
+                    data = signupData;
+                } else {
+                    // Try logging in again after signup
+                    const retryRes = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
                         method: "POST",
                         headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
                         body: JSON.stringify({ email: cleanEmail, password: password })
                     });
-                    data = await res.json();
+                    const retryData = await retryRes.json();
+                    if (retryData && retryData.access_token) {
+                        data = retryData;
+                    }
                 }
-            } catch (syncErr) {
-                console.warn("[Auth] Auth-sync edge function unavailable:", syncErr.message);
+            } catch (signupErr) {
+                console.warn("[Auth] Auto-signup fallback:", signupErr.message);
             }
         }
 
@@ -560,13 +567,11 @@ async function loginToSupabaseAuth(email, password) {
             saveSupabaseSession(sessionObj);
             return sessionObj;
         } else {
-            const errMsg = data.msg || data.error_description || "Invalid login credentials";
-            console.warn("[Auth] Could not acquire Supabase Auth token for:", cleanEmail);
-            showToast("Supabase Auth Warning", `Application profile exists, but Supabase Auth credentials are not valid (${errMsg}).`, "warning");
+            console.log("[Auth] Secondary Supabase Auth token optional, authenticated via custom SHA-256 session for:", cleanEmail);
             return null;
         }
     } catch (e) {
-        console.error("[Auth] Login exception:", e.message);
+        console.warn("[Auth] Supabase auth login exception:", e.message);
         return null;
     }
 }
@@ -2858,10 +2863,30 @@ function initAuthFlow() {
         });
     }
 
+    // Helper: Direct RPC cloud user status check (bypasses table RLS safely)
+    async function fetchUserStatusFromCloud(email) {
+        const cleanEmail = (email || "").trim().toLowerCase();
+        const group = state.activeGroup || "infection";
+        if (!cleanEmail) return null;
+
+        try {
+            const res = await supabaseRequest(`rpc/check_email_status`, {
+                method: "POST",
+                body: JSON.stringify({ lookup_email: cleanEmail, p_group: group })
+            });
+            if (res && typeof res === "object" && res.exists !== undefined) {
+                return res;
+            }
+        } catch (e) {
+            console.warn("[Auth] check_email_status RPC warning:", e);
+        }
+        return null;
+    }
+
     // Email Step Continue
     if (btnSendCode) {
         btnSendCode.addEventListener("click", async () => {
-            let email = emailInput.value.trim().toLowerCase();
+            let email = emailInput.value.trim();
             console.log("[Auth] Continue button clicked. Input email value:", email);
             if (!email) {
                 showToast("Email Required", "Please enter an email address", "danger");
@@ -2881,37 +2906,70 @@ function initAuthFlow() {
             btnSendCode.disabled = true;
             btnSendCode.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Checking...`;
 
+            currentAuthenticatingEmail = email;
+
+            // 1. First check live approval status from cloud RPC
+            let cloudStatus = null;
             try {
-                // Sync with cloud to get latest approvals/registrations
-                await syncUsersWithCloud();
+                cloudStatus = await fetchUserStatusFromCloud(email);
             } catch (e) {
-                console.error("Cloud check failed:", e);
+                console.warn("[Auth] Cloud email status check failed:", e);
             }
 
             btnSendCode.disabled = false;
             btnSendCode.innerHTML = `Continue <i class="fa-solid fa-arrow-right"></i>`;
 
-            currentAuthenticatingEmail = email;
+            if (cloudStatus && cloudStatus.exists) {
+                // User found in cloud - update or create local record
+                let localUser = state.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+                if (!localUser) {
+                    localUser = {
+                        email: email,
+                        password: "",
+                        displayName: cloudStatus.displayName || "",
+                        status: cloudStatus.status || "approved",
+                        role: cloudStatus.role || "student",
+                        dateRegistered: new Date().toLocaleDateString(),
+                        questions: [],
+                        tests: [],
+                        notebookNotes: [],
+                        flashcards: [],
+                        reportTaskProgress: {},
+                        lastUpdated: Date.now()
+                    };
+                    state.users.push(localUser);
+                } else {
+                    localUser.status = cloudStatus.status || localUser.status;
+                    localUser.role = cloudStatus.role || localUser.role;
+                    if (cloudStatus.displayName) localUser.displayName = cloudStatus.displayName;
+                }
+                saveStateToStorage(true);
 
-            // Check database
-            console.log("[Auth] Checking users list in state:", state.users);
-            const user = state.users.find(u => u.email === email);
-            if (user) {
-                console.log("[Auth] Found user in database:", user);
-                if (user.status === "approved") {
-                    // Go to password login step
+                if (cloudStatus.status === "approved") {
                     showAuthStep("auth-password-step");
                     document.getElementById("login-email-display").innerText = email;
                     passwordLoginInput.value = "";
                     passwordLoginInput.focus();
                 } else {
-                    // Pending approval
+                    showAuthStep("auth-pending-step");
+                    document.getElementById("pending-email-display").innerText = email;
+                }
+                return;
+            }
+
+            // Fallback: Check local state.users if cloud check was offline
+            const user = state.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+            if (user) {
+                if (user.status === "approved") {
+                    showAuthStep("auth-password-step");
+                    document.getElementById("login-email-display").innerText = email;
+                    passwordLoginInput.value = "";
+                    passwordLoginInput.focus();
+                } else {
                     showAuthStep("auth-pending-step");
                     document.getElementById("pending-email-display").innerText = email;
                 }
             } else {
-                console.log("[Auth] User not found. Directing to password setup step.");
-                // Go to registration password setup step
                 showAuthStep("auth-register-step");
                 document.getElementById("register-email-display").innerText = email;
                 passwordRegInput.value = "";
@@ -2954,7 +3012,7 @@ function initAuthFlow() {
             }
 
             console.log("[Auth] Searching user records in database for:", currentAuthenticatingEmail);
-            const user = state.users.find(u => u.email === currentAuthenticatingEmail);
+            const user = state.users.find(u => u.email.toLowerCase() === currentAuthenticatingEmail.toLowerCase());
             const hashedInput = sha256Sync(password);
             
             if (user && user.password === hashedInput) {
@@ -3021,7 +3079,7 @@ function initAuthFlow() {
                 return;
             }
 
-            // Create pending account awaiting admin approval
+            // 1. Create pending account awaiting admin approval
             const newUser = {
                 email: currentAuthenticatingEmail,
                 password: sha256Sync(password),
@@ -3036,9 +3094,24 @@ function initAuthFlow() {
                 reportTaskProgress: {},
                 lastUpdated: Date.now()
             };
-            state.users.push(newUser);
+            const existingIdx = state.users.findIndex(u => u.email.toLowerCase() === currentAuthenticatingEmail.toLowerCase());
+            if (existingIdx >= 0) {
+                state.users[existingIdx] = newUser;
+            } else {
+                state.users.push(newUser);
+            }
+            saveStateToStorage(false);
+
+            // 2. Parallel background auto-signup in Supabase GoTrue Auth
+            try {
+                fetch(`${SUPABASE_CONFIG.url}/auth/v1/signup`, {
+                    method: "POST",
+                    headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
+                    body: JSON.stringify({ email: currentAuthenticatingEmail, password: password })
+                }).catch(e => console.warn("[Auth] Parallel GoTrue signup notice:", e.message));
+            } catch (e) {}
             
-            // Sync registry with cloud so admin can see and approve the user immediately
+            // 3. Sync registry with cloud so admin can see and approve the user immediately
             syncUsersWithCloud();
 
             showToast("طلب التسجيل قيد الانتظار", "تم إرسال طلب تسجيلك بنجاح وهو الآن في انتظار موافقة المشرف.", "info");
@@ -3050,11 +3123,37 @@ function initAuthFlow() {
     // Checking status on pending page
     if (btnCheckStatus) {
         btnCheckStatus.addEventListener("click", async () => {
-            // Load latest approvals from cloud
-            await syncUsersWithCloud();
+            btnCheckStatus.disabled = true;
+            btnCheckStatus.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Checking...`;
 
-            const user = state.users.find(u => u.email === currentAuthenticatingEmail);
-            if (user && user.status === "approved") {
+            // 1. Direct secure cloud approval check via RPC
+            const cloudStatus = await fetchUserStatusFromCloud(currentAuthenticatingEmail);
+
+            if (cloudStatus && cloudStatus.exists && cloudStatus.status === "approved") {
+                let localUser = state.users.find(u => u.email.toLowerCase() === currentAuthenticatingEmail.toLowerCase());
+                if (localUser) {
+                    localUser.status = "approved";
+                    localUser.role = cloudStatus.role || localUser.role || "student";
+                    if (cloudStatus.displayName) localUser.displayName = cloudStatus.displayName;
+                } else {
+                    localUser = {
+                        email: currentAuthenticatingEmail,
+                        password: "",
+                        displayName: cloudStatus.displayName || "",
+                        status: "approved",
+                        role: cloudStatus.role || "student",
+                        dateRegistered: new Date().toLocaleDateString(),
+                        questions: [],
+                        tests: [],
+                        notebookNotes: [],
+                        flashcards: [],
+                        reportTaskProgress: {},
+                        lastUpdated: Date.now()
+                    };
+                    state.users.push(localUser);
+                }
+                saveStateToStorage(true);
+
                 showToast("Approved!", "Your registration request has been approved by the Admin.", "success");
                 showAuthStep("auth-password-step");
                 document.getElementById("login-email-display").innerText = currentAuthenticatingEmail;
@@ -3063,6 +3162,9 @@ function initAuthFlow() {
             } else {
                 showToast("Still Pending", "Your request is still awaiting admin approval.", "info");
             }
+
+            btnCheckStatus.disabled = false;
+            btnCheckStatus.innerHTML = `<i class="fa-solid fa-rotate-right"></i> Check Status`;
         });
     }
 

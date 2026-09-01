@@ -2617,7 +2617,7 @@ async function syncUsersWithCloud() {
     const group = state.activeGroup;
     if (!group) return;
 
-    const isAdmin = state.currentUser && state.currentUser.role === "admin";
+    const isAdmin = isUserAdmin(state.currentUser);
     
     // Determine target email to fetch/sync
     let targetEmail = null;
@@ -2646,6 +2646,13 @@ async function syncUsersWithCloud() {
         if (cloudRecords && Array.isArray(cloudRecords)) {
             // Map cloud database rows to user object structure
             const cloudUsers = cloudRecords.map(row => {
+                let parsedLastUpdated = 0;
+                if (typeof row.last_updated === "number") {
+                    parsedLastUpdated = row.last_updated;
+                } else if (typeof row.last_updated === "string") {
+                    parsedLastUpdated = new Date(row.last_updated).getTime() || 0;
+                }
+
                 return {
                     email: row.email,
                     password: row.password_hash,
@@ -2658,7 +2665,7 @@ async function syncUsersWithCloud() {
                     flashcards: Array.isArray(row.flashcards) ? row.flashcards : [],
                     reportTaskProgress: row.report_task_progress || {},
                     displayName: row.display_name || "",
-                    lastUpdated: row.last_updated || 0
+                    lastUpdated: parsedLastUpdated
                 };
             });
 
@@ -2667,8 +2674,8 @@ async function syncUsersWithCloud() {
                 const localUserIdx = state.users.findIndex(u => u.email.toLowerCase() === cu.email.toLowerCase());
                 if (localUserIdx >= 0) {
                     const lu = state.users[localUserIdx];
-                    // Sync status (e.g. pending -> approved)
-                    if (cu.status === "approved" && lu.status !== "approved") {
+                    // Sync status (e.g. pending -> approved) - Anti-Revert Protection
+                    if (cu.status === "approved") {
                         lu.status = "approved";
                         lu.role = cu.role;
                     }
@@ -5244,18 +5251,18 @@ window.updateUserDisplayName = async function(email, newName) {
 
     encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
-    const payload = [{
-        email: user.email,
+    const payload = {
+        email: user.email.trim().toLowerCase(),
         group_name: state.activeGroup,
         password_hash: user.password || user.password_hash || "google_auth_user",
-        role: user.role || 'user',
+        role: user.role || 'student',
         status: user.status || 'approved',
         display_name: user.displayName,
-        last_updated: new Date(user.lastUpdated).toISOString()
-    }];
+        last_updated: user.lastUpdated
+    };
 
     try {
-        await supabaseRequest("hawari_users?on_conflict=email,group_name", {
+        await supabaseRequest("hawari_users", {
             method: "POST",
             headers: {
                 "Prefer": "resolution=merge-duplicates"
@@ -5284,10 +5291,7 @@ window.approveUserAdmin = async function(email, role = 'user') {
     const user = state.users.find(u => u.email === email);
     if (user) {
         user.status = "approved";
-        user.role = role;
-        if (!user.questions || user.questions.length === 0) {
-            user.questions = JSON.parse(JSON.stringify(getGroupQuestionsSeed()));
-        }
+        user.role = role === "admin" ? "admin" : "student";
         if (!user.tests) user.tests = [];
         if (!user.notebookNotes) user.notebookNotes = [];
         if (!user.flashcards) user.flashcards = [];
@@ -5295,23 +5299,23 @@ window.approveUserAdmin = async function(email, role = 'user') {
         
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
-        const payload = [{
-            email: user.email,
+        const payload = {
+            email: user.email.trim().toLowerCase(),
             group_name: state.activeGroup,
             password_hash: user.password || user.password_hash || "google_auth_user",
             role: user.role,
-            status: user.status,
+            status: "approved",
             display_name: user.displayName || user.email.split('@')[0],
-            questions: user.questions,
-            tests: user.tests,
-            notebook_notes: user.notebookNotes,
-            flashcards: user.flashcards,
+            questions: user.questions || [],
+            tests: user.tests || [],
+            notebook_notes: user.notebookNotes || [],
+            flashcards: user.flashcards || [],
             report_task_progress: user.reportTaskProgress || {},
-            last_updated: new Date(user.lastUpdated).toISOString()
-        }];
+            last_updated: user.lastUpdated
+        };
         
         try {
-            await supabaseRequest("hawari_users?on_conflict=email,group_name", {
+            await supabaseRequest("hawari_users", {
                 method: "POST",
                 headers: {
                     "Prefer": "resolution=merge-duplicates"
@@ -5369,22 +5373,27 @@ window.toggleUserRoleAdmin = async function(email, event) {
 
     const user = state.users.find(u => u.email === email);
     if (user) {
-        user.role = user.role === "admin" ? "user" : "admin";
+        user.role = user.role === "admin" ? "student" : "admin";
         user.lastUpdated = Date.now();
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
-        const payload = [{
-            email: user.email,
+        const payload = {
+            email: user.email.trim().toLowerCase(),
             group_name: state.activeGroup,
             password_hash: user.password || user.password_hash || "google_auth_user",
             role: user.role,
             status: user.status || 'approved',
             display_name: user.displayName || user.email.split('@')[0],
-            last_updated: new Date(user.lastUpdated).toISOString()
-        }];
+            questions: user.questions || [],
+            tests: user.tests || [],
+            notebook_notes: user.notebookNotes || [],
+            flashcards: user.flashcards || [],
+            report_task_progress: user.reportTaskProgress || {},
+            last_updated: user.lastUpdated
+        };
         
         try {
-            await supabaseRequest("hawari_users?on_conflict=email,group_name", {
+            await supabaseRequest("hawari_users", {
                 method: "POST",
                 headers: {
                     "Prefer": "resolution=merge-duplicates"

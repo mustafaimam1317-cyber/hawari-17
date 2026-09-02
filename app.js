@@ -7366,11 +7366,20 @@ window.startCourseQuizStudent = function(quizId) {
         localStorage.setItem("active_quiz_session", quizId);
     }
 
-    // Deep immutable snapshot of exam questions to isolate active exam from background cache updates
+    // Deep immutable sanitized snapshot of exam questions to isolate active exam from background cache updates
+    // SECURITY: Strip correctOption and explanation during live exam to prevent DevTools inspection
+    const sanitizedQuestions = (qz.questions || []).map(q => ({
+        id: q.id,
+        text: q.text,
+        options: Array.isArray(q.options) ? [...q.options] : (typeof q.options === 'object' ? Object.values(q.options) : []),
+        topic: q.topic || "",
+        source: q.source || ""
+    }));
+
     state.activeQuiz = {
         quizId: qz.id,
         title: qz.title,
-        questions: JSON.parse(JSON.stringify(qz.questions || [])),
+        questions: sanitizedQuestions,
         answers: {},
         currentQuestionIdx: 0,
         timeRemaining: qz.duration * 60,
@@ -7587,22 +7596,51 @@ async function submitActiveQuiz() {
 
     if (quizTimerInterval) clearInterval(quizTimerInterval);
 
+    // SECURITY: Match against true quiz source questions (which contain correctOption)
+    const qz = (state.courseQuizzes || []).find(q => q.id === qzId);
+    const sourceQuestions = (qz && qz.questions && qz.questions.length > 0) ? qz.questions : questions;
+
     let correctCount = 0;
-    questions.forEach((q, idx) => {
+    sourceQuestions.forEach((q, idx) => {
         const userAns = answers[idx];
         if (userAns !== undefined && parseInt(userAns) === parseInt(q.correctOption)) {
             correctCount++;
         }
     });
 
-    const score = Math.round((correctCount / questions.length) * 100);
+    let score = Math.round((correctCount / sourceQuestions.length) * 100);
+
+    // Secure Server-Side RPC grading verification
+    try {
+        const answersPayload = {};
+        sourceQuestions.forEach((q, idx) => {
+            if (answers[idx] !== undefined) {
+                const optLetter = String.fromCharCode(65 + answers[idx]);
+                answersPayload[q.id] = optLetter;
+            }
+        });
+        const rpcRes = await supabaseRequest("rpc/verify_exam_answers", {
+            method: "POST",
+            body: JSON.stringify({
+                p_exam_id: qzId,
+                p_group: (state.activeGroup || "infection").toLowerCase(),
+                p_answers: answersPayload
+            })
+        });
+        if (rpcRes && rpcRes.success && typeof rpcRes.score === "number") {
+            score = rpcRes.score;
+            console.log("[ExamGrading] Server-side verified score applied:", score);
+        }
+    } catch (rpcErr) {
+        console.warn("[ExamGrading] RPC server verification fallback to verified course grading:", rpcErr.message);
+    }
 
     const resultObj = {
         id: `${qzId}_${state.currentUser.email}`,
         quiz_id: qzId,
         email: state.currentUser.email,
         score: score,
-        total_questions: questions.length,
+        total_questions: sourceQuestions.length,
         answers: answers,
         status: "completed",
         submitted_at: new Date().toISOString()

@@ -2686,29 +2686,29 @@ async function syncUsersWithCloud() {
                             state.currentUser.displayName = cu.displayName;
                         }
                     }
-                    // Smart bidirectional merge for tests (preserves completed tests)
+                    // Smart bidirectional merge for tests and notes (AMBOSS-Grade LWW with Initial Sync protection)
                     const localTests = Array.isArray(lu.tests) ? lu.tests : [];
                     const cloudTests = Array.isArray(cu.tests) ? cu.tests : [];
-                    if (cloudTests.length > 0 && localTests.length === 0) {
-                        lu.tests = cloudTests;
-                    } else if (cloudTests.length > 0 && localTests.length > 0) {
-                        const testMap = new Map();
-                        localTests.forEach(t => testMap.set(t.id, t));
-                        cloudTests.forEach(t => {
-                            if (!testMap.has(t.id) || (t.timeRemaining !== undefined && t.isCompleted)) {
-                                testMap.set(t.id, t);
-                            }
-                        });
-                        lu.tests = Array.from(testMap.values());
+                    const isLocalSessionAuthoritative = Boolean(state.isUserProgressLoaded) && ((lu.lastUpdated || 0) >= (cu.lastUpdated || 0));
+
+                    if (isLocalSessionAuthoritative) {
+                        // The user on this active session has the latest state, including explicit test/note deletions!
+                        lu.tests = localTests;
+                        lu.notebookNotes = Array.isArray(lu.notebookNotes) ? lu.notebookNotes : [];
+                    } else {
+                        // Fresh device or cloud has newer updates: pull authoritative data from cloud
+                        if (cloudTests.length > 0) {
+                            lu.tests = cloudTests;
+                        } else if (!state.isUserProgressLoaded) {
+                            lu.tests = [];
+                        }
+                        if (Array.isArray(cu.notebookNotes)) {
+                            lu.notebookNotes = cu.notebookNotes;
+                        }
                     }
 
                     // Smart merge for report task progress
                     lu.reportTaskProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
-
-                    // Smart merge for notebook notes
-                    if (Array.isArray(cu.notebookNotes) && cu.notebookNotes.length > 0 && (!lu.notebookNotes || lu.notebookNotes.length === 0)) {
-                        lu.notebookNotes = cu.notebookNotes;
-                    }
 
                     // Smart merge for flashcards
                     if (Array.isArray(cu.flashcards) && cu.flashcards.length > 0 && (!lu.flashcards || lu.flashcards.length === 0)) {
@@ -3418,30 +3418,91 @@ function renderDashboard() {
         btnQuickGen.onclick = () => window.location.hash = "#generate-test";
     }
 
-    // Reset Progress Button
+    // Reset Progress Button (AMBOSS-Grade Authoritative Server-First Wipe)
     const btnResetSite = document.getElementById("btn-reset-site");
     if (btnResetSite) {
-        btnResetSite.onclick = () => {
+        btnResetSite.onclick = async () => {
             const confirmReset = confirm("Are you sure you want to reset all your progress, test histories, and notes? This action cannot be undone.");
-            if (confirmReset) {
-                // Clear tests
+            if (!confirmReset) return;
+
+            const originalBtnHtml = btnResetSite.innerHTML;
+            btnResetSite.disabled = true;
+            btnResetSite.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Resetting site data...`;
+
+            try {
+                const group = (state.activeGroup || "infection").toLowerCase();
+                const userEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
+                const newTimestamp = Date.now();
+
+                // 1. Clear in-memory state
                 state.tests = [];
-                // Reset all questions to unused state
-                state.questions.forEach(q => {
+                state.notebookNotes = [];
+                (state.questions || []).forEach(q => {
                     q.status = "unused";
                     q.marked = false;
                     q.notes = "";
                     q.highlightedHtml = "";
+                    q.userAnswer = null;
                 });
-                // Clear notepad notes
-                state.notebookNotes = [];
-                // Save state to storage
-                saveStateToStorage();
-                
-                showToast("Success", "All progress and site data has been reset.", "success");
+
+                // Update local user record
+                if (userEmail && Array.isArray(state.users)) {
+                    const localUser = state.users.find(u => u.email && u.email.toLowerCase() === userEmail);
+                    if (localUser) {
+                        localUser.tests = [];
+                        localUser.notebookNotes = [];
+                        localUser.questions = state.questions.map(q => ({
+                            id: q.id,
+                            status: "unused",
+                            marked: false,
+                            notes: "",
+                            highlightedHtml: "",
+                            userAnswer: null
+                        }));
+                        localUser.lastUpdated = newTimestamp;
+                    }
+                }
+                if (state.currentUser) {
+                    state.currentUser.lastUpdated = newTimestamp;
+                }
+
+                // 2. Direct authoritative push to Supabase (Server-First Wipe)
+                if (userEmail) {
+                    const resetPayload = {
+                        tests: [],
+                        notebook_notes: [],
+                        questions: state.questions.map(q => ({
+                            id: q.id,
+                            status: "unused",
+                            marked: false,
+                            notes: "",
+                            highlightedHtml: "",
+                            userAnswer: null
+                        })),
+                        last_updated: newTimestamp
+                    };
+
+                    await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
+                        method: "PATCH",
+                        headers: { "Prefer": "return=minimal" },
+                        body: JSON.stringify(resetPayload)
+                    });
+                }
+
+                // 3. Persist cleanly to local storage
+                saveStateToStorage(true);
+
+                showToast("Success", "All progress, tests, and notebook notes have been permanently reset.", "success");
                 setTimeout(() => {
                     window.location.reload();
-                }, 1000);
+                }, 400);
+            } catch (err) {
+                console.error("[ResetSite] Direct server reset error:", err);
+                showToast("Reset Warning", "Data cleared locally. Syncing with cloud in background.", "warning");
+                saveStateToStorage();
+                setTimeout(() => {
+                    window.location.reload();
+                }, 800);
             }
         };
     }
@@ -4510,33 +4571,75 @@ window.reviewCompletedTest = function(testId) {
     }
 };
 
-window.deletePracticeTest = function(testId) {
-    if (confirm("Are you sure you want to delete this test? All questions in this test will return to being unsolved ('Unused'), and stats will be recycled.")) {
-        const testIndex = state.tests.findIndex(t => t.id === testId);
-        if (testIndex > -1) {
-            const testObj = state.tests[testIndex];
-            
-            // Recyle questions: Set status back to 'unused'
-            testObj.questionIds.forEach(qId => {
-                const qObj = state.questions.find(q => q.id === qId);
-                if (qObj) {
-                    qObj.status = "unused";
-                    // Keep marks or clear highlights if desired, user said reset unsolved state
-                    qObj.highlightedHtml = "";
-                }
-            });
+window.deletePracticeTest = async function(testId) {
+    if (!confirm("Are you sure you want to delete this test? All questions in this test will return to being unsolved ('Unused'), and stats will be recycled.")) {
+        return;
+    }
+    const testIndex = (state.tests || []).findIndex(t => t.id === testId);
+    if (testIndex === -1) return;
 
-            // Delete test note mappings as well if desired
-            state.notebookNotes = state.notebookNotes.filter(n => !(n.type === "Question Note" && testObj.questionIds.includes(n.qId)));
+    const testObj = state.tests[testIndex];
+    
+    // 1. Recycle questions: Set status back to 'unused'
+    if (Array.isArray(testObj.questionIds) && Array.isArray(state.questions)) {
+        testObj.questionIds.forEach(qId => {
+            const qObj = state.questions.find(q => q.id === qId);
+            if (qObj) {
+                qObj.status = "unused";
+                qObj.userAnswer = null;
+                qObj.highlightedHtml = "";
+            }
+        });
+    }
 
-            // Remove test
-            state.tests.splice(testIndex, 1);
-            saveStateToStorage();
-            
-            showToast("Test Deleted", "Practice test deleted. Questions recycled to pool.", "success");
-            renderMyTests();
+    // 2. Delete test note mappings as well
+    if (Array.isArray(testObj.questionIds) && Array.isArray(state.notebookNotes)) {
+        state.notebookNotes = state.notebookNotes.filter(n => !(n.type === "Question Note" && testObj.questionIds.includes(n.qId)));
+    }
+
+    // 3. Remove test from state
+    state.tests.splice(testIndex, 1);
+    
+    // 4. Authoritative timestamp update
+    const newTimestamp = Date.now();
+    const group = (state.activeGroup || "infection").toLowerCase();
+    const userEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
+
+    if (userEmail && Array.isArray(state.users)) {
+        const localUser = state.users.find(u => u.email && u.email.toLowerCase() === userEmail);
+        if (localUser) {
+            localUser.tests = [...state.tests];
+            localUser.notebookNotes = [...state.notebookNotes];
+            localUser.lastUpdated = newTimestamp;
         }
     }
+    if (state.currentUser) {
+        state.currentUser.lastUpdated = newTimestamp;
+    }
+
+    // 5. Save state locally
+    saveStateToStorage(true);
+
+    // 6. Direct authoritative server push (AMBOSS-grade mutation)
+    if (userEmail) {
+        try {
+            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
+                method: "PATCH",
+                headers: { "Prefer": "return=minimal" },
+                body: JSON.stringify({
+                    tests: state.tests,
+                    notebook_notes: state.notebookNotes,
+                    last_updated: newTimestamp
+                })
+            });
+        } catch (err) {
+            console.warn("[DeleteTest] Direct server push fallback to debounced sync:", err);
+            debouncedSync();
+        }
+    }
+
+    showToast("Test Deleted", "Practice test deleted. Questions recycled to pool.", "success");
+    renderMyTests();
 };
 
 // ================= VIEW: NOTEBOOK =================
@@ -4655,19 +4758,52 @@ function renderNotebook() {
     // Editor Toolbar Executions
     initEditorToolbarActions(noteBodyArea, triggerAutoSave);
 
-    // Delete Note Event Listener
+    // Delete Note Event Listener (AMBOSS-Grade Authoritative Mutation)
     const btnDeleteNote = document.getElementById("btn-delete-note");
     if (btnDeleteNote) {
-        btnDeleteNote.onclick = () => {
+        btnDeleteNote.onclick = async () => {
             if (!activeNoteId) return;
             const confirmDelete = confirm("Are you sure you want to delete this note?");
-            if (confirmDelete) {
-                state.notebookNotes = state.notebookNotes.filter(n => n.id !== activeNoteId);
-                activeNoteId = null;
-                saveStateToStorage();
-                renderNotebook();
-                showToast("Note Deleted", "The note has been successfully deleted.", "info");
+            if (!confirmDelete) return;
+
+            state.notebookNotes = (state.notebookNotes || []).filter(n => n.id !== activeNoteId);
+            activeNoteId = null;
+
+            const newTimestamp = Date.now();
+            const group = (state.activeGroup || "infection").toLowerCase();
+            const userEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
+
+            if (userEmail && Array.isArray(state.users)) {
+                const localUser = state.users.find(u => u.email && u.email.toLowerCase() === userEmail);
+                if (localUser) {
+                    localUser.notebookNotes = [...state.notebookNotes];
+                    localUser.lastUpdated = newTimestamp;
+                }
             }
+            if (state.currentUser) {
+                state.currentUser.lastUpdated = newTimestamp;
+            }
+
+            saveStateToStorage(true);
+
+            if (userEmail) {
+                try {
+                    await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
+                        method: "PATCH",
+                        headers: { "Prefer": "return=minimal" },
+                        body: JSON.stringify({
+                            notebook_notes: state.notebookNotes,
+                            last_updated: newTimestamp
+                        })
+                    });
+                } catch (err) {
+                    console.warn("[DeleteNote] Direct server push fallback to debounced sync:", err);
+                    debouncedSync();
+                }
+            }
+
+            renderNotebook();
+            showToast("Note Deleted", "The note has been successfully deleted.", "info");
         };
     }
 }

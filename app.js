@@ -2769,10 +2769,10 @@ async function syncUsersWithCloud() {
     }
 
     // 3. Determine which users to write back to Supabase
-    // ONLY students write their own updated progress row to Supabase.
-    // Admin approvals/deletions/toggles are written specifically on admin action.
+    // AMBOSS-Grade Personal Ledger: The authenticated user (whether student or admin)
+    // syncs their own personal progress/test row. Other students' records are never bulk-written.
     let usersToWrite = [];
-    if (!isAdmin && targetEmail) {
+    if (targetEmail) {
         const matchingUser = state.users.find(u => u.email.toLowerCase() === targetEmail.toLowerCase());
         if (matchingUser && matchingUser.lastUpdated > 0) {
             usersToWrite = [matchingUser];
@@ -10557,26 +10557,8 @@ async function fetchBookLibraryData(targetGroup = null) {
         console.warn("[BookDebug] Strategy A warning:", eA.message);
     }
 
-    // Strategy B: Query admin records in hawari_users for fallback synchronization
-    try {
-        const resB = await fetch(`${cleanUrl}/rest/v1/hawari_users?role=eq.admin&group_name=eq.${encodeURIComponent(requestedGroup)}&select=email,report_task_progress`, {
-            headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` }
-        });
-        if (resB.ok) {
-            const users = await resB.json();
-            if (Array.isArray(users)) {
-                users.forEach(u => {
-                    const userBooks = (u.report_task_progress && Array.isArray(u.report_task_progress.books)) ? u.report_task_progress.books : [];
-                    const matching = userBooks.filter(b => (b.group_name || "infection").toLowerCase().trim() === requestedGroup);
-                    collectedBooks.push(...matching);
-                });
-                if (users.length > 0) serverSuccess = true;
-                console.log(`[BookDebug] Strategy B found books count: ${collectedBooks.length}`);
-            }
-        }
-    } catch (eB) {
-        console.warn("[BookDebug] Strategy B warning:", eB.message);
-    }
+    // Strategy B is deprecated: hawari_book_files is the Single Source of Truth (SSOT)
+    // Legacy fallback to hawari_users.report_task_progress.books has been eliminated to prevent ghost/zombie book revival.
 
     // Deduplicate collected books by ID and Title
     const uniqueMap = new Map();

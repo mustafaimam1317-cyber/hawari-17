@@ -3662,9 +3662,8 @@ window.downloadStudentNotes = function() {
 let selectedSource = "Past Exam";
 
 function renderGenerateTest() {
-    // Set question counts in buttons
     const pastExamQCount = state.questions.filter(q => q.source === "Past Exam").length;
-    const collegeMCQQCount = state.questions.filter(q => q.source === "College MCQ").length;
+    const collegeMCQQCount = state.questions.filter(q => q.source === "College MCQ" || q.source === "College").length;
     
     document.getElementById("badge-count-past-exam").innerText = `${pastExamQCount} Qs`;
     document.getElementById("badge-count-college-mcq").innerText = `${collegeMCQQCount} Qs`;
@@ -3715,7 +3714,7 @@ function populateTopicsList() {
     if (!container) return;
 
     // Filter questions by selected source and collect unique topics
-    const sourceQs = state.questions.filter(q => q.source === selectedSource);
+    const sourceQs = state.questions.filter(q => q.source === selectedSource || (selectedSource === "College MCQ" && q.source === "College") || (selectedSource === "College" && q.source === "College MCQ"));
     const uniqueTopics = [...new Set(sourceQs.map(q => q.topic))];
 
     container.innerHTML = "";
@@ -3750,8 +3749,11 @@ function getFilteredQuestions() {
     const selectedTopics = getSelectedTopics();
     
     return state.questions.filter(q => {
-        // Source match
-        if (q.source !== selectedSource) return false;
+        // Source match (flexible for College and College MCQ)
+        const isSourceMatch = (q.source === selectedSource) || 
+                              (selectedSource === "College MCQ" && q.source === "College") || 
+                              (selectedSource === "College" && q.source === "College MCQ");
+        if (!isSourceMatch) return false;
         
         // Topic match
         if (!selectedTopics.includes(q.topic)) return false;

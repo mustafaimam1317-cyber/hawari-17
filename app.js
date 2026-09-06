@@ -275,13 +275,14 @@ async function loadRealBookPdfDocument(bookFile) {
         const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
         const cleanUrl = supabaseUrl.replace(/\/$/, "");
 
-        const rawUrl = bookFile.storage_url || "";
+        const accessInfo = getBookAccessLevel(state.currentUser);
+        const rawUrl = (!accessInfo.isFullGrant && bookFile.preview_url) ? bookFile.preview_url : (bookFile.storage_url || "");
         let cleanPath = rawUrl.replace(/.*\/hawari_books\//, "").replace(/^public\//, "");
         if (!cleanPath || cleanPath.startsWith("http")) {
             cleanPath = rawUrl.split("/").pop();
         }
 
-        console.log("[PDFViewer] Extracted cleanPath:", cleanPath);
+        console.log("[PDFViewer] Extracted cleanPath:", cleanPath, "isFullGrant:", accessInfo.isFullGrant);
 
         let pdfArrayBuffer = null;
 
@@ -2384,15 +2385,28 @@ async function fetchCourseQuizzes(group, forceRefresh = false) {
     try {
         const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
-            state.courseQuizzes = records.map(row => ({
-                id: row.id,
-                title: row.title,
-                questions: row.questions || [],
-                duration: row.time_limit,
-                startTime: row.start_time,
-                endTime: row.end_time,
-                status: row.status
-            }));
+            const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
+            state.courseQuizzes = records.map(row => {
+                let quizQuestions = row.questions || [];
+                if (!isAdmin) {
+                    quizQuestions = quizQuestions.map(q => ({
+                        id: q.id,
+                        text: q.text,
+                        options: Array.isArray(q.options) ? [...q.options] : (typeof q.options === 'object' ? Object.values(q.options) : []),
+                        topic: q.topic || "",
+                        source: q.source || ""
+                    }));
+                }
+                return {
+                    id: row.id,
+                    title: row.title,
+                    questions: quizQuestions,
+                    duration: row.time_limit,
+                    startTime: row.start_time,
+                    endTime: row.end_time,
+                    status: row.status
+                };
+            });
 
             // Cache in memory
             window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
@@ -2410,15 +2424,28 @@ async function revalidateCourseQuizzes(group) {
     try {
         const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
-            const mapped = records.map(row => ({
-                id: row.id,
-                title: row.title,
-                questions: row.questions || [],
-                duration: row.time_limit,
-                startTime: row.start_time,
-                endTime: row.end_time,
-                status: row.status
-            }));
+            const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
+            const mapped = records.map(row => {
+                let quizQuestions = row.questions || [];
+                if (!isAdmin) {
+                    quizQuestions = quizQuestions.map(q => ({
+                        id: q.id,
+                        text: q.text,
+                        options: Array.isArray(q.options) ? [...q.options] : (typeof q.options === 'object' ? Object.values(q.options) : []),
+                        topic: q.topic || "",
+                        source: q.source || ""
+                    }));
+                }
+                return {
+                    id: row.id,
+                    title: row.title,
+                    questions: quizQuestions,
+                    duration: row.time_limit,
+                    startTime: row.start_time,
+                    endTime: row.end_time,
+                    status: row.status
+                };
+            });
             state.courseQuizzes = mapped;
             window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
             window.HawariExamCacheMemory[group].quizzes = mapped;
@@ -3023,6 +3050,15 @@ function initAuthFlow() {
             const hashedInput = sha256Sync(password);
             
             if (user && user.password === hashedInput) {
+                const isUserAdmin = user.role === "admin" || user.role === "instructor" || user.is_admin === true;
+                if (!isUserAdmin && user.status !== "approved") {
+                    showToast("الحساب قيد الاعتماد", "حسابك لا يزال قيد المراجعة والموافقة من الإدارة.", "warning");
+                    showAuthStep("auth-pending-step");
+                    const pendingDisplay = document.getElementById("pending-email-display");
+                    if (pendingDisplay) pendingDisplay.innerText = currentAuthenticatingEmail;
+                    return;
+                }
+
                 // Show loading spinner
                 btnLoginSubmit.disabled = true;
                 btnLoginSubmit.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Logging in...`;
@@ -3279,6 +3315,19 @@ function showAuthOverlay() {
 function enterWorkspace() {
     if (!state.activeGroup) {
         switchCourseTrack();
+        return;
+    }
+    if (!state.currentUser) {
+        showLandingPage();
+        return;
+    }
+    const isUserAdmin = state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true;
+    if (!isUserAdmin && state.currentUser.status !== "approved") {
+        showToast("حساب غير معتمد", "حسابك لا يزال بانتظار موافقة الإدارة.", "warning");
+        showAuthOverlay();
+        showAuthStep("auth-pending-step");
+        const pendingDisplay = document.getElementById("pending-email-display");
+        if (pendingDisplay) pendingDisplay.innerText = state.currentUser.email;
         return;
     }
     // Load progress for this specific logged-in user
@@ -7741,12 +7790,12 @@ async function submitActiveQuiz() {
     let correctCount = 0;
     sourceQuestions.forEach((q, idx) => {
         const userAns = answers[idx];
-        if (userAns !== undefined && parseInt(userAns) === parseInt(q.correctOption)) {
+        if (userAns !== undefined && q.correctOption !== undefined && parseInt(userAns) === parseInt(q.correctOption)) {
             correctCount++;
         }
     });
 
-    let score = Math.round((correctCount / sourceQuestions.length) * 100);
+    let score = sourceQuestions.length > 0 ? Math.round((correctCount / sourceQuestions.length) * 100) : 0;
 
     // Secure Server-Side RPC grading verification
     try {
@@ -7767,10 +7816,13 @@ async function submitActiveQuiz() {
         });
         if (rpcRes && rpcRes.success && typeof rpcRes.score === "number") {
             score = rpcRes.score;
+            if (typeof rpcRes.correctCount === "number") {
+                correctCount = rpcRes.correctCount;
+            }
             console.log("[ExamGrading] Server-side verified score applied:", score);
         }
     } catch (rpcErr) {
-        console.warn("[ExamGrading] RPC server verification fallback to verified course grading:", rpcErr.message);
+        console.warn("[ExamGrading] RPC server verification fallback:", rpcErr.message);
     }
 
     const resultObj = {

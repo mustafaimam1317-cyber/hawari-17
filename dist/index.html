@@ -28,7 +28,23 @@
     </script>
 
 
-    <!-- Admin Tab Content Hide/Show CSS Rule -->
+    <!-- Instant Boot Engine: Eliminates white screen flash & renders Dashboard in 0ms for authenticated sessions -->
+    <script>
+        (function() {
+            try {
+                const group = localStorage.getItem("hawari_active_group") || "infection";
+                const rawUser = localStorage.getItem("hawari_current_user_" + group) || localStorage.getItem("hawari_current_user");
+                if (rawUser) {
+                    const u = JSON.parse(rawUser);
+                    if (u && u.email && u.status === "approved") {
+                        document.documentElement.classList.add("instant-boot-active");
+                    }
+                }
+            } catch(e) {}
+        })();
+    </script>
+
+    <!-- Admin Tab Content Hide/Show CSS Rule & DRM Protection Styles -->
     <style>
         .admin-tab-content {
             display: none !important;
@@ -36,9 +52,55 @@
         .admin-tab-content.active {
             display: block !important;
         }
+        html.instant-boot-active #course-selector-page {
+            display: none !important;
+        }
+        html.instant-boot-active #app-layout {
+            display: grid !important;
+        }
+        .drm-blurred {
+            filter: blur(18px) grayscale(90%) !important;
+            opacity: 0.15 !important;
+            pointer-events: none !important;
+            transition: filter 0.2s ease, opacity 0.2s ease;
+        }
+        #drm-shield-flash {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #090d16;
+            z-index: 999999;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.05s ease-in-out;
+        }
+        #drm-shield-flash.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .pen-size-btn {
+            padding: 2px 7px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            border-radius: 5px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .pen-size-btn:hover {
+            border-color: var(--primary-color);
+        }
+        .pen-size-btn.active {
+            background: var(--primary-color) !important;
+            border-color: var(--primary-color) !important;
+            color: #ffffff !important;
+            font-weight: 700 !important;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35) !important;
+        }
     </style>
 
-  <script type="module" crossorigin src="/assets/index-DsnPfT_9.js"></script>
+  <script type="module" crossorigin src="/assets/index-CtOCuLG8.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-Bm5VrwZa.css">
 </head>
 <body class="light-theme theme-clay">
@@ -798,18 +860,18 @@
                                 <input type="color" id="book-custom-color-picker" value="#2563eb" style="width: 24px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer;" title="Custom Color">
                                 <span class="toolbar-divider" style="height: 18px; width: 1px; background: var(--border-color); margin: 0 2px;"></span>
                                 
-                                <!-- Pen Thickness Selectors -->
-                                <div class="pen-size-selector" style="display: flex; gap: 3px; align-items: center;">
-                                    <button class="pen-size-btn" data-size="1" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); cursor: pointer;">1px</button>
-                                    <button class="pen-size-btn" data-size="2" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); cursor: pointer;">2px</button>
-                                    <button class="pen-size-btn active" data-size="3" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--primary-color); background: var(--primary-color); color: #fff; cursor: pointer;">3px</button>
-                                    <button class="pen-size-btn" data-size="5" style="padding: 2px 6px; font-size: 0.72rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); cursor: pointer;">5px</button>
+                                <!-- Pen & Highlighter Thickness Selectors -->
+                                <div class="pen-size-selector" id="book-stroke-size-container" style="display: flex; gap: 4px; align-items: center;">
+                                    <button class="pen-size-btn" data-size="1">1px</button>
+                                    <button class="pen-size-btn" data-size="2">2px</button>
+                                    <button class="pen-size-btn active" data-size="3">3px</button>
+                                    <button class="pen-size-btn" data-size="5">5px</button>
                                 </div>
                             </div>
 
                             <!-- Page Extras & Undo / Redo -->
                             <div class="toolbar-group" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                                <button id="btn-add-blank-page" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.78rem;" title="Choose & Insert Scratchpad Page Template"><i class="fa-solid fa-file-circle-plus"></i> + Scratch Page</button>
+                                <button id="btn-add-blank-page" class="btn btn-secondary btn-outline" style="padding: 4px 8px; font-size: 0.78rem;" title="إضافة صفحة بيضاء / مسودة نوت"><i class="fa-solid fa-file-circle-plus"></i> + صفحة بيضاء</button>
                                 <span class="toolbar-divider" style="height: 18px; width: 1px; background: var(--border-color); margin: 0 2px;"></span>
 
                                 <!-- Undo / Redo / Clear -->
@@ -1501,6 +1563,21 @@
                                 <div class="search-input-wrapper">
                                     <i class="fa-solid fa-magnifying-glass search-icon"></i>
                                     <input type="text" id="admin-users-search" placeholder="Search users by email...">
+                                </div>
+                            </div>
+                            <!-- Registered Accounts Summary KPI Cards -->
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 16px 0;">
+                                <div style="padding: 12px; background: var(--bg-primary); border-radius: 10px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 0.78rem; color: var(--text-muted);"><i class="fa-solid fa-users"></i> إجمالي الحسابات المسجلة</div>
+                                    <div id="admin-stat-total-users" style="font-size: 1.5rem; font-weight: 800; color: var(--primary-color); margin-top: 4px;">0</div>
+                                </div>
+                                <div style="padding: 12px; background: var(--bg-primary); border-radius: 10px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 0.78rem; color: var(--text-muted);"><i class="fa-solid fa-circle-check"></i> الحسابات المفعلة</div>
+                                    <div id="admin-stat-approved-users" style="font-size: 1.5rem; font-weight: 800; color: #10b981; margin-top: 4px;">0</div>
+                                </div>
+                                <div style="padding: 12px; background: var(--bg-primary); border-radius: 10px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 0.78rem; color: var(--text-muted);"><i class="fa-solid fa-clock-rotate-left"></i> بانتظار الاعتماد</div>
+                                    <div id="admin-stat-pending-users" style="font-size: 1.5rem; font-weight: 800; color: #f59e0b; margin-top: 4px;">0</div>
                                 </div>
                             </div>
 
@@ -2547,6 +2624,9 @@
         </div>
 
     </div>
+
+    <!-- DRM Content Shield Flash Element -->
+    <div id="drm-shield-flash" aria-hidden="true"></div>
 
     <!-- Main javascript file -->
 </body>

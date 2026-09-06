@@ -277,14 +277,12 @@ BEGIN
     FOR elem IN SELECT * FROM jsonb_array_elements(raw_questions)
     LOOP
         q_id := elem->>'id';
-        IF p_answers ? q_id THEN
-            total_count := total_count + 1;
-            user_ans := upper(trim(p_answers->>q_id));
-            correct_opt := upper(trim(elem->>'correctOption'));
+        total_count := total_count + 1;
+        user_ans := upper(trim(COALESCE(p_answers->>q_id, '')));
+        correct_opt := upper(trim(COALESCE(elem->>'correctOption', '')));
 
-            IF user_ans IS NOT NULL AND user_ans = correct_opt THEN
-                correct_count := correct_count + 1;
-            END IF;
+        IF user_ans != '' AND user_ans = correct_opt THEN
+            correct_count := correct_count + 1;
         END IF;
     END LOOP;
 
@@ -309,7 +307,8 @@ CREATE OR REPLACE FUNCTION public.submit_and_grade_exam(
     p_group text,
     p_exam_id text,
     p_answers jsonb,
-    p_email text
+    p_email text,
+    p_question_ids jsonb DEFAULT NULL
 )
 RETURNS jsonb AS $$
 DECLARE
@@ -323,26 +322,42 @@ DECLARE
     total_count integer := 0;
     score_pct integer := 0;
     results_array jsonb := '[]'::jsonb;
+    has_specific_ids boolean := false;
 BEGIN
+    -- Check if specific question IDs are provided
+    IF p_question_ids IS NOT NULL AND jsonb_typeof(p_question_ids) = 'array' AND jsonb_array_length(p_question_ids) > 0 THEN
+        has_specific_ids := true;
+    END IF;
+
+    -- 1. Try hawari_course_quizzes first if exam_id exists there
     SELECT questions INTO raw_questions
-    FROM public.hawari_global_questions
-    WHERE group_name = lower(trim(p_group))
+    FROM public.hawari_course_quizzes
+    WHERE id = p_exam_id
     LIMIT 1;
 
+    -- 2. If not found in course_quizzes, get from hawari_global_questions
+    IF raw_questions IS NULL OR jsonb_array_length(raw_questions) = 0 THEN
+        SELECT questions INTO raw_questions
+        FROM public.hawari_global_questions
+        WHERE group_name = lower(trim(p_group))
+        LIMIT 1;
+    END IF;
+
     IF raw_questions IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'error', 'Course questions not found');
+        RETURN jsonb_build_object('success', false, 'error', 'Exam questions not found');
     END IF;
 
     FOR elem IN SELECT * FROM jsonb_array_elements(raw_questions)
     LOOP
         q_id := elem->>'id';
-        IF p_answers ? q_id THEN
+        -- If specific question IDs are specified, only evaluate questions in that list
+        IF NOT has_specific_ids OR p_question_ids ? q_id THEN
             total_count := total_count + 1;
-            user_ans := upper(trim(p_answers->>q_id));
-            correct_opt := upper(trim(elem->>'correctOption'));
+            user_ans := upper(trim(COALESCE(p_answers->>q_id, '')));
+            correct_opt := upper(trim(COALESCE(elem->>'correctOption', '')));
             explanation_txt := elem->>'explanation';
 
-            IF user_ans IS NOT NULL AND user_ans = correct_opt THEN
+            IF user_ans != '' AND user_ans = correct_opt THEN
                 correct_count := correct_count + 1;
             END IF;
 
@@ -351,7 +366,7 @@ BEGIN
                 'userAns', user_ans,
                 'correctOption', correct_opt,
                 'explanation', explanation_txt,
-                'isCorrect', (user_ans IS NOT NULL AND user_ans = correct_opt)
+                'isCorrect', (user_ans != '' AND user_ans = correct_opt)
             );
         END IF;
     END LOOP;
@@ -377,4 +392,5 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 GRANT EXECUTE ON FUNCTION public.check_email_status(text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_sanitized_questions(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.verify_exam_answers(text, text, jsonb) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.submit_and_grade_exam(text, text, jsonb, text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.submit_and_grade_exam(text, text, jsonb, text, jsonb) TO anon, authenticated;
+

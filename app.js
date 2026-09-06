@@ -368,7 +368,8 @@ async function loadRealBookPdfDocument(bookFile) {
         const pdfDoc = await loadingTask.promise;
         console.log("[PDFViewer] REAL PDF loaded successfully! Total pages:", pdfDoc.numPages);
         bookState.pdfDoc = pdfDoc;
-        bookState.numPages = pdfDoc.numPages;
+        loadSavedBlankPages();
+        rebuildBookVirtualPages();
         return pdfDoc;
     } catch (e) {
         console.error("[PDFViewer] Error in loadRealBookPdfDocument:", e);
@@ -3622,7 +3623,8 @@ function renderPublicLeaderboard() {
         return;
     }
 
-    activeList.slice(0, 5).forEach((item, index) => {
+    // Public Leaderboard limited strictly to Top 3 to avoid DOM bloat & UI sluggishness
+    activeList.slice(0, 3).forEach((item, index) => {
         const div = document.createElement("div");
         div.style.cssText = "display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color);";
 
@@ -3639,13 +3641,11 @@ function renderPublicLeaderboard() {
 
         let rankBadge = "";
         if (index === 0) {
-            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #fcd34d, #f59e0b); color:#ffffff; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;"><i class="fa-solid fa-crown"></i></span>`;
+            rankBadge = `<span style="width:26px; height:26px; border-radius:50%; background:linear-gradient(135deg, #fcd34d, #f59e0b); color:#ffffff; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.85rem; box-shadow: 0 2px 6px rgba(245,158,11,0.4);" title="المركز الأول 🥇"><i class="fa-solid fa-crown"></i></span>`;
         } else if (index === 1) {
-            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #e2e8f0, #cbd5e1); color:#475569; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;">2</span>`;
-        } else if (index === 2) {
-            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg, #ffedd5, #fdba74); color:#c2410c; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;">3</span>`;
+            rankBadge = `<span style="width:26px; height:26px; border-radius:50%; background:linear-gradient(135deg, #e2e8f0, #94a3b8); color:#1e293b; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.85rem; box-shadow: 0 2px 6px rgba(148,163,184,0.3);" title="المركز الثاني 🥈">2</span>`;
         } else {
-            rankBadge = `<span style="width:24px; height:24px; border-radius:50%; border:1px solid var(--border-color); color:var(--text-muted); font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.8rem;">${index + 1}</span>`;
+            rankBadge = `<span style="width:26px; height:26px; border-radius:50%; background:linear-gradient(135deg, #fed7aa, #ea580c); color:#ffffff; font-weight:800; display:inline-flex; align-items:center; justify-content:center; font-size:0.85rem; box-shadow: 0 2px 6px rgba(234,88,12,0.3);" title="المركز الثالث 🥉">3</span>`;
         }
 
         div.innerHTML = `
@@ -4326,6 +4326,10 @@ async function submitActiveTest() {
     const group = state.activeGroup || "infection";
     const userEmail = (state.currentUser && state.currentUser.email) ? state.currentUser.email : "";
 
+    const examQuestionIds = activeTest.isReportTask 
+        ? (activeTest.rtQuestions || []).map(q => q.id) 
+        : (state.tests.find(t => t.id === activeTest.testId)?.questionIds || []);
+
     // 1. Submit answers to Server-Side Grading RPC
     let gradeData = null;
     try {
@@ -4335,7 +4339,8 @@ async function submitActiveTest() {
                 p_group: group,
                 p_exam_id: activeTest.isReportTask ? activeTest.rtId : activeTest.testId,
                 p_answers: activeTest.selectedAnswers || {},
-                p_email: userEmail
+                p_email: userEmail,
+                p_question_ids: examQuestionIds
             })
         });
         if (gradeRes && (gradeRes.success || gradeRes.score !== undefined)) {
@@ -4348,10 +4353,15 @@ async function submitActiveTest() {
     if (activeTest.isReportTask) {
         const rtId = activeTest.rtId;
         const rtQuestions = activeTest.rtQuestions || [];
+        const totalQCount = rtQuestions.length;
         
         let score = 0;
         if (gradeData && gradeData.score !== undefined) {
-            score = gradeData.score;
+            if (typeof gradeData.correctCount === "number" && totalQCount > 0) {
+                score = Math.round((gradeData.correctCount / totalQCount) * 100);
+            } else {
+                score = gradeData.score;
+            }
             if (Array.isArray(gradeData.results)) {
                 gradeData.results.forEach(res => {
                     const q = rtQuestions.find(rq => rq.id === res.questionId);
@@ -4365,11 +4375,11 @@ async function submitActiveTest() {
             let correctCount = 0;
             rtQuestions.forEach(q => {
                 const userAns = activeTest.selectedAnswers[q.id];
-                if (q.correctOption && userAns === q.correctOption) {
+                if (userAns !== undefined && q.correctOption && String(userAns).trim().toUpperCase() === String(q.correctOption).trim().toUpperCase()) {
                     correctCount++;
                 }
             });
-            score = rtQuestions.length > 0 ? Math.round((correctCount / rtQuestions.length) * 100) : 0;
+            score = totalQCount > 0 ? Math.round((correctCount / totalQCount) * 100) : 0;
         }
         
         // Save to user progress record
@@ -4403,8 +4413,13 @@ async function submitActiveTest() {
     const testObj = state.tests.find(t => t.id === activeTest.testId);
     if (testObj) {
         let score = 0;
+        const totalTestQ = (testObj.questionIds || []).length;
         if (gradeData && gradeData.score !== undefined) {
-            score = gradeData.score;
+            if (typeof gradeData.correctCount === "number" && totalTestQ > 0) {
+                score = Math.round((gradeData.correctCount / totalTestQ) * 100);
+            } else {
+                score = gradeData.score;
+            }
             if (Array.isArray(gradeData.results)) {
                 gradeData.results.forEach(res => {
                     const qObj = state.questions.find(q => q.id === res.questionId);
@@ -4431,7 +4446,7 @@ async function submitActiveTest() {
                     }
                 }
             });
-            score = testObj.questionIds.length > 0 ? Math.round((correctCount / testObj.questionIds.length) * 100) : 0;
+            score = totalTestQ > 0 ? Math.round((correctCount / totalTestQ) * 100) : 0;
         }
 
         testObj.score = score;
@@ -5331,9 +5346,15 @@ function renderAdminApprovalsTab() {
     const noPendingAlert = document.getElementById("no-pending-users-alert");
     const noApprovedAlert = document.getElementById("no-approved-users-alert");
     
-    const pendingBadge = document.getElementById("admin-pending-badge");
-    
     if (!pendingBody || !approvedBody) return;
+
+    // Update Users Registry KPI Metric Cards
+    const totalCountEl = document.getElementById("admin-stat-total-users");
+    const approvedCountEl = document.getElementById("admin-stat-approved-users");
+    const pendingCountEl = document.getElementById("admin-stat-pending-users");
+    if (totalCountEl) totalCountEl.innerText = (state.users || []).length;
+    if (approvedCountEl) approvedCountEl.innerText = (state.users || []).filter(u => u.status === "approved").length;
+    if (pendingCountEl) pendingCountEl.innerText = (state.users || []).filter(u => u.status !== "approved").length;
 
     // Search query
     const searchInput = document.getElementById("admin-users-search");
@@ -7295,11 +7316,21 @@ function renderCourseQuizzesStudentView() {
                 : `<div class="rt-status-indicator rt-status-completed"><i class="fa-solid fa-circle-check"></i> Submitted</div>`;
             
             scoreHtml = `<div class="rt-score-display">${result.score}%</div>`;
-            buttonHtml = `
-                <button class="btn btn-secondary btn-block" disabled>
-                    <i class="fa-solid fa-lock"></i> Submitted (Locked until Quiz Ends)
-                </button>
-            `;
+            const end = new Date(qz.endTime).getTime();
+            if (now < end) {
+                const endFormatted = new Date(qz.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                buttonHtml = `
+                    <button class="btn btn-secondary btn-block" disabled style="cursor: not-allowed; opacity: 0.75;" title="ستتاح المراجعة التفصيلية بعد انتهاء موعد الامتحان لجميع الطلاب في ${endFormatted}">
+                        <i class="fa-solid fa-lock"></i> مراجعة الإجابات مغلقة حتى (${endFormatted})
+                    </button>
+                `;
+            } else {
+                buttonHtml = `
+                    <button class="btn btn-secondary btn-block" onclick="reviewCourseQuizStudent('${qz.id}')">
+                        <i class="fa-solid fa-chart-pie"></i> مراجعة الإجابات النموذجية
+                    </button>
+                `;
+            }
         } else if (now < start) {
             // Scheduled/Upcoming Quiz
             statusHtml = `<div class="rt-status-indicator rt-status-unsolved" style="background-color: var(--border-color); color: var(--text-muted);"><i class="fa-regular fa-calendar"></i> Upcoming</div>`;
@@ -7814,10 +7845,12 @@ async function submitActiveQuiz() {
                 p_answers: answersPayload
             })
         });
-        if (rpcRes && rpcRes.success && typeof rpcRes.score === "number") {
-            score = rpcRes.score;
-            if (typeof rpcRes.correctCount === "number") {
+        if (rpcRes && rpcRes.success) {
+            if (typeof rpcRes.correctCount === "number" && sourceQuestions.length > 0) {
                 correctCount = rpcRes.correctCount;
+                score = Math.round((correctCount / sourceQuestions.length) * 100);
+            } else if (typeof rpcRes.score === "number") {
+                score = rpcRes.score;
             }
             console.log("[ExamGrading] Server-side verified score applied:", score);
         }
@@ -7901,6 +7934,14 @@ async function submitQuizCheatZero(quizId, email) {
 window.reviewCourseQuizStudent = function(quizId) {
     const qz = state.courseQuizzes.find(q => q.id === quizId);
     if (!qz) return;
+
+    const now = new Date().getTime();
+    const end = new Date(qz.endTime).getTime();
+    if (qz.status !== 'moved_to_reports' && !qz.isPractice && now < end && state.currentUser && state.currentUser.role !== 'admin') {
+        const endFormatted = new Date(qz.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        showToast("مراجعة الاختبار مغلقة", `عفواً، مراجعة الأسئلة والإجابات النموذجية ستتاح بعد انتهاء وقت الاختبار للجميع في الساعة ${endFormatted}`, "warning");
+        return;
+    }
 
     const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === state.currentUser.email);
     if (!result) return;
@@ -10202,15 +10243,221 @@ let bookState = {
     fitMode: "normal", // "normal" | "fit-width" | "fit-page"
     activeTool: "pan", // "pan"|"select"|"lasso"|"pen"|"highlighter"|"text"|"underline"|"strikethrough"|"circle"|"rectangle"|"arrow"|"laser"|"eraser"
     activeColor: "#2563eb",
-    strokeSize: 4,
+    strokeSize: 2,
+    penSize: 2,
+    highlighterSize: 18,
     isDrawing: false,
     annotations: {}, // { [pageNumber]: [annotationObj1, ...] }
     historyStack: {}, // { [pageNumber]: { undo: [], redo: [] } }
     bookmarks: [], // array of page numbers e.g. [1, 5, 12]
     extraPages: {}, // { [pageNumber]: 'blank' | 'lined' }
+    blankPages: [], // [ { id, insertAfterPdfPage, template, createdAt } ] (Max 20 per book per user)
+    virtualPageMap: [], // list of virtual pages { type: 'pdf'|'blank', ... }
     activeBookFile: null, // Dynamic active book object. NO DEFAULT 120-page dummy fallback!
     userProgressMap: {}
 };
+
+function getBlankPagesStorageKey() {
+    const email = (state.currentUser && state.currentUser.email) ? state.currentUser.email.trim().toLowerCase() : "anon";
+    const bookId = (bookState.activeBookFile && (bookState.activeBookFile.id || bookState.activeBookFile.file_title)) || "default_book";
+    return `hawari_blank_pages_${state.activeGroup || 'infection'}_${email}_${bookId}`;
+}
+
+function loadSavedBlankPages() {
+    try {
+        const raw = localStorage.getItem(getBlankPagesStorageKey());
+        if (raw) {
+            const list = JSON.parse(raw);
+            if (Array.isArray(list)) {
+                bookState.blankPages = list;
+                return;
+            }
+        }
+        bookState.blankPages = [];
+    } catch(e) {
+        bookState.blankPages = [];
+    }
+}
+
+function saveBlankPagesToStorage() {
+    try {
+        localStorage.setItem(getBlankPagesStorageKey(), JSON.stringify(bookState.blankPages || []));
+    } catch(e) {}
+}
+
+function rebuildBookVirtualPages() {
+    if (!bookState.pdfDoc) {
+        bookState.virtualPageMap = [];
+        return;
+    }
+    const realCount = bookState.pdfDoc.numPages || 0;
+    const blankList = Array.isArray(bookState.blankPages) ? bookState.blankPages : [];
+    
+    const pages = [];
+    for (let p = 1; p <= realCount; p++) {
+        pages.push({ type: "pdf", pdfPage: p });
+        blankList.filter(b => b.insertAfterPdfPage === p).forEach(b => {
+            pages.push({ type: "blank", template: b.template || "lined", id: b.id, insertAfterPdfPage: p });
+        });
+    }
+    blankList.filter(b => b.insertAfterPdfPage > realCount || b.insertAfterPdfPage === 0).forEach(b => {
+        pages.push({ type: "blank", template: b.template || "lined", id: b.id, insertAfterPdfPage: realCount });
+    });
+
+    bookState.virtualPageMap = pages;
+    bookState.numPages = pages.length;
+}
+
+function renderBlankScratchpadCanvas(blankInfo) {
+    const pdfCanvas = document.getElementById("book-pdf-canvas");
+    const animCanvas = document.getElementById("book-annotation-canvas");
+    const stack = document.getElementById("book-canvas-stack");
+    if (!pdfCanvas || !animCanvas || !stack) return;
+
+    const baseWidth = 794;
+    const baseHeight = 1123;
+    const effectiveZoom = bookState.zoom || 1.0;
+    const dpr = window.devicePixelRatio || 1.5;
+
+    const displayWidth = Math.round(baseWidth * effectiveZoom);
+    const displayHeight = Math.round(baseHeight * effectiveZoom);
+
+    stack.style.width = displayWidth + "px";
+    stack.style.height = displayHeight + "px";
+
+    pdfCanvas.width = displayWidth * dpr;
+    pdfCanvas.height = displayHeight * dpr;
+    pdfCanvas.style.width = displayWidth + "px";
+    pdfCanvas.style.height = displayHeight + "px";
+
+    animCanvas.width = displayWidth * dpr;
+    animCanvas.height = displayHeight * dpr;
+    animCanvas.style.width = displayWidth + "px";
+    animCanvas.style.height = displayHeight + "px";
+
+    const ctx = pdfCanvas.getContext("2d");
+    ctx.save();
+    ctx.scale(effectiveZoom * dpr, effectiveZoom * dpr);
+
+    // 1. Clean Paper Background
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, baseWidth, baseHeight);
+
+    // 2. Paper Header & Info
+    ctx.fillStyle = "#475569";
+    ctx.font = "bold 13px Outfit, sans-serif";
+    ctx.fillText("HAWARI MEDICAL COURSE NOTES — مسودة دراسية خاصة", 40, 36);
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "11px Inter, sans-serif";
+    ctx.fillText(`Template: ${(blankInfo.template || 'lined').toUpperCase()} | Page ${bookState.currentPage} of ${bookState.numPages}`, baseWidth - 280, 36);
+
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(40, 48);
+    ctx.lineTo(baseWidth - 40, 48);
+    ctx.stroke();
+
+    const template = blankInfo.template || "lined";
+    if (template === "lined" || template === "ruled") {
+        ctx.strokeStyle = "#e2e8f0";
+        ctx.lineWidth = 0.8;
+        for (let y = 80; y < baseHeight - 40; y += 32) {
+            ctx.beginPath();
+            ctx.moveTo(40, y);
+            ctx.lineTo(baseWidth - 40, y);
+            ctx.stroke();
+        }
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.35)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(90, 48);
+        ctx.lineTo(90, baseHeight - 30);
+        ctx.stroke();
+    } else if (template === "grid") {
+        ctx.strokeStyle = "rgba(226, 232, 240, 0.75)";
+        ctx.lineWidth = 0.6;
+        for (let x = 40; x < baseWidth - 40; x += 24) {
+            ctx.beginPath();
+            ctx.moveTo(x, 50);
+            ctx.lineTo(x, baseHeight - 30);
+            ctx.stroke();
+        }
+        for (let y = 60; y < baseHeight - 30; y += 24) {
+            ctx.beginPath();
+            ctx.moveTo(40, y);
+            ctx.lineTo(baseWidth - 40, y);
+            ctx.stroke();
+        }
+    } else if (template === "dotted") {
+        ctx.fillStyle = "#cbd5e1";
+        for (let x = 50; x < baseWidth - 40; x += 26) {
+            for (let y = 70; y < baseHeight - 30; y += 26) {
+                ctx.beginPath();
+                ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    } else if (template === "cornell") {
+        ctx.strokeStyle = "#94a3b8";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(220, 48);
+        ctx.lineTo(220, baseHeight - 160);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(40, baseHeight - 160);
+        ctx.lineTo(baseWidth - 40, baseHeight - 160);
+        ctx.stroke();
+
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "bold 11px Outfit, sans-serif";
+        ctx.fillText("CUES / KEYWORDS", 50, 70);
+        ctx.fillText("NOTES & DETAILS", 240, 70);
+        ctx.fillText("SUMMARY", 50, baseHeight - 140);
+
+        ctx.strokeStyle = "#e2e8f0";
+        ctx.lineWidth = 0.8;
+        for (let y = 90; y < baseHeight - 170; y += 30) {
+            ctx.beginPath();
+            ctx.moveTo(220, y);
+            ctx.lineTo(baseWidth - 40, y);
+            ctx.stroke();
+        }
+    }
+
+    ctx.restore();
+}
+
+function updateStrokeSizeButtons(tool) {
+    const container = document.getElementById("book-stroke-size-container");
+    if (!container) return;
+
+    const isHighlighter = tool === "highlighter";
+    const sizes = isHighlighter ? [12, 18, 24, 32] : [1, 2, 3, 5];
+    const currentSize = isHighlighter ? (bookState.highlighterSize || 18) : (bookState.penSize || 2);
+
+    container.innerHTML = "";
+    sizes.forEach(size => {
+        const btn = document.createElement("button");
+        btn.className = "pen-size-btn" + (size === currentSize ? " active" : "");
+        btn.dataset.size = size;
+        btn.innerText = `${size}px`;
+        btn.onclick = () => {
+            container.querySelectorAll(".pen-size-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            if (isHighlighter) {
+                bookState.highlighterSize = size;
+                bookState.strokeSize = size;
+            } else {
+                bookState.penSize = size;
+                bookState.strokeSize = size;
+            }
+        };
+        container.appendChild(btn);
+    });
+}
 
 // ================= CANVAS ANNOTATOR HISTORY & UNDO / REDO ENGINE =================
 function saveHistoryState(page) {
@@ -10433,6 +10680,7 @@ window.revokeStudentBookAccess = async function(email) {
 function initBookDrmProtection() {
     const bookView = document.getElementById("hawari-book-view");
     const viewport = document.getElementById("book-canvas-viewport");
+    const stack = document.getElementById("book-canvas-stack");
     if (!bookView || bookView.dataset.drmBound) return;
     bookView.dataset.drmBound = "true";
 
@@ -10454,7 +10702,7 @@ function initBookDrmProtection() {
         ) {
             e.preventDefault();
             e.stopPropagation();
-            showToast("Action Blocked", "Printing, saving, or inspecting Hawari Book content is disabled.", "danger");
+            showToast("حماية المحتوى", "نسخ أو طباعة كتاب Hawari غير متاح لحماية حقوق الطبع.", "warning");
             return false;
         }
 
@@ -10471,19 +10719,48 @@ function initBookDrmProtection() {
         }
     });
 
-    // 3. Screen Protection Auto-Blur on Window Focus Loss
-    window.addEventListener("blur", () => {
-        if (state.activeView === "hawari-book" && viewport) {
-            viewport.classList.add("canvas-blurred");
-        }
-    });
-    window.addEventListener("focus", () => {
-        if (viewport) {
-            viewport.classList.remove("canvas-blurred");
+    // 3. PrintScreen Keyup Interceptor & Flash DRM Shield
+    window.addEventListener("keyup", (e) => {
+        if (e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44) {
+            const viewer = document.getElementById("book-viewer-workspace");
+            if (viewer && !viewer.classList.contains("hidden")) {
+                const flash = document.getElementById("drm-shield-flash");
+                if (flash) {
+                    flash.classList.add("active");
+                    setTimeout(() => flash.classList.remove("active"), 800);
+                }
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText("Hawari Clinical Course - Protected Content").catch(() => {});
+                }
+                showToast("حماية المحتوى", "تم منع لقطة الشاشة لحماية حقوق كتاب Hawari.", "warning");
+            }
         }
     });
 
-    // 4. Populate Floating Student Email Watermark
+    // 4. Screen Protection Auto-Blur on Window Focus Loss & Visibility Change (Screen Snipping Tool Blocker)
+    const applyBlur = () => {
+        const viewer = document.getElementById("book-viewer-workspace");
+        if (viewer && !viewer.classList.contains("hidden")) {
+            if (viewport) viewport.classList.add("drm-blurred");
+            if (stack) stack.classList.add("drm-blurred");
+        }
+    };
+    const removeBlur = () => {
+        if (viewport) viewport.classList.remove("drm-blurred");
+        if (stack) stack.classList.remove("drm-blurred");
+    };
+
+    window.addEventListener("blur", applyBlur);
+    window.addEventListener("focus", removeBlur);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+            applyBlur();
+        } else {
+            removeBlur();
+        }
+    });
+
+    // 5. Populate Floating Student Email Watermark
     updateBookWatermark();
 }
 
@@ -10948,6 +11225,8 @@ window.openBook = async function(bookId) {
     bookState.numPages = book.total_pages || 1;
     bookState.annotations = {}; // CLEAR memory to prevent annotations bleeding between books!
     bookState.pdfDoc = null; // Clear previous document!
+    loadSavedBlankPages();
+    rebuildBookVirtualPages();
 
     // Fetch user progress for this book
     const lastPage = await fetchUserBookProgress(bookId);
@@ -11388,17 +11667,8 @@ function bindBookToolbarEvents() {
         btnDeletePdf.onclick = deleteAdminBookPdfFile;
     }
 
-    // Pen Stroke Size Buttons (1px, 2px, 3px, 5px)
-    document.querySelectorAll(".pen-size-btn").forEach(btn => {
-        if (!btn.dataset.bound) {
-            btn.dataset.bound = "true";
-            btn.onclick = () => {
-                document.querySelectorAll(".pen-size-btn").forEach(b => b.classList.remove("active"));
-                btn.classList.add("active");
-                bookState.strokeSize = parseInt(btn.dataset.size || "3");
-            };
-        }
-    });
+    // Pen & Highlighter Stroke Size Buttons (Pen: 1, 2, 3, 5px | Highlighter: 12, 18, 24, 32px)
+    updateStrokeSizeButtons(bookState.activeTool || "pen");
 
     // Drawer Toggle
     if (btnDrawer && !btnDrawer.dataset.bound) {
@@ -11560,6 +11830,7 @@ function bindBookToolbarEvents() {
                 bookState.activeTool = toolId;
                 console.log("[BookTools] Active tool set to:", toolId);
                 updateBookViewportCursor(toolId);
+                updateStrokeSizeButtons(toolId);
             };
         }
     });
@@ -11624,9 +11895,19 @@ function bindBookToolbarEvents() {
     if (btnAddBlank && !btnAddBlank.dataset.bound) {
         btnAddBlank.dataset.bound = "true";
         btnAddBlank.onclick = () => {
+            const accessInfo = getBookAccessLevel(state.currentUser);
+            if (!accessInfo.isFullGrant) {
+                showToast("صلاحية محدودة", "ميزة إضافة الصفحات البيضاء متاحة فقط للحسابات ذات الوصول الكامل (Full Access).", "warning");
+                return;
+            }
+            const currentBlankCount = (bookState.blankPages || []).length;
+            if (currentBlankCount >= 20) {
+                showToast("الحد الأقصى", "لقد بلغت الحد الأقصى للصفحات البيضاء المسموح بها لهذا الكتاب (20 صفحة).", "warning");
+                return;
+            }
             const modal = document.getElementById("modal-scratchpad-template");
             const lblPage = document.getElementById("scratchpad-target-page-num");
-            if (lblPage) lblPage.innerText = bookState.currentPage;
+            if (lblPage) lblPage.innerText = `${bookState.currentPage} (المتبقي: ${20 - currentBlankCount} صفحة)`;
             if (modal) modal.classList.remove("hidden");
         };
     }
@@ -11844,7 +12125,18 @@ window.selectScratchpadTemplate = function(type, el) {
 };
 
 window.applySelectedScratchpadTemplate = function() {
-    const template = bookState.selectedScratchpadTemplate || "ruled";
+    const accessInfo = getBookAccessLevel(state.currentUser);
+    if (!accessInfo.isFullGrant) {
+        showToast("صلاحية محدودة", "ميزة إضافة الصفحات البيضاء متاحة فقط للحسابات ذات الوصول الكامل (Full Access).", "warning");
+        return;
+    }
+    if (!Array.isArray(bookState.blankPages)) bookState.blankPages = [];
+    if (bookState.blankPages.length >= 20) {
+        showToast("الحد الأقصى", "لقد بلغت الحد الأقصى للصفحات البيضاء المسموح بها لهذا الكتاب (20 صفحة).", "warning");
+        return;
+    }
+
+    const template = bookState.selectedScratchpadTemplate || "blank";
     const modal = document.getElementById("modal-scratchpad-template");
     if (modal) modal.classList.add("hidden");
 
@@ -11856,12 +12148,58 @@ window.applySelectedScratchpadTemplate = function() {
         cornell: "cornell"
     };
 
-    const mappedType = templateMap[template] || "lined";
-    const page = bookState.currentPage;
-    bookState.extraPages[page] = mappedType;
+    const mappedType = templateMap[template] || "blank";
+
+    // Determine insertion anchor: after current PDF page
+    let insertAfter = 1;
+    if (bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1]) {
+        const cur = bookState.virtualPageMap[bookState.currentPage - 1];
+        insertAfter = cur.type === "pdf" ? cur.pdfPage : (cur.insertAfterPdfPage || 1);
+    } else {
+        insertAfter = bookState.currentPage || 1;
+    }
+
+    const newBlank = {
+        id: "bp_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
+        insertAfterPdfPage: insertAfter,
+        template: mappedType,
+        createdAt: new Date().toISOString()
+    };
+
+    bookState.blankPages.push(newBlank);
+    saveBlankPagesToStorage();
+    rebuildBookVirtualPages();
+
+    // Navigate to the newly created blank page
+    const newIdx = bookState.virtualPageMap.findIndex(p => p.id === newBlank.id);
+    if (newIdx > -1) {
+        bookState.currentPage = newIdx + 1;
+    }
 
     redrawBookCanvas();
-    showToast("Template Applied", `Applied ${template.toUpperCase()} scratchpad template to Page ${page}`, "success");
+    showToast("تمت إضافة صفحة بيضاء", `تم إدراج صفحة بيضاء (${template.toUpperCase()}) بنجاح. (${bookState.blankPages.length}/20 صفحة مستخدمة)`, "success");
+};
+
+window.deleteCurrentBlankPage = function() {
+    const cur = bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1];
+    if (!cur || cur.type !== "blank") {
+        showToast("تنبيه", "هذه صفحة أصلية من الكتاب ولا يمكن حذفها.", "warning");
+        return;
+    }
+    if (confirm("هل تريد بالتأكيد حذف هذه الصفحة البيضاء وجميع ملاحظاتها؟")) {
+        const idToDelete = cur.id;
+        bookState.blankPages = (bookState.blankPages || []).filter(b => b.id !== idToDelete);
+        saveBlankPagesToStorage();
+        if (bookState.annotations) {
+            delete bookState.annotations[bookState.currentPage];
+        }
+        rebuildBookVirtualPages();
+        if (bookState.currentPage > bookState.numPages) {
+            bookState.currentPage = Math.max(1, bookState.numPages);
+        }
+        redrawBookCanvas();
+        showToast("تم الحذف", "تم حذف الصفحة البيضاء بنجاح.", "info");
+    }
 };
 
 // Vector Sticker Stamping
@@ -12141,6 +12479,7 @@ function initBookCanvasDrawing() {
     };
 
     const startDraw = (e) => {
+        if (window._isPinching || (e.pointerType === "touch" && !e.isPrimary)) return;
         const tool = bookState.activeTool || "pen";
         if (tool === "pan") return;
 
@@ -12167,7 +12506,9 @@ function initBookCanvasDrawing() {
         saveHistoryState(page);
 
         if (tool === "pen" || tool === "highlighter" || tool === "eraser") {
-            const currentSize = tool === "highlighter" ? Math.max(12, (bookState.strokeSize || 3) * 5) : (tool === "eraser" ? 24 : (bookState.strokeSize || 3));
+            const currentSize = tool === "highlighter" 
+                ? (bookState.highlighterSize || 18) 
+                : (tool === "eraser" ? 24 : (bookState.penSize || bookState.strokeSize || 2));
             currentStroke = {
                 type: tool,
                 color: bookState.activeColor || "#2563eb",
@@ -12180,7 +12521,7 @@ function initBookCanvasDrawing() {
     };
 
     const drawMove = (e) => {
-        if (!isDrawing) return;
+        if (window._isPinching || !isDrawing) return;
         const tool = bookState.activeTool || "pen";
         if (tool === "pan") return;
 
@@ -12210,7 +12551,7 @@ function initBookCanvasDrawing() {
                 if (tool === "highlighter") {
                     ctx.strokeStyle = currentStroke.color || "#fde047";
                     ctx.globalAlpha = 0.4;
-                    ctx.lineWidth = currentStroke.size || Math.max(12, (bookState.strokeSize || 3) * 5);
+                    ctx.lineWidth = currentStroke.size || bookState.highlighterSize || 18;
                     ctx.lineCap = "square";
                 } else if (tool === "eraser") {
                     ctx.globalCompositeOperation = "destination-out";
@@ -12219,7 +12560,7 @@ function initBookCanvasDrawing() {
                 } else {
                     ctx.strokeStyle = currentStroke.color || "#2563eb";
                     ctx.globalAlpha = 1.0;
-                    ctx.lineWidth = currentStroke.size || bookState.strokeSize || 3;
+                    ctx.lineWidth = currentStroke.size || bookState.penSize || bookState.strokeSize || 2;
                     ctx.lineCap = "round";
                     ctx.lineJoin = "round";
                 }
@@ -12330,6 +12671,71 @@ function initBookCanvasDrawing() {
     animCanvas.addEventListener("mousedown", startDraw);
     animCanvas.addEventListener("mousemove", drawMove);
     animCanvas.addEventListener("mouseup", stopDraw);
+
+    // Multi-Touch Pinch-to-Zoom Gesture Engine (Mobile & Tablet touchscreens)
+    const stack = document.getElementById("book-canvas-stack");
+    if (stack && !stack.dataset.pinchBound) {
+        stack.dataset.pinchBound = "true";
+        let pinchStartDist = 0;
+        let pinchStartZoom = 1.0;
+
+        stack.addEventListener("touchstart", (e) => {
+            if (e.touches && e.touches.length === 2) {
+                window._isPinching = true;
+                isDrawing = false;
+                currentStroke = null;
+                const page = bookState.currentPage;
+                if (bookState.annotations[page] && bookState.annotations[page].length > 0) {
+                    const last = bookState.annotations[page][bookState.annotations[page].length - 1];
+                    if (last && last.points && last.points.length <= 2) {
+                        bookState.annotations[page].pop();
+                        redrawCurrentPageAnnotations();
+                    }
+                }
+                pinchStartDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                pinchStartZoom = bookState.zoom || 1.0;
+            }
+        }, { passive: true });
+
+        stack.addEventListener("touchmove", (e) => {
+            if (e.touches && e.touches.length === 2 && pinchStartDist > 0) {
+                if (e.cancelable) e.preventDefault();
+                const dist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                const scale = dist / pinchStartDist;
+                let targetZoom = Math.min(3.0, Math.max(0.5, Math.round(pinchStartZoom * scale * 20) / 20));
+                if (Math.abs(targetZoom - bookState.zoom) >= 0.04) {
+                    bookState.zoom = targetZoom;
+                    bookState.userCustomZoom = true;
+                    const zoomPctEl = document.getElementById("book-zoom-percentage");
+                    if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
+                    
+                    if (window._pinchDebounce) clearTimeout(window._pinchDebounce);
+                    window._pinchDebounce = setTimeout(() => {
+                        redrawBookCanvas();
+                    }, 40);
+                }
+            }
+        }, { passive: false });
+
+        stack.addEventListener("touchend", (e) => {
+            if ((!e.touches || e.touches.length < 2) && window._isPinching) {
+                window._isPinching = false;
+                pinchStartDist = 0;
+                redrawBookCanvas();
+            }
+        });
+
+        stack.addEventListener("touchcancel", () => {
+            window._isPinching = false;
+            pinchStartDist = 0;
+        });
+    }
 }
 
 function getAnnotationBBox(a) {
@@ -12790,16 +13196,28 @@ async function redrawBookCanvas() {
     if (!bookState.pdfDoc && bookState.activeBookFile) {
         await loadRealBookPdfDocument(bookState.activeBookFile);
         if (totalPagesEl && bookState.pdfDoc) {
-            totalPagesEl.innerText = bookState.pdfDoc.numPages;
+            rebuildBookVirtualPages();
+            totalPagesEl.innerText = bookState.numPages;
         }
         if (pageNumInput && bookState.pdfDoc) {
-            pageNumInput.max = bookState.pdfDoc.numPages;
+            pageNumInput.max = bookState.numPages;
         }
     }
 
     if (bookState.pdfDoc) {
         try {
-            const pageNum = Math.max(1, Math.min(bookState.currentPage, bookState.pdfDoc.numPages));
+            rebuildBookVirtualPages();
+            if (totalPagesEl) totalPagesEl.innerText = bookState.numPages;
+            if (pageNumInput) pageNumInput.max = bookState.numPages;
+
+            const curVirtual = bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1];
+            if (curVirtual && curVirtual.type === "blank") {
+                renderBlankScratchpadCanvas(curVirtual);
+                redrawCurrentPageAnnotations();
+                return;
+            }
+
+            const pageNum = curVirtual ? curVirtual.pdfPage : Math.max(1, Math.min(bookState.currentPage, bookState.pdfDoc.numPages));
             
             // SECURITY GUARD: If page exceeds maxPage for normal student, DO NOT render PDF page
             if (pageNum > maxPage) {

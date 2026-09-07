@@ -2832,7 +2832,7 @@ async function syncUsersWithCloud() {
     } else if (isAdmin) {
         // Admin user registry optimization: fetch only metadata columns for the student list
         // Saves 5+ MB of bandwidth per admin sync!
-        queryPath += `&select=id,email,password_hash,role,status,date_registered,display_name,last_updated`;
+        queryPath += `&select=email,password_hash,role,status,date_registered,display_name,last_updated`;
 
         // If admin has an email, fetch admin's own personal row with full questions/tests
         if (targetEmail) {

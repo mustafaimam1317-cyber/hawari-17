@@ -27,6 +27,10 @@ export async function onRequest(context) {
     if (!targetPath.startsWith("/")) {
         targetPath = "/" + targetPath;
     }
+    // Auto-prefix /rest/v1 for table and rpc endpoints if not already prefixed
+    if (!targetPath.startsWith("/rest/v1") && !targetPath.startsWith("/auth/v1") && !targetPath.startsWith("/storage/v1")) {
+        targetPath = "/rest/v1" + targetPath;
+    }
 
     const originUrl = new URL(targetPath + url.search, SUPABASE_ORIGIN);
 
@@ -177,8 +181,54 @@ export async function onRequest(context) {
         return originResponse;
     }
 
-    // 4. Book Files & Announcements (GET -> Edge Cached for 1 hour)
-    if ((isBookFiles || isAnnouncements) && isGet) {
+    // 4. Announcements (GET -> Edge Cached for 60 seconds with background revalidation)
+    if (isAnnouncements && isGet) {
+        const cache = caches.default;
+        const cacheKey = new Request(originUrl.toString(), { method: "GET" });
+
+        if (!url.searchParams.has("purge")) {
+            const cachedResponse = await cache.match(cacheKey);
+            if (cachedResponse) {
+                const hitHeaders = new Headers(cachedResponse.headers);
+                hitHeaders.set("CF-Cache-Status", "HIT");
+                hitHeaders.set("X-Hawari-Edge", "PAGES-CACHE-HIT");
+                hitHeaders.set("Access-Control-Allow-Origin", "*");
+                return new Response(cachedResponse.body, {
+                    status: cachedResponse.status,
+                    headers: hitHeaders
+                });
+            }
+        }
+
+        const originResponse = await fetch(new Request(originUrl.toString(), {
+            method: "GET",
+            headers: forwardHeaders
+        }));
+
+        if (originResponse.ok) {
+            const responseData = await originResponse.text();
+            const cacheHeaders = new Headers(originResponse.headers);
+            cacheHeaders.set("Access-Control-Allow-Origin", "*");
+            cacheHeaders.set("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=30");
+            cacheHeaders.set("CF-Cache-Status", "MISS");
+            cacheHeaders.set("X-Hawari-Edge", "PAGES-CACHE-WRITE");
+
+            const responseToCache = new Response(responseData, {
+                status: originResponse.status,
+                headers: cacheHeaders
+            });
+
+            if (waitUntil) {
+                waitUntil(cache.put(cacheKey, responseToCache.clone()));
+            }
+            return responseToCache;
+        }
+
+        return originResponse;
+    }
+
+    // 5. Book Files (GET -> Edge Cached for 1 hour)
+    if (isBookFiles && isGet) {
         const cache = caches.default;
         const cacheKey = new Request(originUrl.toString(), { method: "GET" });
 

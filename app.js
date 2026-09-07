@@ -715,12 +715,12 @@ function debouncedSync() {
     if (state.activeTest && !state.activeTest.isCompleted) {
         return;
     }
-    // In normal practice / study mode: debounce by 45 seconds (instead of aggressive 2 seconds)
+    // In normal practice / study mode: debounce by 5 seconds (fast, balanced & prevents click-spam)
     debouncedSyncTimer = setTimeout(() => {
         flushPendingCloudSync().catch(err => {
             console.warn("[DebouncedSync] Background progress sync deferred:", err);
         });
-    }, 45000);
+    }, 5000);
 }
 
 function saveStateToStorage(skipCloudSync = false) {
@@ -1066,8 +1066,11 @@ async function seedDefaultUsersToCloud(group) {
 }
 
 function switchCourseTrack() {
-    // Save active state before clearing session
+    // Save active state and flush any pending cloud sync before clearing session
     saveStateToStorage();
+    if (typeof flushPendingCloudSync === "function") {
+        flushPendingCloudSync().catch(() => {});
+    }
 
     // Clear user session for the current group
     const activeGroupKey = state.activeGroup ? getGroupKey(STORAGE_KEYS.CURRENT_USER) : null;
@@ -1178,8 +1181,10 @@ document.addEventListener("DOMContentLoaded", () => {
             e.preventDefault();
             const text = document.getElementById("admin-announcement-text").value.trim();
             if (!text) return;
-            await saveAnnouncementToCloud(text);
-            showToast("Announcement Published", "Announcement successfully updated on the dashboard.", "success");
+            const success = await saveAnnouncementToCloud(text);
+            if (success) {
+                showToast("Announcement Published", "Announcement successfully updated on the dashboard.", "success");
+            }
         };
     }
 
@@ -1187,9 +1192,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (annClearBtn) {
         annClearBtn.onclick = async () => {
             if (!confirm("Are you sure you want to clear the active announcement?")) return;
-            await deleteAnnouncementFromCloud();
-            document.getElementById("admin-announcement-text").value = "";
-            showToast("Announcement Cleared", "Announcement successfully deleted.", "success");
+            const success = await deleteAnnouncementFromCloud();
+            if (success) {
+                document.getElementById("admin-announcement-text").value = "";
+                showToast("Announcement Cleared", "Announcement successfully deleted.", "success");
+            }
         };
     }
 
@@ -1588,8 +1595,8 @@ async function supabaseRequest(path, options = {}) {
         const cleanPath = path.replace(/^\//, '');
         const directOriginUrl = `${url.replace(/\/$/, '')}/rest/v1/${cleanPath}`;
 
-        // Check if path is eligible for Cloudflare Edge Proxy Caching
-        const isCacheableEdgePath = SUPABASE_CONFIG.proxyUrl && (
+        // Check if path is eligible for Cloudflare Edge Proxy Caching (READ-ONLY GET requests only)
+        const isCacheableEdgePath = SUPABASE_CONFIG.proxyUrl && (method === "GET" || method === "HEAD") && (
             cleanPath.includes("rpc/get_sanitized_questions") ||
             cleanPath.includes("hawari_quiz_results") ||
             cleanPath.includes("hawari_book_files") ||
@@ -2613,11 +2620,13 @@ async function deleteCourseQuizFromCloud(id) {
     }
 }
 
-async function fetchAnnouncement(groupName) {
+async function fetchAnnouncement(groupName, forceBypassCache = false) {
     try {
-        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${groupName}`);
-        if (records && records.length > 0) {
-            state.announcement = records[0].content;
+        const querySuffix = forceBypassCache ? `&purge=1&t=${Date.now()}` : "";
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${groupName}${querySuffix}`);
+        const list = Array.isArray(records) ? records : (records && Array.isArray(records.data) ? records.data : []);
+        if (list.length > 0 && list[0].content) {
+            state.announcement = list[0].content;
         } else {
             state.announcement = "";
         }
@@ -2630,7 +2639,7 @@ async function fetchAnnouncement(groupName) {
 
 async function saveAnnouncementToCloud(content) {
     const group = state.activeGroup;
-    if (!group) return;
+    if (!group) return false;
 
     const payload = {
         group_name: group,
@@ -2639,32 +2648,51 @@ async function saveAnnouncementToCloud(content) {
     };
 
     try {
-        await supabaseRequest("hawari_announcements", {
+        const res = await supabaseRequest("hawari_announcements", {
             method: "POST",
             headers: {
                 "Prefer": "resolution=merge-duplicates"
             },
             body: JSON.stringify(payload)
         });
+        if (res && res.error) {
+            console.error("[Sync] Failed to save announcement:", res.error);
+            showToast("خطأ", "فشل نشر الإعلان على السيرفر.", "danger");
+            return false;
+        }
         state.announcement = content;
         renderAnnouncementWidget();
+        // Re-fetch with cache purge so all views sync immediately
+        fetchAnnouncement(group, true).catch(() => {});
+        return true;
     } catch (e) {
         console.error("[Sync] Failed to save announcement:", e);
+        showToast("خطأ", "فشل نشر الإعلان على السيرفر.", "danger");
+        return false;
     }
 }
 
 async function deleteAnnouncementFromCloud() {
     const group = state.activeGroup;
-    if (!group) return;
+    if (!group) return false;
 
     try {
-        await supabaseRequest(`hawari_announcements?group_name=eq.${group}`, {
+        const res = await supabaseRequest(`hawari_announcements?group_name=eq.${group}`, {
             method: "DELETE"
         });
+        if (res && res.error) {
+            console.error("[Sync] Failed to delete announcement:", res.error);
+            showToast("خطأ", "فشل حذف الإعلان من السيرفر.", "danger");
+            return false;
+        }
         state.announcement = "";
         renderAnnouncementWidget();
+        fetchAnnouncement(group, true).catch(() => {});
+        return true;
     } catch (e) {
         console.error("[Sync] Failed to delete announcement:", e);
+        showToast("خطأ", "فشل حذف الإعلان من السيرفر.", "danger");
+        return false;
     }
 }
 

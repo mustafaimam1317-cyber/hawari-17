@@ -3273,6 +3273,9 @@ function initAuthFlow() {
             if (passwordRegConfirmInput) passwordRegConfirmInput.value = "";
             showAuthStep("auth-email-step");
 
+            // Clean instant-boot flag so app-layout is strictly hidden
+            document.documentElement.classList.remove("instant-boot-active");
+
             // Return to this specific course's landing page (e.g. Welcome to Hawari Infection)
             showLandingPage();
             window.location.hash = `#${currentTrack}`;
@@ -3289,17 +3292,25 @@ function showAuthStep(stepId) {
 }
 
 function showLandingPage() {
+    // Clean instant boot flag from root
+    document.documentElement.classList.remove("instant-boot-active");
+
     const selectorPage = document.getElementById("course-selector-page");
     if (selectorPage) selectorPage.classList.add("hidden");
 
     const appLayout = document.getElementById("app-layout");
-    if (appLayout) appLayout.classList.add("hidden");
+    if (appLayout) {
+        appLayout.classList.add("hidden");
+        appLayout.classList.add("sidebar-collapsed");
+    }
 
     const authOverlay = document.getElementById("auth-overlay");
     if (authOverlay) authOverlay.classList.add("hidden");
 
     const landingPage = document.getElementById("landing-page");
     if (landingPage) landingPage.classList.remove("hidden");
+
+    window.scrollTo(0, 0);
 }
 
 function showAuthOverlay() {
@@ -5366,7 +5377,8 @@ function renderAdminApprovalsTab() {
 
     // 1. Pending Approvals
     let pendingUsers = state.users.filter(u => u.status === "pending");
-    if (pendingBadge) pendingBadge.innerText = pendingUsers.length;
+    const pendingBadgeEl = document.getElementById("admin-pending-badge");
+    if (pendingBadgeEl) pendingBadgeEl.innerText = pendingUsers.length;
 
     if (query) {
         pendingUsers = pendingUsers.filter(u => u.email.toLowerCase().includes(query));
@@ -12673,11 +12685,13 @@ function initBookCanvasDrawing() {
     animCanvas.addEventListener("mouseup", stopDraw);
 
     // Multi-Touch Pinch-to-Zoom Gesture Engine (Mobile & Tablet touchscreens)
+    // Uses GPU-accelerated CSS transform during gesture to preserve 100% layout fidelity & prevent text scrambling
     const stack = document.getElementById("book-canvas-stack");
     if (stack && !stack.dataset.pinchBound) {
         stack.dataset.pinchBound = "true";
         let pinchStartDist = 0;
         let pinchStartZoom = 1.0;
+        let currentPinchRatio = 1.0;
 
         stack.addEventListener("touchstart", (e) => {
             if (e.touches && e.touches.length === 2) {
@@ -12697,6 +12711,9 @@ function initBookCanvasDrawing() {
                     e.touches[0].clientY - e.touches[1].clientY
                 );
                 pinchStartZoom = bookState.zoom || 1.0;
+                currentPinchRatio = 1.0;
+                stack.style.transition = "none";
+                stack.style.transformOrigin = "center top";
             }
         }, { passive: true });
 
@@ -12707,33 +12724,55 @@ function initBookCanvasDrawing() {
                     e.touches[0].clientX - e.touches[1].clientX,
                     e.touches[0].clientY - e.touches[1].clientY
                 );
-                const scale = dist / pinchStartDist;
-                let targetZoom = Math.min(3.0, Math.max(0.5, Math.round(pinchStartZoom * scale * 20) / 20));
-                if (Math.abs(targetZoom - bookState.zoom) >= 0.04) {
-                    bookState.zoom = targetZoom;
-                    bookState.userCustomZoom = true;
-                    const zoomPctEl = document.getElementById("book-zoom-percentage");
-                    if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
-                    
-                    if (window._pinchDebounce) clearTimeout(window._pinchDebounce);
-                    window._pinchDebounce = setTimeout(() => {
-                        redrawBookCanvas();
-                    }, 40);
+                // Subtle dampening factor (0.65) so zoom feels gentle, controllable and smooth without erratic jumps
+                const rawRatio = dist / pinchStartDist;
+                currentPinchRatio = 1 + (rawRatio - 1) * 0.65;
+                // Bound the preview scale strictly between 0.75x and 1.8x
+                const boundedScale = Math.min(1.8, Math.max(0.75, currentPinchRatio));
+                
+                // Hardware-accelerated GPU transform: zero canvas redraw, zero text scrambling, 100% layout stability
+                stack.style.transform = `scale(${boundedScale})`;
+
+                const zoomPctEl = document.getElementById("book-zoom-percentage");
+                if (zoomPctEl) {
+                    const approxPct = Math.round((pinchStartZoom * boundedScale) * 100);
+                    zoomPctEl.innerText = `${approxPct}%`;
                 }
             }
         }, { passive: false });
 
-        stack.addEventListener("touchend", (e) => {
-            if ((!e.touches || e.touches.length < 2) && window._isPinching) {
+        const finishPinch = () => {
+            if (window._isPinching) {
                 window._isPinching = false;
                 pinchStartDist = 0;
+                
+                // Calculate final target zoom smoothly
+                const boundedScale = Math.min(1.8, Math.max(0.75, currentPinchRatio));
+                let newZoom = Math.round(pinchStartZoom * boundedScale * 10) / 10;
+                newZoom = Math.min(2.2, Math.max(0.6, newZoom));
+
+                // Reset CSS transform and apply clean zoom
+                stack.style.transition = "transform 0.1s ease-out";
+                stack.style.transform = "none";
+
+                bookState.zoom = newZoom;
+                bookState.userCustomZoom = true;
+                
+                const zoomPctEl = document.getElementById("book-zoom-percentage");
+                if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
+
                 redrawBookCanvas();
+            }
+        };
+
+        stack.addEventListener("touchend", (e) => {
+            if (!e.touches || e.touches.length < 2) {
+                finishPinch();
             }
         });
 
         stack.addEventListener("touchcancel", () => {
-            window._isPinching = false;
-            pinchStartDist = 0;
+            finishPinch();
         });
     }
 }

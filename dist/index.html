@@ -32,6 +32,11 @@
     <script>
         (function() {
             try {
+                // Pre-boot theme check to eliminate white screen flash on dark mode
+                const isDark = localStorage.getItem("hawari_theme_dark") === "true";
+                if (isDark) {
+                    document.documentElement.classList.add("dark-theme");
+                }
                 const group = localStorage.getItem("hawari_active_group") || "infection";
                 const rawUser = localStorage.getItem("hawari_current_user_" + group) || localStorage.getItem("hawari_current_user");
                 if (rawUser) {
@@ -52,11 +57,15 @@
         .admin-tab-content.active {
             display: block !important;
         }
-        html.instant-boot-active #course-selector-page {
+        html.instant-boot-active #course-selector-page,
+        html.instant-boot-active #landing-page {
             display: none !important;
         }
-        html.instant-boot-active #app-layout {
+        html.instant-boot-active #app-layout:not(.hidden) {
             display: grid !important;
+        }
+        #app-layout.hidden {
+            display: none !important;
         }
         .drm-blurred {
             filter: blur(18px) grayscale(90%) !important;
@@ -100,8 +109,8 @@
         }
     </style>
 
-  <script type="module" crossorigin src="/assets/index-CtOCuLG8.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-Bm5VrwZa.css">
+  <script type="module" crossorigin src="/assets/index-BawV9pJm.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CrmwSRXG.css">
 </head>
 <body class="light-theme theme-clay">
     
@@ -2561,6 +2570,8 @@
                     </div>
                 </form>
             </div>
+        </div>
+
         <!-- Scratchpad Page Template Picker Modal -->
         <div id="modal-scratchpad-template" class="auth-overlay hidden" style="z-index: 4000; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(11, 19, 41, 0.85); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center;">
             <div class="auth-card" style="max-width: 600px; width: 92%; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 24px; padding: 28px; box-shadow: var(--shadow-lg);">

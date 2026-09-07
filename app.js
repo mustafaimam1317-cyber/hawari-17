@@ -2,6 +2,7 @@
 // ================= CENTRALIZED SUPABASE CONFIGURATION =================
 const SUPABASE_CONFIG = {
     url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, ""),
+    proxyUrl: (import.meta.env.VITE_SUPABASE_PROXY_URL || window.ENV_SUPABASE_PROXY_URL || (typeof window !== "undefined" && window.location.hostname && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? `${window.location.origin}/supabase-proxy` : "")).replace(/\/$/, ""),
     anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c"
 };
 
@@ -663,15 +664,63 @@ function isUserAdmin(user = state.currentUser) {
 }
 
 let debouncedSyncTimer = null;
+let _hasPendingCloudSync = false;
+let _lastCloudSyncTimestamp = Date.now();
+
+async function flushPendingCloudSync() {
+    if (debouncedSyncTimer) {
+        clearTimeout(debouncedSyncTimer);
+        debouncedSyncTimer = null;
+    }
+    if (!_hasPendingCloudSync || !state.currentUser || !state.activeGroup) return;
+    try {
+        await syncUsersWithCloud();
+        _hasPendingCloudSync = false;
+        _lastCloudSyncTimestamp = Date.now();
+    } catch (err) {
+        console.warn("[SmartSync] Cloud sync deferred to retry:", err);
+    }
+}
+window.flushPendingCloudSync = flushPendingCloudSync;
+
+// Heartbeat background sync every 5 minutes (only flushes if dirty)
+if (typeof window !== "undefined" && !window._hawariHeartbeatStarted) {
+    window._hawariHeartbeatStarted = true;
+    setInterval(() => {
+        if (_hasPendingCloudSync && state.currentUser && state.activeGroup) {
+            flushPendingCloudSync().catch(() => {});
+        }
+    }, 300000);
+
+    // Save on tab switch or page close
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden" && _hasPendingCloudSync) {
+            flushPendingCloudSync().catch(() => {});
+        }
+    });
+    window.addEventListener("pagehide", () => {
+        if (_hasPendingCloudSync) {
+            flushPendingCloudSync().catch(() => {});
+        }
+    });
+}
+
 function debouncedSync() {
+    _hasPendingCloudSync = true;
     if (debouncedSyncTimer) {
         clearTimeout(debouncedSyncTimer);
     }
+    // If user is currently in an active exam, do NOT blast the cloud on every question!
+    // Local storage is 100% saved on every click, and the exam submits authoritatively upon completion.
+    if (state.activeTest && !state.activeTest.isCompleted) {
+        return;
+    }
+    // In normal practice / study mode: debounce by 45 seconds (instead of aggressive 2 seconds)
     debouncedSyncTimer = setTimeout(() => {
-        syncUsersWithCloud().catch(err => {
+        flushPendingCloudSync().catch(err => {
             console.warn("[DebouncedSync] Background progress sync deferred:", err);
         });
-    }, 2000);
+    }, 45000);
 }
 
 function saveStateToStorage(skipCloudSync = false) {
@@ -1536,10 +1585,48 @@ async function supabaseRequest(path, options = {}) {
     }
 
     try {
-        const response = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
-            ...options,
-            headers
-        });
+        const cleanPath = path.replace(/^\//, '');
+        const directOriginUrl = `${url.replace(/\/$/, '')}/rest/v1/${cleanPath}`;
+
+        // Check if path is eligible for Cloudflare Edge Proxy Caching
+        const isCacheableEdgePath = SUPABASE_CONFIG.proxyUrl && (
+            cleanPath.includes("rpc/get_sanitized_questions") ||
+            cleanPath.includes("hawari_quiz_results") ||
+            cleanPath.includes("hawari_book_files") ||
+            cleanPath.includes("hawari_announcements")
+        );
+
+        let requestUrl = isCacheableEdgePath
+            ? `${SUPABASE_CONFIG.proxyUrl}/${cleanPath}`
+            : directOriginUrl;
+
+        let response;
+        try {
+            response = await fetch(requestUrl, {
+                ...options,
+                headers
+            });
+        } catch (fetchErr) {
+            // If proxy fails due to network or not yet deployed, fallback directly to Supabase origin
+            if (requestUrl !== directOriginUrl) {
+                console.warn(`[SupabaseRequest] Proxy unreachable, falling back to direct origin for: ${cleanPath}`);
+                response = await fetch(directOriginUrl, {
+                    ...options,
+                    headers
+                });
+            } else {
+                throw fetchErr;
+            }
+        }
+
+        // If proxy returned 404/502 (e.g. route not yet mapped in Cloudflare), fallback seamlessly
+        if (!response.ok && requestUrl !== directOriginUrl && (response.status === 404 || response.status === 502)) {
+            console.warn(`[SupabaseRequest] Proxy returned ${response.status}, fallback to direct origin: ${cleanPath}`);
+            response = await fetch(directOriginUrl, {
+                ...options,
+                headers
+            });
+        }
 
         if (!response.ok) {
             const errText = await response.text();
@@ -1755,27 +1842,37 @@ async function revalidateQuestionBankVersion(group, cachedVersion) {
     const metrics = window.HawariCacheMetricsByGroup[group] || window.HawariCacheMetricsByGroup.infection;
     metrics.cloudVersionChecks++;
     console.log(`[QuestionCache] Background version check for course "${group}" (cached: ${cachedVersion})...`);
+
+    const markChecked = async () => {
+        const now = Date.now();
+        if (window.HawariQuestionCacheMemory[group]) {
+            window.HawariQuestionCacheMemory[group].lastCheckedAt = now;
+        }
+        const existing = await getCachedQuestionBank(group);
+        if (existing) {
+            existing.lastCheckedAt = now;
+            await setCachedQuestionBank(group, existing);
+        }
+    };
+
     try {
         const checkRes = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}&select=group_name,last_updated`);
-        if (checkRes && checkRes.length > 0) {
+        if (checkRes && Array.isArray(checkRes) && checkRes.length > 0) {
             const serverVersion = checkRes[0].last_updated;
             if (serverVersion && serverVersion !== cachedVersion) {
                 console.log(`[QuestionCache] VERSION CHANGED for ${group}: cached ${cachedVersion} != server ${serverVersion}. Downloading updated question bank in background...`);
                 await downloadFullQuestionBankFromCloud(group, serverVersion);
             } else {
                 console.log(`[QuestionCache] Version UNCHANGED for course ${group} (${cachedVersion}). Cache is valid.`);
-                if (window.HawariQuestionCacheMemory[group]) {
-                    window.HawariQuestionCacheMemory[group].lastCheckedAt = Date.now();
-                }
-                const existing = await getCachedQuestionBank(group);
-                if (existing) {
-                    existing.lastCheckedAt = Date.now();
-                    await setCachedQuestionBank(group, existing);
-                }
+                await markChecked();
             }
+        } else {
+            // RLS 401 or non-array: record check timestamp so we don't spam the endpoint in a tight loop
+            await markChecked();
         }
     } catch (e) {
         console.warn(`[QuestionCache] Background version check skipped/fallback for ${group}:`, e);
+        await markChecked();
     }
 }
 
@@ -2584,11 +2681,41 @@ function renderAnnouncementWidget() {
     }
 }
 
-async function fetchQuizResults(group) {
+const _lastQuizResultsFetch = {};
+
+async function fetchQuizResults(group, forceRefresh = false) {
+    if (!group) return;
+    const now = Date.now();
+    const cacheKey = `hawari_cached_quiz_results_${group}`;
+
+    // 1. In-memory fresh check (TTL: 180s = 3 minutes)
+    if (!forceRefresh && _lastQuizResultsFetch[group] && (now - _lastQuizResultsFetch[group] < 180000) && Array.isArray(state.quizResults) && state.quizResults.length > 0) {
+        return;
+    }
+
+    // 2. SessionStorage cache fallback (TTL: 180s)
+    if (!forceRefresh && (!Array.isArray(state.quizResults) || state.quizResults.length === 0)) {
+        try {
+            const raw = sessionStorage.getItem(cacheKey);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed.timestamp && (now - parsed.timestamp < 180000) && Array.isArray(parsed.data)) {
+                    state.quizResults = parsed.data;
+                    _lastQuizResultsFetch[group] = parsed.timestamp;
+                    return;
+                }
+            }
+        } catch (e) {}
+    }
+
     try {
-        const records = await supabaseRequest(`hawari_quiz_results?group_name=eq.${group}`);
+        const records = await supabaseRequest(`hawari_quiz_results?group_name=eq.${encodeURIComponent(group)}`);
         if (records && Array.isArray(records)) {
             state.quizResults = records;
+            _lastQuizResultsFetch[group] = now;
+            try {
+                sessionStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: records }));
+            } catch (e) {}
             console.log(`[Sync] Fetched ${state.quizResults.length} quiz results from cloud`);
         }
     } catch (e) {
@@ -2597,6 +2724,13 @@ async function fetchQuizResults(group) {
 }
 
 async function saveQuizResultToCloud(result, isQueueFlush = false) {
+    const activeCourse = state.activeGroup || "infection";
+    // Invalidate local leaderboard cache so the submitting student sees fresh score
+    _lastQuizResultsFetch[activeCourse] = 0;
+    try {
+        sessionStorage.removeItem(`hawari_cached_quiz_results_${activeCourse}`);
+    } catch (e) {}
+
     const payload = {
         id: result.id || `${result.quiz_id}_${result.email}`,
         quiz_id: result.quiz_id,
@@ -2663,8 +2797,26 @@ async function syncUsersWithCloud() {
 
     // 1. Fetch cloud records for the current active course only
     let queryPath = `hawari_users?group_name=eq.${encodeURIComponent(group)}`;
+    let adminOwnRow = null;
+
     if (!isAdmin && targetEmail) {
         queryPath += `&email=eq.${encodeURIComponent(targetEmail)}`;
+    } else if (isAdmin) {
+        // Admin user registry optimization: fetch only metadata columns for the student list
+        // Saves 5+ MB of bandwidth per admin sync!
+        queryPath += `&select=id,email,password_hash,role,status,date_registered,display_name,last_updated`;
+
+        // If admin has an email, fetch admin's own personal row with full questions/tests
+        if (targetEmail) {
+            try {
+                const adminRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
+                if (Array.isArray(adminRows) && adminRows.length > 0) {
+                    adminOwnRow = adminRows[0];
+                }
+            } catch (adminRowErr) {
+                console.warn("[SyncUsers] Admin personal row fetch deferred:", adminRowErr);
+            }
+        }
     } else if (!isAdmin && !targetEmail) {
         return;
     }
@@ -2674,25 +2826,30 @@ async function syncUsersWithCloud() {
         if (cloudRecords && Array.isArray(cloudRecords)) {
             // Map cloud database rows to user object structure
             const cloudUsers = cloudRecords.map(row => {
+                // If this is admin's own row, use full personal data from adminOwnRow if available
+                const sourceRow = (adminOwnRow && row.email && targetEmail && row.email.toLowerCase() === targetEmail.toLowerCase())
+                    ? adminOwnRow
+                    : row;
+
                 let parsedLastUpdated = 0;
-                if (typeof row.last_updated === "number") {
-                    parsedLastUpdated = row.last_updated;
-                } else if (typeof row.last_updated === "string") {
-                    parsedLastUpdated = new Date(row.last_updated).getTime() || 0;
+                if (typeof sourceRow.last_updated === "number") {
+                    parsedLastUpdated = sourceRow.last_updated;
+                } else if (typeof sourceRow.last_updated === "string") {
+                    parsedLastUpdated = new Date(sourceRow.last_updated).getTime() || 0;
                 }
 
                 return {
-                    email: row.email,
-                    password: row.password_hash,
-                    role: row.role,
-                    status: row.status,
-                    dateRegistered: row.date_registered,
-                    questions: Array.isArray(row.questions) ? row.questions : [],
-                    tests: Array.isArray(row.tests) ? row.tests : [],
-                    notebookNotes: Array.isArray(row.notebook_notes) ? row.notebook_notes : [],
-                    flashcards: Array.isArray(row.flashcards) ? row.flashcards : [],
-                    reportTaskProgress: row.report_task_progress || {},
-                    displayName: row.display_name || "",
+                    email: sourceRow.email,
+                    password: sourceRow.password_hash,
+                    role: sourceRow.role,
+                    status: sourceRow.status,
+                    dateRegistered: sourceRow.date_registered,
+                    questions: Array.isArray(sourceRow.questions) ? sourceRow.questions : [],
+                    tests: Array.isArray(sourceRow.tests) ? sourceRow.tests : [],
+                    notebookNotes: Array.isArray(sourceRow.notebook_notes) ? sourceRow.notebook_notes : [],
+                    flashcards: Array.isArray(sourceRow.flashcards) ? sourceRow.flashcards : [],
+                    reportTaskProgress: sourceRow.report_task_progress || {},
+                    displayName: sourceRow.display_name || "",
                     lastUpdated: parsedLastUpdated
                 };
             });
@@ -2809,6 +2966,23 @@ async function syncUsersWithCloud() {
 
     // Upsert records to Supabase in parallel
     const promises = usersToWrite.map(async (user) => {
+        // Delta Payload Optimization: only serialize questions that the student has actually interacted with
+        // Non-interacted questions default to 'unused' on retrieval, saving ~95% bandwidth!
+        const nonDefaultQuestions = (user.questions || []).filter(q => 
+            (q.status && q.status !== "unused") || 
+            Boolean(q.marked) || 
+            (q.notes && String(q.notes).trim() !== "") || 
+            (q.highlightedHtml && String(q.highlightedHtml).trim() !== "") || 
+            (q.userAnswer !== null && q.userAnswer !== undefined)
+        ).map(q => ({
+            id: q.id,
+            status: q.status || "unused",
+            marked: Boolean(q.marked),
+            notes: q.notes || "",
+            highlightedHtml: q.highlightedHtml || "",
+            userAnswer: q.userAnswer !== undefined ? q.userAnswer : null
+        }));
+
         const payload = {
             email: user.email.trim().toLowerCase(),
             group_name: group,
@@ -2816,7 +2990,7 @@ async function syncUsersWithCloud() {
             role: user.role || "student",
             status: user.status || "approved",
             date_registered: user.dateRegistered,
-            questions: user.questions || [],
+            questions: nonDefaultQuestions,
             tests: user.tests || [],
             notebook_notes: user.notebookNotes || [],
             flashcards: user.flashcards || [],

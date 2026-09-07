@@ -899,6 +899,26 @@ function loadStateFromStorage() {
                 state.users.push(dbUser);
             }
             loadUserSpecificProgress(state.currentUser.email);
+
+            // Background Live Status Introspection for Non-Admin Users (RFC 7009 Session Revocation)
+            if (storedCurrentUser.role !== "admin" && storedCurrentUser.email) {
+                fetchUserStatusFromCloud(storedCurrentUser.email).then(liveStatus => {
+                    if (liveStatus && !liveStatus.exists) {
+                        console.warn("[Auth] Live introspection: User deleted from cloud by administrator. Revoking session.");
+                        state.users = (state.users || []).filter(u => u.email.toLowerCase() !== storedCurrentUser.email.toLowerCase());
+                        saveStateToStorage(true);
+                        if (typeof window.performAppLogout === "function") {
+                            window.performAppLogout("تم حذف هذا الحساب من قِبل الإدارة.", "danger");
+                        }
+                    } else if (liveStatus && liveStatus.status === "pending" && state.currentUser) {
+                        state.currentUser.status = "pending";
+                        saveStateToStorage(true);
+                        triggerViewRefresh();
+                    }
+                }).catch(err => {
+                    console.warn("[Auth] Background session verification deferred (offline):", err);
+                });
+            }
         } catch (e) {
             console.error("[Auth] Error loading stored current user:", e);
         }
@@ -2707,13 +2727,35 @@ async function deleteAnnouncementFromCloud() {
 function renderAnnouncementWidget() {
     const card = document.getElementById("dashboard-announcements-card");
     const contentLbl = document.getElementById("dashboard-announcements-content");
-    if (!card || !contentLbl) return;
+    const adminLiveText = document.getElementById("admin-announcement-live-text");
+    const adminBadge = document.getElementById("admin-announcement-status-badge");
 
-    if (state.announcement) {
-        contentLbl.innerText = state.announcement;
-        card.classList.remove("hidden");
+    if (state.announcement && state.announcement.trim().length > 0) {
+        if (contentLbl) contentLbl.innerText = state.announcement;
+        if (card) card.classList.remove("hidden");
+
+        if (adminLiveText) {
+            adminLiveText.innerText = state.announcement;
+            adminLiveText.style.fontStyle = "normal";
+            adminLiveText.style.color = "var(--text-primary)";
+        }
+        if (adminBadge) {
+            adminBadge.innerText = "Live on Dashboard";
+            adminBadge.style.background = "rgba(16, 185, 129, 0.15)";
+            adminBadge.style.color = "#10b981";
+        }
     } else {
-        card.classList.add("hidden");
+        if (card) card.classList.add("hidden");
+        if (adminLiveText) {
+            adminLiveText.innerText = "No active announcement published.";
+            adminLiveText.style.fontStyle = "italic";
+            adminLiveText.style.color = "var(--text-muted)";
+        }
+        if (adminBadge) {
+            adminBadge.innerText = "No Announcement";
+            adminBadge.style.background = "rgba(107, 114, 128, 0.15)";
+            adminBadge.style.color = "#6b7280";
+        }
     }
 }
 
@@ -2885,6 +2927,16 @@ async function syncUsersWithCloud() {
         try {
             const studentRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
             if (Array.isArray(studentRows)) {
+                if (studentRows.length === 0) {
+                    // Authoritative check: The student was deleted from cloud by administrator!
+                    console.warn(`[SyncUsers] Student ${targetEmail} was deleted from cloud. Revoking local session.`);
+                    state.users = (state.users || []).filter(u => u.email.toLowerCase() !== targetEmail.toLowerCase());
+                    saveStateToStorage(true);
+                    if (typeof window.performAppLogout === "function") {
+                        window.performAppLogout("تم حذف هذا الحساب من قِبل الإدارة.", "danger");
+                    }
+                    return;
+                }
                 cloudRecords = studentRows;
             }
         } catch (stErr) {
@@ -2946,7 +2998,7 @@ async function syncUsersWithCloud() {
                     // Smart bidirectional merge for tests and notes (AMBOSS-Grade LWW with Initial Sync protection)
                     const localTests = Array.isArray(lu.tests) ? lu.tests : [];
                     const cloudTests = Array.isArray(cu.tests) ? cu.tests : [];
-                    const isLocalSessionAuthoritative = Boolean(state.isUserProgressLoaded) && ((lu.lastUpdated || 0) >= (cu.lastUpdated || 0));
+                    const isLocalSessionAuthoritative = ((lu.lastUpdated || 0) > 0) && ((lu.lastUpdated || 0) >= (cu.lastUpdated || 0));
 
                     if (isLocalSessionAuthoritative) {
                         // The user on this active session has the latest state, including explicit test/note deletions!
@@ -3241,7 +3293,22 @@ function initAuthFlow() {
                 return;
             }
 
-            // Fallback: Check local state.users if cloud check was offline
+            if (cloudStatus !== null && !cloudStatus.exists) {
+                // Authoritative Cloud Response: User does NOT exist in cloud (deleted or never registered)
+                // Purge any stale local record to eliminate zombie accounts resurrecting
+                state.users = (state.users || []).filter(u => u.email.toLowerCase() !== email.toLowerCase());
+                saveStateToStorage(true);
+
+                showAuthStep("auth-register-step");
+                document.getElementById("register-email-display").innerText = email;
+                passwordRegInput.value = "";
+                passwordRegConfirmInput.value = "";
+                passwordRegInput.focus();
+                showToast("حساب غير مسجل", "هذا الحساب غير موجود في السيرفر أو تم حذفه من قِبل الإدارة. يمكنك طلب الانضمام كطالب جديد.", "warning");
+                return;
+            }
+
+            // Fallback: Check local state.users ONLY if cloud check was completely offline (cloudStatus === null)
             const user = state.users.find(u => u.email.toLowerCase() === email.toLowerCase());
             if (user) {
                 if (user.status === "approved") {
@@ -3497,37 +3564,41 @@ function initAuthFlow() {
     }
 
     // Logout
+    function performAppLogout(reason = "", toastType = "info") {
+        saveStateToStorage();
+        const currentTrack = state.activeGroup || "infection";
+        const activeGroupKey = state.activeGroup ? getGroupKey(STORAGE_KEYS.CURRENT_USER) : null;
+        state.currentUser = null;
+        if (activeGroupKey) {
+            encryptLocal(activeGroupKey, null);
+        }
+        clearSupabaseSession();
+        localStorage.removeItem(`hawari_jwt_${currentTrack}`);
+        localStorage.removeItem("hawari_jwt_token");
+
+        // Reset auth input fields
+        if (emailInput) emailInput.value = "";
+        if (passwordLoginInput) passwordLoginInput.value = "";
+        if (passwordRegInput) passwordRegInput.value = "";
+        if (passwordRegConfirmInput) passwordRegConfirmInput.value = "";
+        showAuthStep("auth-email-step");
+
+        // Clean instant-boot flag so app-layout is strictly hidden
+        document.documentElement.classList.remove("instant-boot-active");
+
+        // Return to this specific course's landing page
+        showLandingPage();
+        window.location.hash = `#${currentTrack}`;
+
+        if (reason) {
+            showToast(toastType === "danger" ? "جلسة ملغاة" : "تسجيل الخروج", reason, toastType);
+        }
+    }
+    window.performAppLogout = performAppLogout;
+
     if (btnLogout) {
         btnLogout.addEventListener("click", () => {
-            showToast("Logged Out", "You have successfully logged out.", "info");
-            
-            // Save state before clearing user session
-            saveStateToStorage();
-
-            const currentTrack = state.activeGroup || "infection";
-
-            // Clear user session for the current group while keeping the course track isolated
-            const activeGroupKey = state.activeGroup ? getGroupKey(STORAGE_KEYS.CURRENT_USER) : null;
-            state.currentUser = null;
-            if (activeGroupKey) {
-                encryptLocal(activeGroupKey, null);
-            }
-            localStorage.removeItem(`hawari_jwt_${currentTrack}`);
-            localStorage.removeItem("hawari_jwt_token");
-
-            // Reset auth input fields
-            if (emailInput) emailInput.value = "";
-            if (passwordLoginInput) passwordLoginInput.value = "";
-            if (passwordRegInput) passwordRegInput.value = "";
-            if (passwordRegConfirmInput) passwordRegConfirmInput.value = "";
-            showAuthStep("auth-email-step");
-
-            // Clean instant-boot flag so app-layout is strictly hidden
-            document.documentElement.classList.remove("instant-boot-active");
-
-            // Return to this specific course's landing page (e.g. Welcome to Hawari Infection)
-            showLandingPage();
-            window.location.hash = `#${currentTrack}`;
+            performAppLogout("You have successfully logged out.", "info");
         });
     }
 }
@@ -4941,26 +5012,50 @@ window.deletePracticeTest = async function(testId) {
     }
     if (state.currentUser) {
         state.currentUser.lastUpdated = newTimestamp;
+        state.currentUser.tests = [...state.tests];
+        state.currentUser.notebookNotes = [...state.notebookNotes];
     }
+    state.isUserProgressLoaded = true;
 
     // 5. Save state locally
     saveStateToStorage(true);
 
-    // 6. Direct authoritative server push (AMBOSS-grade mutation)
+    // 6. Direct authoritative server push (RPC primary + REST PATCH fallback)
     if (userEmail) {
+        let rpcSuccess = false;
         try {
-            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
-                method: "PATCH",
-                headers: { "Prefer": "return=minimal" },
+            const rpcRes = await supabaseRequest("rpc/update_user_progress_rpc", {
+                method: "POST",
                 body: JSON.stringify({
-                    tests: state.tests,
-                    notebook_notes: state.notebookNotes,
-                    last_updated: newTimestamp
+                    p_user_email: userEmail,
+                    p_group: group,
+                    p_tests: state.tests,
+                    p_notebook_notes: state.notebookNotes,
+                    p_last_updated: newTimestamp
                 })
             });
-        } catch (err) {
-            console.warn("[DeleteTest] Direct server push fallback to debounced sync:", err);
-            debouncedSync();
+            if (rpcRes && (rpcRes.success || !rpcRes.error)) {
+                rpcSuccess = true;
+            }
+        } catch (rpcErr) {
+            console.warn("[DeleteTest] RPC update deferred:", rpcErr);
+        }
+
+        if (!rpcSuccess) {
+            try {
+                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
+                    method: "PATCH",
+                    headers: { "Prefer": "return=minimal" },
+                    body: JSON.stringify({
+                        tests: state.tests,
+                        notebook_notes: state.notebookNotes,
+                        last_updated: newTimestamp
+                    })
+                });
+            } catch (err) {
+                console.warn("[DeleteTest] Direct server push fallback to debounced sync:", err);
+                debouncedSync();
+            }
         }
     }
 

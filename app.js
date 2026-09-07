@@ -2912,35 +2912,106 @@ async function syncUsersWithCloud() {
             }
         }
 
-        // Step C: If admin has an email, fetch admin's own personal row with full questions/tests
+        // Step C: If admin has an email, fetch admin's own personal row with full questions/tests via Zero-Trust RPC
         if (targetEmail) {
             try {
-                const adminRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
-                if (Array.isArray(adminRows) && adminRows.length > 0) {
-                    adminOwnRow = adminRows[0];
+                const progRes = await supabaseRequest("rpc/get_user_progress_rpc", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        p_user_email: targetEmail,
+                        p_group: group
+                    })
+                });
+                if (progRes && (progRes.success || progRes.email)) {
+                    adminOwnRow = {
+                        email: progRes.email,
+                        role: progRes.role,
+                        status: progRes.status,
+                        display_name: progRes.display_name,
+                        date_registered: progRes.date_registered,
+                        questions: progRes.questions || [],
+                        tests: progRes.tests || [],
+                        notebook_notes: progRes.notebook_notes || [],
+                        flashcards: progRes.flashcards || [],
+                        report_task_progress: progRes.report_task_progress || {},
+                        last_updated: progRes.last_updated || 0
+                    };
                 }
-            } catch (adminRowErr) {
-                console.warn("[SyncUsers] Admin personal row fetch deferred:", adminRowErr);
+            } catch (progErr) {
+                console.warn("[SyncUsers] get_user_progress_rpc deferred for admin:", progErr);
+            }
+
+            if (!adminOwnRow) {
+                try {
+                    const adminRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
+                    if (Array.isArray(adminRows) && adminRows.length > 0) {
+                        adminOwnRow = adminRows[0];
+                    }
+                } catch (adminRowErr) {
+                    console.warn("[SyncUsers] Admin personal row fetch deferred:", adminRowErr);
+                }
             }
         }
     } else if (!isAdmin && targetEmail) {
+        let studentFetched = false;
         try {
-            const studentRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
-            if (Array.isArray(studentRows)) {
-                if (studentRows.length === 0) {
-                    // Authoritative check: The student was deleted from cloud by administrator!
-                    console.warn(`[SyncUsers] Student ${targetEmail} was deleted from cloud. Revoking local session.`);
-                    state.users = (state.users || []).filter(u => u.email.toLowerCase() !== targetEmail.toLowerCase());
-                    saveStateToStorage(true);
-                    if (typeof window.performAppLogout === "function") {
-                        window.performAppLogout("تم حذف هذا الحساب من قِبل الإدارة.", "danger");
-                    }
-                    return;
-                }
-                cloudRecords = studentRows;
+            const progRes = await supabaseRequest("rpc/get_user_progress_rpc", {
+                method: "POST",
+                body: JSON.stringify({
+                    p_user_email: targetEmail,
+                    p_group: group
+                })
+            });
+            if (progRes && progRes.success) {
+                studentFetched = true;
+                cloudRecords = [{
+                    email: progRes.email,
+                    role: progRes.role,
+                    status: progRes.status,
+                    display_name: progRes.display_name,
+                    date_registered: progRes.date_registered,
+                    questions: progRes.questions || [],
+                    tests: progRes.tests || [],
+                    notebook_notes: progRes.notebook_notes || [],
+                    flashcards: progRes.flashcards || [],
+                    report_task_progress: progRes.report_task_progress || {},
+                    last_updated: progRes.last_updated || 0
+                }];
+            } else if (progRes && progRes.error === "User not found") {
+                studentFetched = true;
+                cloudRecords = [];
             }
-        } catch (stErr) {
-            console.warn("[SyncUsers] Student personal row fetch deferred:", stErr);
+        } catch (progErr) {
+            console.warn("[SyncUsers] Student get_user_progress_rpc deferred:", progErr);
+        }
+
+        if (!studentFetched) {
+            try {
+                const studentRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
+                if (Array.isArray(studentRows)) {
+                    cloudRecords = studentRows;
+                }
+            } catch (stErr) {
+                console.warn("[SyncUsers] Student personal row fetch deferred:", stErr);
+            }
+        }
+
+        const isCurrentlyLoggedInApprovedUser = Boolean(
+            state.currentUser && 
+            state.currentUser.email && 
+            state.currentUser.email.toLowerCase() === targetEmail.toLowerCase() && 
+            state.currentUser.status === "approved"
+        );
+
+        if (isCurrentlyLoggedInApprovedUser && Array.isArray(cloudRecords) && cloudRecords.length === 0) {
+            // Authoritative check: The student was deleted from cloud by administrator!
+            console.warn(`[SyncUsers] Student ${targetEmail} was deleted from cloud. Revoking local session.`);
+            state.users = (state.users || []).filter(u => u.email.toLowerCase() !== targetEmail.toLowerCase());
+            saveStateToStorage(true);
+            if (typeof window.performAppLogout === "function") {
+                window.performAppLogout("تم حذف هذا الحساب من قِبل الإدارة.", "danger");
+            }
+            return;
         }
     } else if (!isAdmin && !targetEmail) {
         return;
@@ -3072,6 +3143,15 @@ async function syncUsersWithCloud() {
                     }
                 }
             });
+            // Prune users that were deleted from the cloud database so deleted accounts do not persist in admin view
+            if (isAdmin && Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+                const cloudEmailSet = new Set(cloudUsers.map(cu => cu.email.toLowerCase()));
+                state.users = (state.users || []).filter(u => {
+                    const email = (u.email || "").toLowerCase();
+                    return cloudEmailSet.has(email) || (state.currentUser && state.currentUser.email.toLowerCase() === email);
+                });
+                saveStateToStorage(true);
+            }
             if (isAdmin && typeof renderAdminApprovalsTab === "function") {
                 renderAdminApprovalsTab();
             }
@@ -3125,6 +3205,27 @@ async function syncUsersWithCloud() {
             display_name: user.displayName || "",
             last_updated: user.lastUpdated || Date.now()
         };
+
+        // Primary: Authoritative Zero-Trust Progress RPC (works reliably even if table REST is locked down)
+        let rpcPushed = false;
+        try {
+            const rpcRes = await supabaseRequest("rpc/update_user_progress_rpc", {
+                method: "POST",
+                body: JSON.stringify({
+                    p_user_email: user.email.trim().toLowerCase(),
+                    p_group: group,
+                    p_tests: user.tests || [],
+                    p_notebook_notes: user.notebookNotes || [],
+                    p_last_updated: user.lastUpdated || Date.now()
+                })
+            });
+            if (rpcRes && (rpcRes.success || !rpcRes.error)) {
+                rpcPushed = true;
+            }
+        } catch (rpcErr) {
+            console.warn("[SyncUsers] update_user_progress_rpc deferred:", rpcErr);
+        }
+
         try {
             await supabaseRequest("hawari_users", {
                 method: "POST",
@@ -3134,14 +3235,16 @@ async function syncUsersWithCloud() {
                 body: JSON.stringify(payload)
             });
         } catch (err) {
-            console.warn(`[SyncUsers] Direct push failed for ${user.email}, queueing offline sync:`, err);
-            enqueuePendingSync({
-                entityType: "student_progress",
-                id: `progress_${user.email}_${group}_${Date.now()}`,
-                email: user.email,
-                group: group,
-                payload: payload
-            });
+            if (!rpcPushed) {
+                console.warn(`[SyncUsers] Direct push failed for ${user.email}, queueing offline sync:`, err);
+                enqueuePendingSync({
+                    entityType: "student_progress",
+                    id: `progress_${user.email}_${group}_${Date.now()}`,
+                    email: user.email,
+                    group: group,
+                    payload: payload
+                });
+            }
         }
     });
     await Promise.all(promises);
@@ -3471,8 +3574,54 @@ function initAuthFlow() {
                 }).catch(e => console.warn("[Auth] Parallel GoTrue signup notice:", e.message));
             } catch (e) {}
             
-            // 3. Sync registry with cloud so admin can see and approve the user immediately
-            syncUsersWithCloud();
+            // 3. Authoritative direct cloud registration via Zero-Trust RPC (primary) + REST (fallback)
+            // Ensures whether the user is brand new or a previously deleted student, they immediately land in Supabase as 'pending'
+            const passwordHash = sha256Sync(password);
+            const activeCourse = state.activeGroup || "infection";
+            let rpcRegistered = false;
+            try {
+                const regRes = await supabaseRequest("rpc/register_student_rpc", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        p_email: currentAuthenticatingEmail.trim().toLowerCase(),
+                        p_password_hash: passwordHash,
+                        p_display_name: name,
+                        p_group: activeCourse
+                    })
+                });
+                if (regRes && (regRes.success || !regRes.error)) {
+                    rpcRegistered = true;
+                    console.log("[Auth] register_student_rpc success:", regRes);
+                }
+            } catch (regRpcErr) {
+                console.warn("[Auth] register_student_rpc deferred:", regRpcErr);
+            }
+
+            if (!rpcRegistered) {
+                try {
+                    await supabaseRequest("hawari_users", {
+                        method: "POST",
+                        headers: { "Prefer": "resolution=merge-duplicates" },
+                        body: JSON.stringify({
+                            email: currentAuthenticatingEmail.trim().toLowerCase(),
+                            group_name: activeCourse,
+                            password_hash: passwordHash,
+                            role: "student",
+                            status: "pending",
+                            display_name: name,
+                            date_registered: new Date().toLocaleDateString(),
+                            questions: [],
+                            tests: [],
+                            notebook_notes: [],
+                            flashcards: [],
+                            report_task_progress: {},
+                            last_updated: Date.now()
+                        })
+                    });
+                } catch (restErr) {
+                    console.warn("[Auth] Direct REST registration fallback deferred:", restErr);
+                }
+            }
 
             showToast("طلب التسجيل قيد الانتظار", "تم إرسال طلب تسجيلك بنجاح وهو الآن في انتظار موافقة المشرف.", "info");
             showAuthStep("auth-pending-step");

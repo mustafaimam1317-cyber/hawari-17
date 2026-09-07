@@ -34,7 +34,15 @@ export default {
             targetPath = "/rest/v1" + targetPath;
         }
 
-        const originUrl = new URL(targetPath + url.search, SUPABASE_ORIGIN);
+        // Strip proxy/purge parameters from query string before sending to PostgREST
+        const forwardSearch = new URLSearchParams(url.searchParams);
+        const isPurgeRequested = forwardSearch.has("purge") || request.headers.has("x-hawari-purge");
+        forwardSearch.delete("purge");
+        forwardSearch.delete("t");
+        forwardSearch.delete("_t");
+        const forwardQueryString = forwardSearch.toString() ? `?${forwardSearch.toString()}` : "";
+
+        const originUrl = new URL(targetPath + forwardQueryString, SUPABASE_ORIGIN);
 
         // Copy and forward request headers
         const forwardHeaders = new Headers(request.headers);
@@ -99,8 +107,6 @@ export default {
             const cacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
             const cache = caches.default;
 
-            const isPurgeRequested = url.searchParams.has("purge") || request.headers.has("x-hawari-purge");
-
             if (!isPurgeRequested) {
                 let cachedResponse = await cache.match(cacheKey);
                 if (cachedResponse) {
@@ -150,7 +156,6 @@ export default {
         if (isQuizResults && isGet) {
             const cache = caches.default;
             const cacheKey = new Request(originUrl.toString(), { method: "GET" });
-            const isPurgeRequested = url.searchParams.has("purge");
 
             if (!isPurgeRequested) {
                 let cachedResponse = await cache.match(cacheKey);
@@ -199,7 +204,7 @@ export default {
             const cacheKey = new Request(originUrl.toString(), { method: "GET" });
 
             let cachedResponse = await cache.match(cacheKey);
-            if (cachedResponse && !url.searchParams.has("purge")) {
+            if (cachedResponse && !isPurgeRequested) {
                 const hitHeaders = new Headers(cachedResponse.headers);
                 hitHeaders.set("CF-Cache-Status", "HIT");
                 hitHeaders.set("X-Hawari-Edge", "EDGE-CACHE-HIT");
@@ -243,7 +248,7 @@ export default {
             const cacheKey = new Request(originUrl.toString(), { method: "GET" });
 
             let cachedResponse = await cache.match(cacheKey);
-            if (cachedResponse && !url.searchParams.has("purge")) {
+            if (cachedResponse && !isPurgeRequested) {
                 const hitHeaders = new Headers(cachedResponse.headers);
                 hitHeaders.set("CF-Cache-Status", "HIT");
                 hitHeaders.set("X-Hawari-Edge", "EDGE-CACHE-HIT");

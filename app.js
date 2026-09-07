@@ -2621,18 +2621,26 @@ async function deleteCourseQuizFromCloud(id) {
 }
 
 async function fetchAnnouncement(groupName, forceBypassCache = false) {
+    const cleanGroup = (groupName || state.activeGroup || "infection").toLowerCase().trim();
     try {
-        const querySuffix = forceBypassCache ? `&purge=1&t=${Date.now()}` : "";
-        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${groupName}${querySuffix}`);
-        const list = Array.isArray(records) ? records : (records && Array.isArray(records.data) ? records.data : []);
-        if (list.length > 0 && list[0].content) {
-            state.announcement = list[0].content;
-        } else {
-            state.announcement = "";
+        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1" } } : undefined;
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${encodeURIComponent(cleanGroup)}&select=content,updated_at`, fetchOptions);
+        if (Array.isArray(records)) {
+            if (records.length > 0 && records[0].content) {
+                state.announcement = records[0].content;
+            } else if (records.length === 0) {
+                state.announcement = "";
+            }
+        } else if (records && Array.isArray(records.data)) {
+            if (records.data.length > 0 && records.data[0].content) {
+                state.announcement = records.data[0].content;
+            } else if (records.data.length === 0) {
+                state.announcement = "";
+            }
         }
     } catch (e) {
         console.error("[Sync] Failed to fetch announcement:", e);
-        state.announcement = "";
+        // Do not erase existing valid announcement from memory on transient network errors
     }
     renderAnnouncementWidget();
 }
@@ -2824,17 +2832,45 @@ async function syncUsersWithCloud() {
     }
 
     // 1. Fetch cloud records for the current active course only
-    let queryPath = `hawari_users?group_name=eq.${encodeURIComponent(group)}`;
+    let cloudRecords = null;
     let adminOwnRow = null;
 
-    if (!isAdmin && targetEmail) {
-        queryPath += `&email=eq.${encodeURIComponent(targetEmail)}`;
-    } else if (isAdmin) {
-        // Admin user registry optimization: fetch only metadata columns for the student list
-        // Saves 5+ MB of bandwidth per admin sync!
-        queryPath += `&select=email,password_hash,role,status,date_registered,display_name,last_updated`;
+    if (isAdmin) {
+        const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : targetEmail || "").trim().toLowerCase();
+        const adminHash = (state.currentUser && state.currentUser.password ? state.currentUser.password : "");
 
-        // If admin has an email, fetch admin's own personal row with full questions/tests
+        // Step A: Fetch student registry via Zero-Trust RPC
+        try {
+            const rpcRes = await supabaseRequest("rpc/admin_get_students", {
+                method: "POST",
+                body: JSON.stringify({
+                    p_admin_email: adminEmail,
+                    p_admin_hash: adminHash,
+                    p_group: group
+                })
+            });
+            if (Array.isArray(rpcRes)) {
+                cloudRecords = rpcRes;
+            } else if (rpcRes && Array.isArray(rpcRes.data)) {
+                cloudRecords = rpcRes.data;
+            }
+        } catch (rpcErr) {
+            console.warn("[SyncUsers] admin_get_students RPC error:", rpcErr);
+        }
+
+        // Step B: Fallback to direct query if RPC returned null or is pending activation
+        if (!cloudRecords) {
+            try {
+                const directRes = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&select=email,password_hash,role,status,date_registered,display_name,last_updated`);
+                if (Array.isArray(directRes)) {
+                    cloudRecords = directRes;
+                }
+            } catch (dirErr) {
+                console.warn("[SyncUsers] Direct query fallback failed:", dirErr);
+            }
+        }
+
+        // Step C: If admin has an email, fetch admin's own personal row with full questions/tests
         if (targetEmail) {
             try {
                 const adminRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
@@ -2845,12 +2881,20 @@ async function syncUsersWithCloud() {
                 console.warn("[SyncUsers] Admin personal row fetch deferred:", adminRowErr);
             }
         }
+    } else if (!isAdmin && targetEmail) {
+        try {
+            const studentRows = await supabaseRequest(`hawari_users?group_name=eq.${encodeURIComponent(group)}&email=eq.${encodeURIComponent(targetEmail)}`);
+            if (Array.isArray(studentRows)) {
+                cloudRecords = studentRows;
+            }
+        } catch (stErr) {
+            console.warn("[SyncUsers] Student personal row fetch deferred:", stErr);
+        }
     } else if (!isAdmin && !targetEmail) {
         return;
     }
 
     try {
-        const cloudRecords = await supabaseRequest(queryPath);
         if (cloudRecords && Array.isArray(cloudRecords)) {
             // Map cloud database rows to user object structure
             const cloudUsers = cloudRecords.map(row => {
@@ -2976,6 +3020,9 @@ async function syncUsersWithCloud() {
                     }
                 }
             });
+            if (isAdmin && typeof renderAdminApprovalsTab === "function") {
+                renderAdminApprovalsTab();
+            }
         }
     } catch (e) {
         console.warn("[SyncUsers] Cloud fetch error:", e);
@@ -5662,6 +5709,32 @@ function renderAdminApprovalsTab() {
     }
 }
 
+async function callAdminManageUserRpc(action, targetEmail, role = 'student', displayName = '') {
+    const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
+    const adminHash = (state.currentUser && state.currentUser.password ? state.currentUser.password : "");
+    const group = (state.activeGroup || "infection").toLowerCase().trim();
+    if (!adminEmail) return null;
+
+    try {
+        const res = await supabaseRequest("rpc/admin_manage_user", {
+            method: "POST",
+            body: JSON.stringify({
+                p_admin_email: adminEmail,
+                p_admin_hash: adminHash,
+                p_target_email: (targetEmail || "").trim().toLowerCase(),
+                p_group: group,
+                p_action: action,
+                p_role: role || "student",
+                p_display_name: displayName || ""
+            })
+        });
+        return res;
+    } catch (e) {
+        console.warn(`[AdminManageUser] RPC ${action} warning:`, e);
+        return null;
+    }
+}
+
 window.updateUserDisplayName = async function(email, newName) {
     const user = state.users.find(u => u.email === email);
     if (!user) return;
@@ -5673,29 +5746,37 @@ window.updateUserDisplayName = async function(email, newName) {
 
     encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
-    const payload = {
-        email: user.email.trim().toLowerCase(),
-        group_name: state.activeGroup,
-        password_hash: user.password || user.password_hash || "google_auth_user",
-        role: user.role || 'student',
-        status: user.status || 'approved',
-        display_name: user.displayName,
-        last_updated: user.lastUpdated
-    };
+    // 1. Try Zero-Trust RPC
+    const rpcRes = await callAdminManageUserRpc("update_name", email, user.role || 'student', newName);
 
-    try {
-        await supabaseRequest("hawari_users", {
-            method: "POST",
-            headers: {
-                "Prefer": "resolution=merge-duplicates"
-            },
-            body: JSON.stringify(payload)
-        });
+    if (rpcRes && rpcRes.success) {
         showToast("Name Updated", `Set display name for ${email} to "${newName || email}"`, "success");
-    } catch (e) {
-        console.error("Direct Supabase display_name update failed, queuing offline:", e);
-        enqueueOfflineSync("hawari_users", "UPSERT", payload);
-        showToast("Name Saved Offline", `Display name saved locally and queued for cloud sync.`, "info");
+    } else {
+        // Fallback: Direct table update
+        const payload = {
+            email: user.email.trim().toLowerCase(),
+            group_name: state.activeGroup,
+            password_hash: user.password || user.password_hash || "google_auth_user",
+            role: user.role || 'student',
+            status: user.status || 'approved',
+            display_name: user.displayName,
+            last_updated: user.lastUpdated
+        };
+
+        try {
+            await supabaseRequest("hawari_users", {
+                method: "POST",
+                headers: {
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                body: JSON.stringify(payload)
+            });
+            showToast("Name Updated", `Set display name for ${email} to "${newName || email}"`, "success");
+        } catch (e) {
+            console.error("Direct Supabase display_name update failed, queuing offline:", e);
+            enqueueOfflineSync("hawari_users", "UPSERT", payload);
+            showToast("Name Saved Offline", `Display name saved locally and queued for cloud sync.`, "info");
+        }
     }
 
     renderAdminApprovalsTab();
@@ -5710,10 +5791,11 @@ window.approveUserAdmin = async function(email, role = 'user') {
         btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Saving...`;
     }
 
+    const assignedRole = role === "admin" ? "admin" : "student";
     const user = state.users.find(u => u.email === email);
     if (user) {
         user.status = "approved";
-        user.role = role === "admin" ? "admin" : "student";
+        user.role = assignedRole;
         if (!user.tests) user.tests = [];
         if (!user.notebookNotes) user.notebookNotes = [];
         if (!user.flashcards) user.flashcards = [];
@@ -5721,34 +5803,42 @@ window.approveUserAdmin = async function(email, role = 'user') {
         
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
-        const payload = {
-            email: user.email.trim().toLowerCase(),
-            group_name: state.activeGroup,
-            password_hash: user.password || user.password_hash || "google_auth_user",
-            role: user.role,
-            status: "approved",
-            display_name: user.displayName || user.email.split('@')[0],
-            questions: user.questions || [],
-            tests: user.tests || [],
-            notebook_notes: user.notebookNotes || [],
-            flashcards: user.flashcards || [],
-            report_task_progress: user.reportTaskProgress || {},
-            last_updated: user.lastUpdated
-        };
-        
-        try {
-            await supabaseRequest("hawari_users", {
-                method: "POST",
-                headers: {
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                body: JSON.stringify(payload)
-            });
-            showToast("User Approved", `Gmail account ${email} is now approved as ${role.toUpperCase()}.`, "success");
-        } catch (e) {
-            console.error("Direct cloud approval sync failed, queuing offline:", e);
-            enqueueOfflineSync("hawari_users", "UPSERT", payload);
-            showToast("Sync Warning", "Approved locally and queued for cloud sync.", "warning");
+        // 1. Try Zero-Trust RPC
+        const rpcRes = await callAdminManageUserRpc("approve", email, assignedRole);
+
+        if (rpcRes && rpcRes.success) {
+            showToast("User Approved", `Gmail account ${email} is now approved as ${assignedRole.toUpperCase()}.`, "success");
+        } else {
+            // Fallback: Direct table update
+            const payload = {
+                email: user.email.trim().toLowerCase(),
+                group_name: state.activeGroup,
+                password_hash: user.password || user.password_hash || "google_auth_user",
+                role: user.role,
+                status: "approved",
+                display_name: user.displayName || user.email.split('@')[0],
+                questions: user.questions || [],
+                tests: user.tests || [],
+                notebook_notes: user.notebookNotes || [],
+                flashcards: user.flashcards || [],
+                report_task_progress: user.reportTaskProgress || {},
+                last_updated: user.lastUpdated
+            };
+            
+            try {
+                await supabaseRequest("hawari_users", {
+                    method: "POST",
+                    headers: {
+                        "Prefer": "resolution=merge-duplicates"
+                    },
+                    body: JSON.stringify(payload)
+                });
+                showToast("User Approved", `Gmail account ${email} is now approved as ${assignedRole.toUpperCase()}.`, "success");
+            } catch (e) {
+                console.error("Direct cloud approval sync failed, queuing offline:", e);
+                enqueueOfflineSync("hawari_users", "UPSERT", payload);
+                showToast("Sync Warning", "Approved locally and queued for cloud sync.", "warning");
+            }
         }
         
         renderAdminApprovalsTab();
@@ -5768,16 +5858,23 @@ window.rejectUserAdmin = async function(email) {
         state.users = state.users.filter(u => u.email !== email);
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
         
-        try {
-            // Delete record directly from Supabase with URL-encoded parameters
-            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(email)}&group_name=eq.${encodeURIComponent(state.activeGroup)}`, {
-                method: "DELETE"
-            });
+        // 1. Try Zero-Trust RPC
+        const rpcRes = await callAdminManageUserRpc("reject", email);
+
+        if (rpcRes && rpcRes.success) {
             showToast("Request Rejected", `Registration request for ${email} has been rejected and deleted.`, "warning");
-        } catch (e) {
-            console.error("Cloud deletion failed, queuing offline:", e);
-            enqueueOfflineSync("hawari_users", "DELETE", { email: email, group_name: state.activeGroup });
-            showToast("Deletion Warning", "Deleted locally, and queued for cloud sync.", "warning");
+        } else {
+            try {
+                // Delete record directly from Supabase with URL-encoded parameters
+                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(email)}&group_name=eq.${encodeURIComponent(state.activeGroup)}`, {
+                    method: "DELETE"
+                });
+                showToast("Request Rejected", `Registration request for ${email} has been rejected and deleted.`, "warning");
+            } catch (e) {
+                console.error("Cloud deletion failed, queuing offline:", e);
+                enqueueOfflineSync("hawari_users", "DELETE", { email: email, group_name: state.activeGroup });
+                showToast("Deletion Warning", "Deleted locally, and queued for cloud sync.", "warning");
+            }
         }
 
         renderAdminApprovalsTab();
@@ -5799,34 +5896,41 @@ window.toggleUserRoleAdmin = async function(email, event) {
         user.lastUpdated = Date.now();
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
 
-        const payload = {
-            email: user.email.trim().toLowerCase(),
-            group_name: state.activeGroup,
-            password_hash: user.password || user.password_hash || "google_auth_user",
-            role: user.role,
-            status: user.status || 'approved',
-            display_name: user.displayName || user.email.split('@')[0],
-            questions: user.questions || [],
-            tests: user.tests || [],
-            notebook_notes: user.notebookNotes || [],
-            flashcards: user.flashcards || [],
-            report_task_progress: user.reportTaskProgress || {},
-            last_updated: user.lastUpdated
-        };
-        
-        try {
-            await supabaseRequest("hawari_users", {
-                method: "POST",
-                headers: {
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                body: JSON.stringify(payload)
-            });
+        // 1. Try Zero-Trust RPC
+        const rpcRes = await callAdminManageUserRpc("toggle_role", email, user.role);
+
+        if (rpcRes && rpcRes.success) {
             showToast("Role Updated", `Role for ${email} has been changed to ${user.role.toUpperCase()}.`, "success");
-        } catch (e) {
-            console.error("Direct cloud role sync failed, queuing offline:", e);
-            enqueueOfflineSync("hawari_users", "UPSERT", payload);
-            showToast("Sync Warning", "Role updated locally and queued for cloud sync.", "warning");
+        } else {
+            const payload = {
+                email: user.email.trim().toLowerCase(),
+                group_name: state.activeGroup,
+                password_hash: user.password || user.password_hash || "google_auth_user",
+                role: user.role,
+                status: user.status || 'approved',
+                display_name: user.displayName || user.email.split('@')[0],
+                questions: user.questions || [],
+                tests: user.tests || [],
+                notebook_notes: user.notebookNotes || [],
+                flashcards: user.flashcards || [],
+                report_task_progress: user.reportTaskProgress || {},
+                last_updated: user.lastUpdated
+            };
+            
+            try {
+                await supabaseRequest("hawari_users", {
+                    method: "POST",
+                    headers: {
+                        "Prefer": "resolution=merge-duplicates"
+                    },
+                    body: JSON.stringify(payload)
+                });
+                showToast("Role Updated", `Role for ${email} has been changed to ${user.role.toUpperCase()}.`, "success");
+            } catch (e) {
+                console.error("Direct cloud role sync failed, queuing offline:", e);
+                enqueueOfflineSync("hawari_users", "UPSERT", payload);
+                showToast("Sync Warning", "Role updated locally and queued for cloud sync.", "warning");
+            }
         }
         
         renderAdminApprovalsTab();
@@ -5846,16 +5950,23 @@ window.deleteUserAdmin = async function(email, event) {
         state.users = state.users.filter(u => u.email !== email);
         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
         
-        try {
-            // Delete record directly from Supabase with URL-encoded parameters
-            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(email)}&group_name=eq.${encodeURIComponent(state.activeGroup)}`, {
-                method: "DELETE"
-            });
+        // 1. Try Zero-Trust RPC
+        const rpcRes = await callAdminManageUserRpc("delete", email);
+
+        if (rpcRes && rpcRes.success) {
             showToast("Account Deleted", `User account ${email} has been permanently deleted from registry.`, "danger");
-        } catch (e) {
-            console.error("Cloud deletion failed, queuing offline:", e);
-            enqueueOfflineSync("hawari_users", "DELETE", { email: email, group_name: state.activeGroup });
-            showToast("Deletion Warning", "Deleted locally and queued for cloud sync.", "warning");
+        } else {
+            try {
+                // Delete record directly from Supabase with URL-encoded parameters
+                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(email)}&group_name=eq.${encodeURIComponent(state.activeGroup)}`, {
+                    method: "DELETE"
+                });
+                showToast("Account Deleted", `User account ${email} has been permanently deleted from registry.`, "danger");
+            } catch (e) {
+                console.error("Cloud deletion failed, queuing offline:", e);
+                enqueueOfflineSync("hawari_users", "DELETE", { email: email, group_name: state.activeGroup });
+                showToast("Deletion Warning", "Deleted locally and queued for cloud sync.", "warning");
+            }
         }
         
         renderAdminApprovalsTab();

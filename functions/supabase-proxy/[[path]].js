@@ -32,7 +32,15 @@ export async function onRequest(context) {
         targetPath = "/rest/v1" + targetPath;
     }
 
-    const originUrl = new URL(targetPath + url.search, SUPABASE_ORIGIN);
+    // Strip proxy/purge parameters from query string before sending to PostgREST
+    const forwardSearch = new URLSearchParams(url.searchParams);
+    const isPurgeRequested = forwardSearch.has("purge") || request.headers.has("x-hawari-purge");
+    forwardSearch.delete("purge");
+    forwardSearch.delete("t");
+    forwardSearch.delete("_t");
+    const forwardQueryString = forwardSearch.toString() ? `?${forwardSearch.toString()}` : "";
+
+    const originUrl = new URL(targetPath + forwardQueryString, SUPABASE_ORIGIN);
 
     // Forward request headers
     const forwardHeaders = new Headers(request.headers);
@@ -87,10 +95,6 @@ export async function onRequest(context) {
 
         const cacheKeyUrl = new URL(`https://hawari-edge-cache.internal/questions/${group}`);
         const cacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
-        const cache = caches.default;
-
-        const isPurgeRequested = url.searchParams.has("purge") || request.headers.has("x-hawari-purge");
-
         if (!isPurgeRequested) {
             const cachedResponse = await cache.match(cacheKey);
             if (cachedResponse) {
@@ -138,7 +142,6 @@ export async function onRequest(context) {
     if (isQuizResults && isGet) {
         const cache = caches.default;
         const cacheKey = new Request(originUrl.toString(), { method: "GET" });
-        const isPurgeRequested = url.searchParams.has("purge");
 
         if (!isPurgeRequested) {
             const cachedResponse = await cache.match(cacheKey);
@@ -186,7 +189,7 @@ export async function onRequest(context) {
         const cache = caches.default;
         const cacheKey = new Request(originUrl.toString(), { method: "GET" });
 
-        if (!url.searchParams.has("purge")) {
+        if (!isPurgeRequested) {
             const cachedResponse = await cache.match(cacheKey);
             if (cachedResponse) {
                 const hitHeaders = new Headers(cachedResponse.headers);
@@ -232,7 +235,7 @@ export async function onRequest(context) {
         const cache = caches.default;
         const cacheKey = new Request(originUrl.toString(), { method: "GET" });
 
-        if (!url.searchParams.has("purge")) {
+        if (!isPurgeRequested) {
             const cachedResponse = await cache.match(cacheKey);
             if (cachedResponse) {
                 const hitHeaders = new Headers(cachedResponse.headers);

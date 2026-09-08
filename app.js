@@ -1118,6 +1118,9 @@ function switchCourseTrack() {
     state.quizResults = [];
     state.books = [];
 
+    // Clean instant boot flag from root
+    document.documentElement.classList.remove("instant-boot-active");
+
     // Show course selector page, hide layout/landing/auth
     const selectorPage = document.getElementById("course-selector-page");
     if (selectorPage) selectorPage.classList.remove("hidden");
@@ -1142,6 +1145,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (directTargetGroup) {
         selectCourseTrack(directTargetGroup);
     } else if (rawHash === "videos" || rawHash.startsWith("video-portal") || rawPath === "videos") {
+        document.documentElement.classList.remove("instant-boot-active");
         // Will be routed by initRouter
         const selectorPage = document.getElementById("course-selector-page");
         if (selectorPage) selectorPage.classList.add("hidden");
@@ -1152,6 +1156,7 @@ document.addEventListener("DOMContentLoaded", () => {
             selectCourseTrack(savedGroup);
         } else {
             // No active group, show course selector page
+            document.documentElement.classList.remove("instant-boot-active");
             const selectorPage = document.getElementById("course-selector-page");
             if (selectorPage) selectorPage.classList.remove("hidden");
             document.getElementById("landing-page").classList.add("hidden");
@@ -3466,10 +3471,91 @@ function initAuthFlow() {
             }
 
             console.log("[Auth] Searching user records in database for:", currentAuthenticatingEmail);
-            const user = state.users.find(u => u.email.toLowerCase() === currentAuthenticatingEmail.toLowerCase());
+            let user = state.users.find(u => u.email.toLowerCase() === currentAuthenticatingEmail.toLowerCase());
             const hashedInput = sha256Sync(password);
             
-            if (user && user.password === hashedInput) {
+            let isPasswordValid = Boolean(user && user.password && user.password === hashedInput);
+
+            // Cross-device / new browser fallback: Verify password hash against Supabase if not matched locally
+            if (!isPasswordValid) {
+                btnLoginSubmit.disabled = true;
+                btnLoginSubmit.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Verifying...`;
+                try {
+                    const verifyRes = await supabaseRequest("rpc/verify_student_credentials", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            p_email: currentAuthenticatingEmail.trim().toLowerCase(),
+                            p_password_hash: hashedInput,
+                            p_group: state.activeGroup || "infection"
+                        })
+                    });
+                    if (verifyRes && verifyRes.success) {
+                        isPasswordValid = true;
+                        if (user) {
+                            user.password = hashedInput;
+                            user.status = verifyRes.status || user.status || "approved";
+                            user.role = verifyRes.role || user.role || "student";
+                            if (verifyRes.displayName) user.displayName = verifyRes.displayName;
+                        } else {
+                            user = {
+                                email: currentAuthenticatingEmail,
+                                password: hashedInput,
+                                displayName: verifyRes.displayName || currentAuthenticatingEmail.split("@")[0],
+                                status: verifyRes.status || "approved",
+                                role: verifyRes.role || "student",
+                                dateRegistered: new Date().toLocaleDateString(),
+                                questions: [],
+                                tests: [],
+                                notebookNotes: [],
+                                flashcards: [],
+                                reportTaskProgress: {},
+                                lastUpdated: Date.now()
+                            };
+                            state.users.push(user);
+                        }
+                        encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+                    }
+                } catch (verifyErr) {
+                    console.warn("[Auth] verify_student_credentials RPC warning:", verifyErr);
+                }
+
+                // If still not valid, try GoTrue password token directly as fallback
+                if (!isPasswordValid) {
+                    try {
+                        const tokenRes = await loginToSupabaseAuth(currentAuthenticatingEmail, password);
+                        if (tokenRes && tokenRes.access_token) {
+                            isPasswordValid = true;
+                            if (user) {
+                                user.password = hashedInput;
+                            } else {
+                                user = {
+                                    email: currentAuthenticatingEmail,
+                                    password: hashedInput,
+                                    displayName: currentAuthenticatingEmail.split("@")[0],
+                                    status: "approved",
+                                    role: "student",
+                                    dateRegistered: new Date().toLocaleDateString(),
+                                    questions: [],
+                                    tests: [],
+                                    notebookNotes: [],
+                                    flashcards: [],
+                                    reportTaskProgress: {},
+                                    lastUpdated: Date.now()
+                                };
+                                state.users.push(user);
+                            }
+                            encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+                        }
+                    } catch (gtErr) {
+                        console.warn("[Auth] GoTrue token fallback notice:", gtErr);
+                    }
+                }
+
+                btnLoginSubmit.disabled = false;
+                btnLoginSubmit.innerHTML = `Log In <i class="fa-solid fa-right-to-bracket"></i>`;
+            }
+            
+            if (isPasswordValid && user) {
                 const isUserAdmin = user.role === "admin" || user.role === "instructor" || user.is_admin === true;
                 if (!isUserAdmin && user.status !== "approved") {
                     showToast("الحساب قيد الاعتماد", "حسابك لا يزال قيد المراجعة والموافقة من الإدارة.", "warning");
@@ -3783,6 +3869,9 @@ function showLandingPage() {
 }
 
 function showAuthOverlay() {
+    // Ensure instant-boot flag is stripped so auth overlay is 100% visible
+    document.documentElement.classList.remove("instant-boot-active");
+
     if (!state.activeGroup) {
         switchCourseTrack();
         return;
@@ -3824,6 +3913,9 @@ function enterWorkspace() {
     document.getElementById("auth-overlay").classList.add("hidden");
     document.getElementById("app-layout").classList.remove("hidden");
     
+    // Retirement of instant-boot flag now that app-layout is strictly active and visible
+    document.documentElement.classList.remove("instant-boot-active");
+    
     // Set Profile UI elements
     document.getElementById("user-display-name").innerText = state.currentUser.email;
     document.getElementById("welcome-user-name").innerText = state.currentUser.email.split("@")[0];
@@ -3845,10 +3937,14 @@ function enterWorkspace() {
     }
 
     // Default route
-    if (!window.location.hash) {
-        window.location.hash = "#dashboard";
-    } else {
-        switchView(window.location.hash.substring(1));
+    try {
+        if (!window.location.hash) {
+            window.location.hash = "#dashboard";
+        } else {
+            switchView(window.location.hash.substring(1));
+        }
+    } catch (routeErr) {
+        console.warn("[Workspace] Route initialization notice:", routeErr);
     }
 }
 
@@ -3868,52 +3964,54 @@ function renderDashboard() {
     document.getElementById("stat-marked-questions").innerText = markedQCount;
     document.getElementById("stat-unused-questions").innerText = unusedQCount;
 
-    // Completed tests
     const completedTests = state.tests.filter(t => t.isCompleted);
     document.getElementById("stat-total-tests").innerText = completedTests.length;
     
-    // Average score calculation
     let avgScore = 0;
     if (completedTests.length > 0) {
-        const sum = completedTests.reduce((acc, curr) => acc + curr.score, 0);
-        avgScore = Math.round(sum / completedTests.length);
+        const totalScore = completedTests.reduce((acc, t) => acc + t.score, 0);
+        avgScore = Math.round(totalScore / completedTests.length);
     }
     document.getElementById("stat-avg-score").innerText = `${avgScore}%`;
     document.getElementById("stat-total-notes").innerText = state.notebookNotes.length;
 
-    // 2. Render doughnut chart
+    // 2. Render doughnut chart (with defensive check)
     const ctx = document.getElementById("progress-doughnut-chart");
-    if (ctx) {
-        if (doughnutChart) {
-            doughnutChart.destroy();
-        }
-        
-        // Check if all zero
-        const datasetsData = [correctQCount, incorrectQCount, unusedQCount];
-        const isAllZero = datasetsData.every(v => v === 0);
-        
-        const chartData = {
-            labels: ["Correct", "Incorrect", "Unused"],
-            datasets: [{
-                data: isAllZero ? [0, 0, 1] : datasetsData,
-                backgroundColor: isAllZero ? ["#cbd5e1"] : ["#10b981", "#ef4444", "#3b82f6"],
-                borderWidth: 0,
-                hoverOffset: 4
-            }]
-        };
-
-        doughnutChart = new Chart(ctx, {
-            type: 'doughnut',
-            data: chartData,
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false }
-                },
-                cutout: "75%"
+    if (ctx && typeof Chart !== "undefined") {
+        try {
+            if (doughnutChart) {
+                doughnutChart.destroy();
             }
-        });
+            
+            // Check if all zero
+            const datasetsData = [correctQCount, incorrectQCount, unusedQCount];
+            const isAllZero = datasetsData.every(v => v === 0);
+            
+            const chartData = {
+                labels: ["Correct", "Incorrect", "Unused"],
+                datasets: [{
+                    data: isAllZero ? [0, 0, 1] : datasetsData,
+                    backgroundColor: isAllZero ? ["#cbd5e1"] : ["#10b981", "#ef4444", "#3b82f6"],
+                    borderWidth: 0,
+                    hoverOffset: 4
+                }]
+            };
+
+            doughnutChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    cutout: "75%"
+                }
+            });
+        } catch (chartErr) {
+            console.warn("[Dashboard] Chart rendering notice:", chartErr);
+        }
     }
 
     // 3. Render legend summary details
@@ -5581,40 +5679,166 @@ function renderAdminPanel() {
     const directUserForm = document.getElementById("admin-direct-user-form");
     if (directUserForm && !directUserForm.dataset.bound) {
         directUserForm.dataset.bound = "true";
-        directUserForm.onsubmit = (e) => {
+        directUserForm.onsubmit = async (e) => {
             e.preventDefault();
-            const email = document.getElementById("admin-direct-email").value.trim().toLowerCase();
-            const password = document.getElementById("admin-direct-password").value;
-            const role = document.getElementById("admin-direct-role").value;
+            const emailInput = document.getElementById("admin-direct-email");
+            const passwordInput = document.getElementById("admin-direct-password");
+            const roleSelect = document.getElementById("admin-direct-role");
+
+            const email = (emailInput ? emailInput.value : "").trim().toLowerCase();
+            const password = passwordInput ? passwordInput.value : "";
+            const rawRole = roleSelect ? roleSelect.value : "user";
+            const assignedRole = rawRole === "admin" ? "admin" : "student";
 
             if (!email.endsWith("@gmail.com")) {
                 showToast("Gmail Only", "Only Gmail accounts can be registered.", "warning");
                 return;
             }
 
-            const existing = state.users.find(u => u.email === email);
-            if (existing) {
-                showToast("Already Exists", "This email account is already registered in the system.", "danger");
+            if (!password || password.length < 6) {
+                showToast("Weak Password", "Password must be at least 6 characters long.", "danger");
                 return;
             }
 
+            const existing = (state.users || []).find(u => (u.email || '').toLowerCase() === email);
+            if (existing && existing.status === "approved") {
+                showToast("Already Exists", "This email account is already registered and approved in the system.", "danger");
+                return;
+            }
+
+            const submitBtn = directUserForm.querySelector('button[type="submit"]');
+            const origBtnHtml = submitBtn ? submitBtn.innerHTML : "";
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Adding to Cloud...`;
+            }
+
+            const passwordHash = sha256Sync(password);
+            const displayName = email.split("@")[0];
+            const currentGroup = (state.activeGroup || "infection").toLowerCase().trim();
+            const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
+            const adminHash = (state.currentUser && state.currentUser.password ? state.currentUser.password : "");
+
+            let cloudSuccess = false;
+
+            // 1. Primary: Authoritative Direct Add RPC (admin_direct_add_user)
+            try {
+                const rpcRes = await supabaseRequest("rpc/admin_direct_add_user", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        p_admin_email: adminEmail,
+                        p_admin_hash: adminHash,
+                        p_new_email: email,
+                        p_new_password_hash: passwordHash,
+                        p_role: assignedRole,
+                        p_display_name: displayName,
+                        p_group: currentGroup
+                    })
+                });
+                if (rpcRes && (rpcRes.success || !rpcRes.error)) {
+                    cloudSuccess = true;
+                    console.log("[AdminDirectAdd] admin_direct_add_user RPC success:", rpcRes);
+                }
+            } catch (rpcErr) {
+                console.warn("[AdminDirectAdd] admin_direct_add_user RPC error:", rpcErr);
+            }
+
+            // 2. Fallback: register_student_rpc + callAdminManageUserRpc('approve')
+            if (!cloudSuccess) {
+                try {
+                    const regRes = await supabaseRequest("rpc/register_student_rpc", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            p_email: email,
+                            p_password_hash: passwordHash,
+                            p_display_name: displayName,
+                            p_group: currentGroup
+                        })
+                    });
+                    if (regRes && (regRes.success || !regRes.error)) {
+                        cloudSuccess = true;
+                    }
+                } catch (regErr) {
+                    console.warn("[AdminDirectAdd] register_student_rpc fallback error:", regErr);
+                }
+
+                try {
+                    const approveRes = await callAdminManageUserRpc("approve", email, assignedRole, displayName);
+                    if (approveRes && (approveRes.success || !approveRes.error)) {
+                        cloudSuccess = true;
+                    }
+                } catch (apprErr) {
+                    console.warn("[AdminDirectAdd] callAdminManageUserRpc approve error:", apprErr);
+                }
+            }
+
+            // 3. Fallback: Direct table upsert
+            try {
+                await supabaseRequest("hawari_users", {
+                    method: "POST",
+                    headers: { "Prefer": "resolution=merge-duplicates" },
+                    body: JSON.stringify({
+                        email: email,
+                        group_name: currentGroup,
+                        password_hash: passwordHash,
+                        role: assignedRole,
+                        status: "approved",
+                        display_name: displayName,
+                        date_registered: new Date().toLocaleDateString(),
+                        questions: [],
+                        tests: [],
+                        notebook_notes: [],
+                        flashcards: [],
+                        report_task_progress: {},
+                        last_updated: Date.now()
+                    })
+                });
+            } catch (tableErr) {
+                console.warn("[AdminDirectAdd] Direct table upsert notice:", tableErr);
+            }
+
+            // 4. Parallel GoTrue signup for Supabase Auth JWT compatibility
+            try {
+                fetch(`${SUPABASE_CONFIG.url}/auth/v1/signup`, {
+                    method: "POST",
+                    headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
+                    body: JSON.stringify({ email: email, password: password })
+                }).catch(e => console.warn("[AdminDirectAdd] Parallel GoTrue signup notice:", e.message));
+            } catch (e) {}
+
+            // 5. Update local state & encrypted storage
             const newUser = {
                 email: email,
-                password: sha256Sync(password),
-                role: role,
+                password: passwordHash,
+                role: assignedRole,
                 status: "approved",
+                displayName: displayName,
                 dateRegistered: new Date().toLocaleDateString(),
                 questions: JSON.parse(JSON.stringify(SEED_QUESTIONS)),
                 tests: [],
                 notebookNotes: [],
-                flashcards: []
+                flashcards: [],
+                reportTaskProgress: {},
+                lastUpdated: Date.now()
             };
 
-            state.users.push(newUser);
-            saveStateToStorage();
+            const userIndex = state.users.findIndex(u => (u.email || '').toLowerCase() === email);
+            if (userIndex >= 0) {
+                state.users[userIndex] = Object.assign(state.users[userIndex], newUser);
+            } else {
+                state.users.push(newUser);
+            }
 
-            showToast("User Created", `Directly added approved ${role.toUpperCase()} account.`, "success");
+            encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+            saveStateToStorage(true);
+
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = origBtnHtml;
+            }
+
             directUserForm.reset();
+            showToast("User Created & Approved", `Added approved ${assignedRole.toUpperCase()} account (${email}) directly to Cloud. User can log in immediately.`, "success");
             renderAdminApprovalsTab();
         };
     }

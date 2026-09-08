@@ -37,15 +37,56 @@
                 if (isDark) {
                     document.documentElement.classList.add("dark-theme");
                 }
-                const group = localStorage.getItem("hawari_active_group") || "infection";
-                const rawUser = localStorage.getItem("hawari_current_user_" + group) || localStorage.getItem("hawari_current_user");
-                if (rawUser) {
-                    const u = JSON.parse(rawUser);
-                    if (u && u.email && u.status === "approved") {
-                        document.documentElement.classList.add("instant-boot-active");
+                const group = localStorage.getItem("hawari_active_group");
+                // ONLY activate instant-boot if an active group is set AND an approved user exists for this group
+                if (group) {
+                    const rawUser = localStorage.getItem("hawari_current_user_" + group) || localStorage.getItem("hawari_current_user");
+                    if (rawUser) {
+                        const u = JSON.parse(rawUser);
+                        if (u && u.email && u.status === "approved") {
+                            document.documentElement.classList.add("instant-boot-active");
+                        }
                     }
                 }
             } catch(e) {}
+
+            // Enterprise Failsafe Watchdog Timer (800ms)
+            // Permanently prevents white screen deadlocks if anything delays or halts app rendering
+            setTimeout(function() {
+                try {
+                    if (document.documentElement.classList.contains("instant-boot-active")) {
+                        var layout = document.getElementById("app-layout");
+                        if (!layout || layout.classList.contains("hidden")) {
+                            console.warn("[Watchdog] Instant-boot timed out before app-layout rendered. Recovering viewport...");
+                            document.documentElement.classList.remove("instant-boot-active");
+                            var sel = document.getElementById("course-selector-page");
+                            var land = document.getElementById("landing-page");
+                            if (localStorage.getItem("hawari_active_group")) {
+                                if (land) land.classList.remove("hidden");
+                            } else {
+                                if (sel) sel.classList.remove("hidden");
+                            }
+                        }
+                    }
+                } catch(e) {}
+            }, 800);
+
+            // Global Error Boundary: Recover viewport immediately on any fatal script error
+            window.addEventListener("error", function(err) {
+                try {
+                    var layout = document.getElementById("app-layout");
+                    if (!layout || layout.classList.contains("hidden")) {
+                        document.documentElement.classList.remove("instant-boot-active");
+                        var sel = document.getElementById("course-selector-page");
+                        var land = document.getElementById("landing-page");
+                        if (localStorage.getItem("hawari_active_group")) {
+                            if (land) land.classList.remove("hidden");
+                        } else {
+                            if (sel) sel.classList.remove("hidden");
+                        }
+                    }
+                } catch(e) {}
+            });
         })();
     </script>
 
@@ -57,8 +98,11 @@
         .admin-tab-content.active {
             display: block !important;
         }
-        html.instant-boot-active #course-selector-page,
         html.instant-boot-active #landing-page {
+            display: none !important;
+        }
+        /* Never force-hide course selector if it was unhidden by JS */
+        html.instant-boot-active #course-selector-page.hidden {
             display: none !important;
         }
         html.instant-boot-active #app-layout:not(.hidden) {
@@ -109,7 +153,7 @@
         }
     </style>
 
-  <script type="module" crossorigin src="/assets/index-DdwEJOHE.js"></script>
+  <script type="module" crossorigin src="/assets/index-CGxIp4gb.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-CrmwSRXG.css">
 </head>
 <body class="light-theme theme-clay">

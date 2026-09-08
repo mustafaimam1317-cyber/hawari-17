@@ -1,4 +1,20 @@
 
+import { APP_MARKUP } from './uiTemplate.js';
+
+// ================= SYNCHRONOUS ROOT MOUNTING =================
+// Instantly mounts complete UI DOM markup into <div id="root"> before any other logic runs
+(function mountRootShell() {
+    if (typeof document !== "undefined") {
+        const root = document.getElementById("root");
+        if (root && !document.getElementById("app-layout")) {
+            root.innerHTML = APP_MARKUP;
+        }
+        if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+    }
+})();
+
 // ================= CENTRALIZED SUPABASE CONFIGURATION =================
 const SUPABASE_CONFIG = {
     url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, ""),

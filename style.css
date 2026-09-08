@@ -3446,3 +3446,45 @@ body.group-dermatology.dark-theme {
         max-height: 220px !important;
     }
 }
+
+/* ================= INSTANT BOOT, ROOT & DRM OVERLAY ================= */
+#root {
+    display: contents;
+}
+.admin-tab-content {
+    display: none !important;
+}
+.admin-tab-content.active {
+    display: block !important;
+}
+html.instant-boot-active #landing-page {
+    display: none !important;
+}
+html.instant-boot-active #course-selector-page.hidden {
+    display: none !important;
+}
+html.instant-boot-active #app-layout:not(.hidden) {
+    display: grid !important;
+}
+#app-layout.hidden {
+    display: none !important;
+}
+.drm-blurred {
+    filter: blur(18px) grayscale(90%) !important;
+    opacity: 0.15 !important;
+    pointer-events: none !important;
+    transition: filter 0.2s ease, opacity 0.2s ease;
+}
+#drm-shield-flash {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #090d16;
+    z-index: 999999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.05s ease-in-out;
+}
+#drm-shield-flash.active {
+    opacity: 1;
+    pointer-events: all;
+}

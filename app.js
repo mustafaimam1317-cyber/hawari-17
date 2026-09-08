@@ -1050,6 +1050,7 @@ async function selectCourseTrack(groupName) {
                     fetchQuizResults(groupName),
                     fetchAnnouncement(groupName),
                     fetchBookLibraryData(groupName),
+                    fetchGrantedUsersList(),
                     syncUsersWithCloud()
                 ]);
                 if (state.currentUser) {
@@ -1073,7 +1074,8 @@ async function selectCourseTrack(groupName) {
             try {
                 await Promise.allSettled([
                     fetchAnnouncement(groupName),
-                    fetchBookLibraryData(groupName)
+                    fetchBookLibraryData(groupName),
+                    fetchGrantedUsersList()
                 ]);
             } catch(e){}
         }, 10);
@@ -3576,8 +3578,11 @@ function initAuthFlow() {
                 await loginToSupabaseAuth(currentAuthenticatingEmail, password);
 
                 try {
-                    // Force sync cloud progress to avoid overwriting newer progress from other devices
-                    await syncUsersWithCloud();
+                    // Force sync cloud progress and fetch granted book access list to avoid overwriting newer progress
+                    await Promise.allSettled([
+                        syncUsersWithCloud(),
+                        fetchGrantedUsersList()
+                    ]);
                 } catch (e) {
                     console.error("Login sync failed:", e);
                 }
@@ -4096,25 +4101,39 @@ function renderDashboard() {
 
                 // 2. Direct authoritative push to Supabase (Server-First Wipe)
                 if (userEmail) {
-                    const resetPayload = {
-                        tests: [],
-                        notebook_notes: [],
-                        questions: state.questions.map(q => ({
-                            id: q.id,
-                            status: "unused",
-                            marked: false,
-                            notes: "",
-                            highlightedHtml: "",
-                            userAnswer: null
-                        })),
-                        last_updated: newTimestamp
-                    };
+                    let rpcResetDone = false;
+                    try {
+                        const rpcRes = await supabaseRequest("rpc/reset_user_progress_rpc", {
+                            method: "POST",
+                            body: JSON.stringify({
+                                p_user_email: userEmail,
+                                p_group: group
+                            })
+                        });
+                        if (rpcRes && (rpcRes.success || !rpcRes.error)) {
+                            rpcResetDone = true;
+                            console.log("[ResetSite] reset_user_progress_rpc success:", rpcRes);
+                        }
+                    } catch (rpcErr) {
+                        console.warn("[ResetSite] reset_user_progress_rpc deferred, trying update_user_progress_rpc fallback:", rpcErr);
+                    }
 
-                    await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
-                        method: "PATCH",
-                        headers: { "Prefer": "return=minimal" },
-                        body: JSON.stringify(resetPayload)
-                    });
+                    if (!rpcResetDone) {
+                        try {
+                            await supabaseRequest("rpc/update_user_progress_rpc", {
+                                method: "POST",
+                                body: JSON.stringify({
+                                    p_user_email: userEmail,
+                                    p_group: group,
+                                    p_tests: [],
+                                    p_notebook_notes: [],
+                                    p_last_updated: newTimestamp
+                                })
+                            });
+                        } catch (fErr) {
+                            console.warn("[ResetSite] update_user_progress_rpc fallback deferred:", fErr);
+                        }
+                    }
                 }
 
                 // 3. Persist cleanly to local storage
@@ -12013,6 +12032,13 @@ window.openBook = async function(bookId) {
     const book = (state.books || []).find(b => b.id === bookId);
     if (!book) return;
 
+    // Refresh granted subscription status so full access unlocks immediately
+    try {
+        await fetchGrantedUsersList();
+    } catch (e) {
+        console.warn("[BookReader] fetchGrantedUsersList fallback:", e.message);
+    }
+
     // Set active book
     bookState.activeBookFile = book;
     bookState.numPages = book.total_pages || 1;
@@ -12398,17 +12424,27 @@ async function flushPendingProgressSync() {
 }
 
 function renderHawariBookView() {
-    const isAuth = isUserBookAuthorized(state.currentUser);
-    const badge = document.getElementById("book-access-status-badge");
-    if (badge) {
-        if (isAuth) {
-            badge.className = "badge badge-active";
-            badge.innerHTML = `<i class="fa-solid fa-lock-open"></i> Full Subscription`;
-        } else {
-            badge.className = "badge badge-warning";
-            badge.innerHTML = `<i class="fa-solid fa-eye"></i> Free 10-Page Preview`;
+    const updateAccessBadge = () => {
+        const isAuth = isUserBookAuthorized(state.currentUser);
+        const badge = document.getElementById("book-access-status-badge");
+        if (badge) {
+            if (isAuth) {
+                badge.className = "badge badge-active";
+                badge.innerHTML = `<i class="fa-solid fa-lock-open"></i> Full Subscription`;
+            } else {
+                badge.className = "badge badge-warning";
+                badge.innerHTML = `<i class="fa-solid fa-eye"></i> Free 10-Page Preview`;
+            }
         }
-    }
+    };
+
+    updateAccessBadge();
+    fetchGrantedUsersList().then(() => {
+        updateAccessBadge();
+        if (bookState.activeBookFile) {
+            redrawBookCanvas();
+        }
+    }).catch(() => {});
 
     initBookDrmProtection();
 

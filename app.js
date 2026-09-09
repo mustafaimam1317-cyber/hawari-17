@@ -1218,30 +1218,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initAddBookModalForm();
 
     // Admin Announcements Form bindings
-    const annForm = document.getElementById("admin-announcements-form");
-    if (annForm) {
-        annForm.onsubmit = async (e) => {
-            e.preventDefault();
-            const text = document.getElementById("admin-announcement-text").value.trim();
-            if (!text) return;
-            const success = await saveAnnouncementToCloud(text);
-            if (success) {
-                showToast("Announcement Published", "Announcement successfully updated on the dashboard.", "success");
-            }
-        };
-    }
-
-    const annClearBtn = document.getElementById("btn-clear-announcement");
-    if (annClearBtn) {
-        annClearBtn.onclick = async () => {
-            if (!confirm("Are you sure you want to clear the active announcement?")) return;
-            const success = await deleteAnnouncementFromCloud();
-            if (success) {
-                document.getElementById("admin-announcement-text").value = "";
-                showToast("Announcement Cleared", "Announcement successfully deleted.", "success");
-            }
-        };
-    }
+    bindAdminAnnouncementControls();
 
     // Register PWA Service Worker
     if ('serviceWorker' in navigator) {
@@ -1642,8 +1619,7 @@ async function supabaseRequest(path, options = {}) {
         const isCacheableEdgePath = SUPABASE_CONFIG.proxyUrl && (method === "GET" || method === "HEAD") && (
             cleanPath.includes("rpc/get_sanitized_questions") ||
             cleanPath.includes("hawari_quiz_results") ||
-            cleanPath.includes("hawari_book_files") ||
-            cleanPath.includes("hawari_announcements")
+            cleanPath.includes("hawari_book_files")
         );
 
         let requestUrl = isCacheableEdgePath
@@ -2418,13 +2394,21 @@ async function fetchReportTasksFromCloud(group, forceRefresh = false) {
     try {
         const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
-            state.reportTasks = records.map(row => ({
-                id: row.id,
-                title: row.title,
-                duration: row.time_limit,
-                questions: row.question_ids || [],
-                dateCreated: row.date_created
-            }));
+            const isAdmin = isUserAdmin(state.currentUser);
+            state.reportTasks = records.map(row => {
+                const rawQs = Array.isArray(row.question_ids) ? row.question_ids : [];
+                const safeQuestions = isAdmin ? rawQs : rawQs.map(q => {
+                    const { correctOption, explanation, ...safeQ } = q;
+                    return safeQ;
+                });
+                return {
+                    id: row.id,
+                    title: row.title,
+                    duration: row.time_limit,
+                    questions: safeQuestions,
+                    dateCreated: row.date_created
+                };
+            });
             
             // Cache in memory
             window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
@@ -2442,13 +2426,21 @@ async function revalidateReportTasks(group) {
     try {
         const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
-            const mapped = records.map(row => ({
-                id: row.id,
-                title: row.title,
-                duration: row.time_limit,
-                questions: row.question_ids || [],
-                dateCreated: row.date_created
-            }));
+            const isAdmin = isUserAdmin(state.currentUser);
+            const mapped = records.map(row => {
+                const rawQs = Array.isArray(row.question_ids) ? row.question_ids : [];
+                const safeQuestions = isAdmin ? rawQs : rawQs.map(q => {
+                    const { correctOption, explanation, ...safeQ } = q;
+                    return safeQ;
+                });
+                return {
+                    id: row.id,
+                    title: row.title,
+                    duration: row.time_limit,
+                    questions: safeQuestions,
+                    dateCreated: row.date_created
+                };
+            });
             state.reportTasks = mapped;
             window.HawariExamCacheMemory[group] = window.HawariExamCacheMemory[group] || {};
             window.HawariExamCacheMemory[group].reportTasks = mapped;
@@ -2791,7 +2783,59 @@ async function deleteAnnouncementFromCloud() {
     } catch (e) {
         console.error("[Sync] Failed to delete announcement:", e);
         showToast("خطأ", "فشل حذف الإعلان من السيرفر.", "danger");
-        return false;
+    }
+}
+
+function bindAdminAnnouncementControls() {
+    const annForm = document.getElementById("admin-announcements-form");
+    const annClearBtn = document.getElementById("btn-clear-announcement");
+    if (!annForm && !annClearBtn) return;
+
+    if (annForm && !annForm.dataset.bound) {
+        annForm.dataset.bound = "true";
+        annForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const input = document.getElementById("admin-announcement-text");
+            const text = input ? input.value.trim() : "";
+            if (!text) {
+                showToast("تنبيه", "يرجى كتابة نص الإعلان أولاً قبل النشر.", "warning");
+                return;
+            }
+
+            const submitBtn = annForm.querySelector("button[type='submit']");
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> جاري النشر...`;
+            }
+
+            const success = await saveAnnouncementToCloud(text);
+
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = `<i class="fa-solid fa-paper-plane"></i> Publish Announcement`;
+            }
+
+            if (success) {
+                showToast("تم نشر الإعلان", "تم تحديث ونشر الإعلان بنجاح في الداشبورد ولوحة التحكم.", "success");
+            }
+        };
+    }
+
+    if (annClearBtn && !annClearBtn.dataset.bound) {
+        annClearBtn.dataset.bound = "true";
+        annClearBtn.onclick = async () => {
+            if (!confirm("هل أنت متأكد من رغبتك في حذف الإعلان الحالي؟")) return;
+            annClearBtn.disabled = true;
+            annClearBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> جاري الحذف...`;
+            const success = await deleteAnnouncementFromCloud();
+            annClearBtn.disabled = false;
+            annClearBtn.innerHTML = `<i class="fa-solid fa-trash-can"></i> Clear Announcement`;
+            if (success) {
+                const input = document.getElementById("admin-announcement-text");
+                if (input) input.value = "";
+                showToast("تم الحذف", "تم حذف الإعلان بنجاح.", "info");
+            }
+        };
     }
 }
 
@@ -5697,9 +5741,11 @@ function renderAdminPanel() {
                     renderAdminQuizzesTab();
                 });
             } else if (target === "admin-announcements-tab") {
+                bindAdminAnnouncementControls();
                 fetchAnnouncement(state.activeGroup).then(() => {
                     const txt = document.getElementById("admin-announcement-text");
                     if (txt) txt.value = state.announcement || "";
+                    renderAnnouncementWidget();
                 });
             }
         };
@@ -13295,7 +13341,8 @@ function bindBookToolbarEvents() {
         btnAddBlank.dataset.bound = "true";
         btnAddBlank.onclick = () => {
             const accessInfo = getBookAccessLevel(state.currentUser);
-            if (!accessInfo.isFullGrant) {
+            const isAdmin = isUserAdmin(state.currentUser);
+            if (!isAdmin && !accessInfo.isFullGrant) {
                 showToast("صلاحية محدودة", "ميزة إضافة الصفحات البيضاء متاحة فقط للحسابات ذات الوصول الكامل (Full Access).", "warning");
                 return;
             }
@@ -13308,6 +13355,41 @@ function bindBookToolbarEvents() {
             const lblPage = document.getElementById("scratchpad-target-page-num");
             if (lblPage) lblPage.innerText = `${bookState.currentPage} (المتبقي: ${20 - currentBlankCount} صفحة)`;
             if (modal) modal.classList.remove("hidden");
+        };
+    }
+
+    // Scratchpad Modal Template Option Cards
+    document.querySelectorAll("#modal-scratchpad-template .template-option-card").forEach(card => {
+        if (!card.dataset.bound) {
+            card.dataset.bound = "true";
+            card.onclick = () => {
+                document.querySelectorAll("#modal-scratchpad-template .template-option-card").forEach(c => c.classList.remove("active"));
+                card.classList.add("active");
+                bookState.selectedScratchpadTemplate = card.dataset.template || "blank";
+            };
+        }
+    });
+
+    // Scratchpad Modal Apply Button
+    const btnApplyTemplate = document.getElementById("btn-apply-scratchpad-template");
+    if (btnApplyTemplate && !btnApplyTemplate.dataset.bound) {
+        btnApplyTemplate.dataset.bound = "true";
+        btnApplyTemplate.onclick = () => {
+            window.applySelectedScratchpadTemplate();
+        };
+    }
+
+    // Scratchpad Modal Cancel / Close Button
+    const btnCloseScratch = document.getElementById("btn-close-scratchpad-modal");
+    const scratchModalEl = document.getElementById("modal-scratchpad-template");
+    if (btnCloseScratch && scratchModalEl && !btnCloseScratch.dataset.bound) {
+        btnCloseScratch.dataset.bound = "true";
+        btnCloseScratch.onclick = () => scratchModalEl.classList.add("hidden");
+    }
+    if (scratchModalEl && !scratchModalEl.dataset.backdropBound) {
+        scratchModalEl.dataset.backdropBound = "true";
+        scratchModalEl.onclick = (e) => {
+            if (e.target === scratchModalEl) scratchModalEl.classList.add("hidden");
         };
     }
 
@@ -13525,7 +13607,8 @@ window.selectScratchpadTemplate = function(type, el) {
 
 window.applySelectedScratchpadTemplate = function() {
     const accessInfo = getBookAccessLevel(state.currentUser);
-    if (!accessInfo.isFullGrant) {
+    const isAdmin = isUserAdmin(state.currentUser);
+    if (!isAdmin && !accessInfo.isFullGrant) {
         showToast("صلاحية محدودة", "ميزة إضافة الصفحات البيضاء متاحة فقط للحسابات ذات الوصول الكامل (Full Access).", "warning");
         return;
     }
@@ -14586,6 +14669,7 @@ async function redrawBookCanvas() {
 
     const curVirtualEarly = bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1];
     if (curVirtualEarly && curVirtualEarly.type === "blank") {
+        if (lockOverlay) lockOverlay.classList.add("hidden");
         renderBlankScratchpadCanvas(curVirtualEarly);
         redrawCurrentPageAnnotations();
         return;
@@ -14648,6 +14732,7 @@ async function redrawBookCanvas() {
 
             const curVirtual = bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1];
             if (curVirtual && curVirtual.type === "blank") {
+                if (lockOverlay) lockOverlay.classList.add("hidden");
                 renderBlankScratchpadCanvas(curVirtual);
                 redrawCurrentPageAnnotations();
                 return;

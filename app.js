@@ -2665,32 +2665,61 @@ async function deleteCourseQuizFromCloud(id) {
 
 async function fetchAnnouncement(groupName, forceBypassCache = false) {
     const cleanGroup = (groupName || state.activeGroup || "infection").toLowerCase().trim();
+    
+    // 1. Instant local fallback to prevent layout flash or race conditions
+    if (!state.announcement) {
+        try {
+            const cachedAnn = localStorage.getItem(`hawari_announcement_${cleanGroup}`);
+            if (cachedAnn) {
+                state.announcement = cachedAnn;
+                renderAnnouncementWidget();
+            }
+        } catch (storageErr) {}
+    }
+
     try {
-        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1" } } : undefined;
-        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${encodeURIComponent(cleanGroup)}&select=content,updated_at`, fetchOptions);
+        const cacheBuster = forceBypassCache ? `&_t=${Date.now()}` : "";
+        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1", "Cache-Control": "no-cache" } } : undefined;
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${encodeURIComponent(cleanGroup)}&select=content,updated_at${cacheBuster}`, fetchOptions);
+        
+        let serverContent = null;
+        let isConfirmedEmpty = false;
+
         if (Array.isArray(records)) {
-            if (records.length > 0 && records[0].content) {
-                state.announcement = records[0].content;
+            if (records.length > 0 && records[0] && typeof records[0].content === "string") {
+                serverContent = records[0].content;
             } else if (records.length === 0) {
-                state.announcement = "";
+                isConfirmedEmpty = true;
             }
         } else if (records && Array.isArray(records.data)) {
-            if (records.data.length > 0 && records.data[0].content) {
-                state.announcement = records.data[0].content;
+            if (records.data.length > 0 && records.data[0] && typeof records.data[0].content === "string") {
+                serverContent = records.data[0].content;
             } else if (records.data.length === 0) {
-                state.announcement = "";
+                isConfirmedEmpty = true;
             }
+        }
+
+        if (serverContent !== null) {
+            state.announcement = serverContent;
+            try {
+                localStorage.setItem(`hawari_announcement_${cleanGroup}`, serverContent);
+            } catch (e) {}
+        } else if (isConfirmedEmpty && forceBypassCache) {
+            // Only erase on explicit bypass verification (e.g. after deliberate deletion)
+            state.announcement = "";
+            try {
+                localStorage.removeItem(`hawari_announcement_${cleanGroup}`);
+            } catch (e) {}
         }
     } catch (e) {
         console.error("[Sync] Failed to fetch announcement:", e);
-        // Do not erase existing valid announcement from memory on transient network errors
     }
     renderAnnouncementWidget();
 }
 
 async function saveAnnouncementToCloud(content) {
-    const group = state.activeGroup;
-    if (!group) return false;
+    const group = (state.activeGroup || "infection").toLowerCase().trim();
+    if (!group || !content) return false;
 
     const payload = {
         group_name: group,
@@ -2698,11 +2727,18 @@ async function saveAnnouncementToCloud(content) {
         updated_at: new Date().toISOString()
     };
 
+    // Optimistic UI update & immediate persistence
+    state.announcement = content;
     try {
-        const res = await supabaseRequest("hawari_announcements", {
+        localStorage.setItem(`hawari_announcement_${group}`, content);
+    } catch (e) {}
+    renderAnnouncementWidget();
+
+    try {
+        const res = await supabaseRequest("hawari_announcements?on_conflict=group_name", {
             method: "POST",
             headers: {
-                "Prefer": "resolution=merge-duplicates"
+                "Prefer": "resolution=merge-duplicates,return=representation"
             },
             body: JSON.stringify(payload)
         });
@@ -2711,9 +2747,12 @@ async function saveAnnouncementToCloud(content) {
             showToast("خطأ", "فشل نشر الإعلان على السيرفر.", "danger");
             return false;
         }
-        state.announcement = content;
-        renderAnnouncementWidget();
-        // Re-fetch with cache purge so all views sync immediately
+
+        // Sync announcement text into the admin textarea as well
+        const adminInput = document.getElementById("admin-announcement-text");
+        if (adminInput) adminInput.value = content;
+
+        // Re-verify in background with cache bypass
         fetchAnnouncement(group, true).catch(() => {});
         return true;
     } catch (e) {
@@ -2724,11 +2763,18 @@ async function saveAnnouncementToCloud(content) {
 }
 
 async function deleteAnnouncementFromCloud() {
-    const group = state.activeGroup;
+    const group = (state.activeGroup || "infection").toLowerCase().trim();
     if (!group) return false;
 
+    // Optimistic local clear
+    state.announcement = "";
     try {
-        const res = await supabaseRequest(`hawari_announcements?group_name=eq.${group}`, {
+        localStorage.removeItem(`hawari_announcement_${group}`);
+    } catch (e) {}
+    renderAnnouncementWidget();
+
+    try {
+        const res = await supabaseRequest(`hawari_announcements?group_name=eq.${encodeURIComponent(group)}`, {
             method: "DELETE"
         });
         if (res && res.error) {
@@ -2736,8 +2782,10 @@ async function deleteAnnouncementFromCloud() {
             showToast("خطأ", "فشل حذف الإعلان من السيرفر.", "danger");
             return false;
         }
-        state.announcement = "";
-        renderAnnouncementWidget();
+        
+        const adminInput = document.getElementById("admin-announcement-text");
+        if (adminInput) adminInput.value = "";
+
         fetchAnnouncement(group, true).catch(() => {});
         return true;
     } catch (e) {
@@ -5887,9 +5935,516 @@ function renderAdminPanel() {
     renderAdminBookAccessManager();
 }
 
+// ================= GEMINI AI QUIZ & QUESTION GENERATOR ENGINE =================
+function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+let _geminiSelectedPdfFile = null;
+let _geminiExtractedQuestionsCache = [];
+
+async function extractTextFromPdfFile(file, progressCallback) {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
+    const totalPages = pdf.numPages;
+    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        if (progressCallback) progressCallback(pageNum, totalPages);
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageStr = textContent.items.map(item => item.str).join(" ");
+        fullText += `\n--- [Page ${pageNum}] ---\n` + pageStr;
+    }
+    return fullText;
+}
+
+async function callGeminiExtractQuestions(rawText, apiKey, defaultTopic = "Infectious Diseases", defaultSource = "PAST_PAPER") {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey.trim()}`;
+    
+    const systemPrompt = `You are an expert medical examination board question parser.
+Your task is to analyze the provided medical text/notes/exam questions and extract or formulate all high-quality multiple choice questions (MCQs).
+Rules:
+1. Each question must have a clear clinical stem or theoretical question in English.
+2. Must have options A, B, C, D (and E if present in source text).
+3. Specify the correctOption ('A', 'B', 'C', 'D', or 'E').
+4. Provide a detailed, high-yield clinical explanation explaining WHY the correct option is right and WHY the incorrect options are wrong.
+5. Topic should be a relevant medical topic (e.g. "${defaultTopic}").
+6. Source should be "${defaultSource}".
+Output format MUST be valid JSON matching this exact schema:
+[
+  {
+    "id": "q_ai_timestamp_index",
+    "text": "Question stem text",
+    "options": {
+      "A": "Option A text",
+      "B": "Option B text",
+      "C": "Option C text",
+      "D": "Option D text"
+    },
+    "correctOption": "A",
+    "explanation": "Detailed clinical explanation...",
+    "topic": "${defaultTopic}",
+    "source": "${defaultSource}"
+  }
+]`;
+
+    const requestBody = {
+        contents: [
+            {
+                role: "user",
+                parts: [
+                    { text: systemPrompt + "\n\nMedical source content to extract MCQs from:\n" + rawText.substring(0, 100000) }
+                ]
+            }
+        ],
+        generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1
+        }
+    };
+
+    const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error ? errorData.error.message : `Gemini API error (Status ${response.status})`);
+    }
+
+    const data = await response.json();
+    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!candidateText) throw new Error("Empty response from Gemini API");
+
+    const parsedQuestions = JSON.parse(candidateText);
+    if (!Array.isArray(parsedQuestions)) throw new Error("Gemini returned invalid question array format");
+
+    return parsedQuestions;
+}
+
+function initGeminiQuizGenerator() {
+    const btnOpen = document.getElementById("btn-open-gemini-modal");
+    const modal = document.getElementById("modal-gemini-quiz-generator");
+    if (!btnOpen || !modal) return;
+
+    if (btnOpen.dataset.bound) return;
+    btnOpen.dataset.bound = "true";
+
+    const btnClose = document.getElementById("btn-close-gemini-modal");
+    const apiKeyInput = document.getElementById("gemini-api-key-input");
+    const keyBadge = document.getElementById("gemini-key-status-badge");
+    const btnSaveKey = document.getElementById("btn-save-gemini-key");
+    const btnToggleVis = document.getElementById("btn-toggle-gemini-key-visibility");
+
+    const tabBtnPdf = document.getElementById("gemini-tab-btn-pdf");
+    const tabBtnText = document.getElementById("gemini-tab-btn-text");
+    const panePdf = document.getElementById("gemini-pane-pdf");
+    const paneText = document.getElementById("gemini-pane-text");
+
+    const dropzone = document.getElementById("gemini-pdf-dropzone");
+    const fileInput = document.getElementById("gemini-pdf-file-input");
+    const btnBrowse = document.getElementById("btn-browse-gemini-pdf");
+    const fileNameDisplay = document.getElementById("gemini-selected-file-name");
+    const btnStart = document.getElementById("btn-start-gemini-extract");
+
+    const progressBox = document.getElementById("gemini-extraction-progress-box");
+    const progressBar = document.getElementById("gemini-progress-bar");
+    const progressText = document.getElementById("gemini-progress-text");
+
+    const reviewSection = document.getElementById("gemini-review-section");
+    const btnSaveQBank = document.getElementById("btn-save-gemini-to-qbank");
+    const btnPublishMock = document.getElementById("btn-publish-gemini-mock-exam");
+
+    let currentInputMode = "pdf";
+
+    function updateApiKeyStatus() {
+        const savedKey = (localStorage.getItem("hawari_gemini_api_key") || "").trim();
+        if (apiKeyInput && !apiKeyInput.value && savedKey) {
+            apiKeyInput.value = savedKey;
+        }
+        if (keyBadge) {
+            if (savedKey) {
+                keyBadge.innerText = "✅ تم حفظ المفتاح";
+                keyBadge.style.background = "rgba(16, 185, 129, 0.15)";
+                keyBadge.style.color = "#10b981";
+            } else {
+                keyBadge.innerText = "⚠️ غير مضبوط";
+                keyBadge.style.background = "rgba(239, 68, 68, 0.15)";
+                keyBadge.style.color = "#ef4444";
+            }
+        }
+    }
+
+    // Open Modal
+    btnOpen.onclick = () => {
+        modal.classList.remove("hidden");
+        updateApiKeyStatus();
+    };
+
+    // Close Modal
+    if (btnClose) {
+        btnClose.onclick = () => modal.classList.add("hidden");
+    }
+    modal.onclick = (e) => {
+        if (e.target === modal) modal.classList.add("hidden");
+    };
+
+    // Save API Key
+    if (btnSaveKey) {
+        btnSaveKey.onclick = () => {
+            const k = (apiKeyInput ? apiKeyInput.value : "").trim();
+            if (!k) {
+                showToast("تنبيه", "يرجى إدخال مفتاح Gemini API صالح.", "warning");
+                return;
+            }
+            localStorage.setItem("hawari_gemini_api_key", k);
+            updateApiKeyStatus();
+            showToast("تم الحفظ", "تم حفظ مفتاح Gemini API بنجاح في متصفحك.", "success");
+        };
+    }
+
+    // Toggle API Key Visibility
+    if (btnToggleVis && apiKeyInput) {
+        btnToggleVis.onclick = () => {
+            const isPass = apiKeyInput.type === "password";
+            apiKeyInput.type = isPass ? "text" : "password";
+            btnToggleVis.innerHTML = isPass ? '<i class="fa-regular fa-eye-slash"></i>' : '<i class="fa-regular fa-eye"></i>';
+        };
+    }
+
+    // Tab Switcher
+    if (tabBtnPdf && tabBtnText) {
+        tabBtnPdf.onclick = () => {
+            currentInputMode = "pdf";
+            tabBtnPdf.className = "btn btn-sm btn-primary";
+            tabBtnText.className = "btn btn-sm btn-secondary";
+            if (panePdf) panePdf.classList.remove("hidden");
+            if (paneText) paneText.classList.add("hidden");
+        };
+        tabBtnText.onclick = () => {
+            currentInputMode = "text";
+            tabBtnText.className = "btn btn-sm btn-primary";
+            tabBtnPdf.className = "btn btn-sm btn-secondary";
+            if (paneText) paneText.classList.remove("hidden");
+            if (panePdf) panePdf.classList.add("hidden");
+        };
+    }
+
+    // File selection
+    if (btnBrowse && fileInput) {
+        btnBrowse.onclick = () => fileInput.click();
+    }
+    if (fileInput) {
+        fileInput.onchange = (e) => {
+            if (e.target.files && e.target.files[0]) {
+                _geminiSelectedPdfFile = e.target.files[0];
+                if (fileNameDisplay) {
+                    fileNameDisplay.innerHTML = `<i class="fa-solid fa-check-circle"></i> تم اختيار: ${escapeHtml(_geminiSelectedPdfFile.name)} (${Math.round(_geminiSelectedPdfFile.size / 1024)} KB)`;
+                }
+            }
+        };
+    }
+
+    // Drag & Drop
+    if (dropzone) {
+        dropzone.ondragover = (e) => {
+            e.preventDefault();
+            dropzone.style.borderColor = "#8b5cf6";
+            dropzone.style.background = "rgba(139, 92, 246, 0.08)";
+        };
+        dropzone.ondragleave = () => {
+            dropzone.style.borderColor = "rgba(99, 102, 241, 0.4)";
+            dropzone.style.background = "rgba(99, 102, 241, 0.03)";
+        };
+        dropzone.ondrop = (e) => {
+            e.preventDefault();
+            dropzone.style.borderColor = "rgba(99, 102, 241, 0.4)";
+            dropzone.style.background = "rgba(99, 102, 241, 0.03)";
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                const f = e.dataTransfer.files[0];
+                if (f.name.toLowerCase().endsWith(".pdf")) {
+                    _geminiSelectedPdfFile = f;
+                    if (fileNameDisplay) {
+                        fileNameDisplay.innerHTML = `<i class="fa-solid fa-check-circle"></i> تم اختيار: ${escapeHtml(f.name)} (${Math.round(f.size / 1024)} KB)`;
+                    }
+                } else {
+                    showToast("صيغة غير مدعومة", "يرجى رفع ملف بصيغة PDF فقط.", "warning");
+                }
+            }
+        };
+    }
+
+    // Start Extraction
+    if (btnStart) {
+        btnStart.onclick = async () => {
+            const apiKey = (localStorage.getItem("hawari_gemini_api_key") || (apiKeyInput ? apiKeyInput.value : "")).trim();
+            if (!apiKey) {
+                showToast("مفتاح مفقود", "يرجى إدخال وحفظ مفتاح Gemini API أولاً للمتابعة.", "danger");
+                if (apiKeyInput) apiKeyInput.focus();
+                return;
+            }
+
+            let textToProcess = "";
+            const defaultTopic = (document.getElementById("gemini-opt-topic")?.value || "Infectious Diseases").trim();
+            const defaultSource = (document.getElementById("gemini-opt-source")?.value || "PAST_PAPER").trim();
+
+            if (currentInputMode === "pdf") {
+                if (!_geminiSelectedPdfFile) {
+                    showToast("تنبيه", "يرجى اختيار ملف PDF لاستخراج الأسئلة منه.", "warning");
+                    return;
+                }
+                if (progressBox) progressBox.classList.remove("hidden");
+                btnStart.disabled = true;
+                btnStart.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> جاري قراءة نصوص الـ PDF...`;
+
+                try {
+                    textToProcess = await extractTextFromPdfFile(_geminiSelectedPdfFile, (page, total) => {
+                        if (progressText) progressText.innerText = `جاري استخراج النصوص من صفحة ${page} من أصل ${total}...`;
+                        if (progressBar) progressBar.style.width = `${Math.round((page / total) * 50)}%`;
+                    });
+                } catch (pdfErr) {
+                    console.error("[Gemini] PDF extraction error:", pdfErr);
+                    showToast("خطأ في قراءة الـ PDF", "تعذر استخراج النصوص من ملف الـ PDF.", "danger");
+                    if (progressBox) progressBox.classList.add("hidden");
+                    btnStart.disabled = false;
+                    btnStart.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <span>بدء استخراج وتحليل الأسئلة عبر Gemini 2.0 Flash</span>`;
+                    return;
+                }
+            } else {
+                const rawInput = document.getElementById("gemini-raw-text-input");
+                textToProcess = (rawInput ? rawInput.value : "").trim();
+                if (!textToProcess || textToProcess.length < 30) {
+                    showToast("تنبيه", "يرجى لصق نص كافٍ (30 حرفاً على الأقل) لتحليله.", "warning");
+                    return;
+                }
+            }
+
+            if (progressBox) progressBox.classList.remove("hidden");
+            if (progressBar) progressBar.style.width = "65%";
+            if (progressText) progressText.innerText = "جاري تحليل الأسئلة واستنتاج الخيارات والتفسيرات عبر Gemini 2.0 Flash...";
+            btnStart.disabled = true;
+            btnStart.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> الذكاء الاصطناعي يحلل الأسئلة الآن...`;
+
+            try {
+                const questions = await callGeminiExtractQuestions(textToProcess, apiKey, defaultTopic, defaultSource);
+                if (progressBar) progressBar.style.width = "100%";
+                if (progressText) progressText.innerText = `اكتمل الاستخراج بنجاح! تم العثور على ${questions.length} سؤال.`;
+                
+                _geminiExtractedQuestionsCache = questions;
+                renderGeminiReviewCards(questions);
+                if (reviewSection) reviewSection.classList.remove("hidden");
+                showToast("نجاح الاستخراج", `تم استخراج ${questions.length} سؤال بنجاح عبر Gemini AI! يمكنك مراجعتها بالأسفل.`, "success");
+            } catch (aiErr) {
+                console.error("[Gemini] AI Extraction failed:", aiErr);
+                showToast("فشل التحليل الذكي", aiErr.message || "تعذر الاتصال بـ Gemini API.", "danger");
+            } finally {
+                btnStart.disabled = false;
+                btnStart.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i> <span>بدء استخراج وتحليل الأسئلة عبر Gemini 2.0 Flash</span>`;
+                setTimeout(() => {
+                    if (progressBox) progressBox.classList.add("hidden");
+                }, 1500);
+            }
+        };
+    }
+
+    // Save to QBank Handler
+    if (btnSaveQBank) {
+        btnSaveQBank.onclick = () => {
+            const finalizedQuestions = collectEditedGeminiQuestions();
+            if (finalizedQuestions.length === 0) {
+                showToast("تنبيه", "لا توجد أسئلة لحفظها.", "warning");
+                return;
+            }
+            if (!Array.isArray(state.questions)) state.questions = [];
+            finalizedQuestions.forEach(q => {
+                state.questions.push(q);
+            });
+            saveStateToStorage(true);
+            renderAdminQuestionsTab();
+            modal.classList.add("hidden");
+            showToast("تم الحفظ في بنك الأسئلة", `تم حفظ ${finalizedQuestions.length} سؤال بنجاح في بنك أسئلة الكورس!`, "success");
+        };
+    }
+
+    // Publish as Mock Exam Handler
+    if (btnPublishMock) {
+        btnPublishMock.onclick = async () => {
+            const finalizedQuestions = collectEditedGeminiQuestions();
+            if (finalizedQuestions.length === 0) {
+                showToast("تنبيه", "لا توجد أسئلة لإنشاء الامتحان منها.", "warning");
+                return;
+            }
+            const defaultTopic = (document.getElementById("gemini-opt-topic")?.value || "General Medical").trim();
+            const examTitle = prompt("أدخل عنوان الامتحان التجريبي (Mock Exam):", `AI Exam - ${defaultTopic} (${new Date().toLocaleDateString()})`);
+            if (!examTitle) return;
+
+            const durationStr = prompt("مدة الامتحان بالدقائق:", "45");
+            const duration = parseInt(durationStr) || 45;
+
+            const newMockTask = {
+                id: `rt_ai_${Date.now()}`,
+                title: examTitle.trim(),
+                duration: duration,
+                questions: finalizedQuestions,
+                dateCreated: new Date().toLocaleDateString(),
+                group: (state.activeGroup || "infection").toLowerCase().trim()
+            };
+
+            if (!Array.isArray(state.reportTasks)) state.reportTasks = [];
+            state.reportTasks.unshift(newMockTask);
+            saveReportTasksToStorage();
+            saveReportTaskToCloud(newMockTask);
+            renderAdminReportTasksTab();
+
+            modal.classList.add("hidden");
+            showToast("تم النشر بنجاح", `تم نشر الامتحان "${examTitle}" ويحتوي على ${finalizedQuestions.length} سؤالاً للطلاب!`, "success");
+        };
+    }
+}
+
+function renderGeminiReviewCards(questions) {
+    const container = document.getElementById("gemini-cards-container");
+    const countBadge = document.getElementById("gemini-extracted-count");
+    if (!container) return;
+
+    if (countBadge) countBadge.innerText = `${questions.length} أسئلة`;
+    container.innerHTML = "";
+
+    if (questions.length === 0) {
+        container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 20px;">لا توجد أسئلة مستخرجة.</div>`;
+        return;
+    }
+
+    questions.forEach((q, idx) => {
+        const card = document.createElement("div");
+        card.className = "gemini-q-card";
+        card.dataset.index = idx;
+        card.style.cssText = "background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; position: relative;";
+
+        const opts = q.options || {};
+        const optA = opts.A || opts.a || "";
+        const optB = opts.B || opts.b || "";
+        const optC = opts.C || opts.c || "";
+        const optD = opts.D || opts.d || "";
+        const correct = (q.correctOption || "A").toUpperCase();
+
+        card.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+                <span class="badge" style="background: rgba(99, 102, 241, 0.15); color: #6366f1; font-weight: 700; font-size: 0.8rem; padding: 4px 8px; border-radius: 6px;">
+                    سؤال #${idx + 1}
+                </span>
+                <button type="button" class="btn btn-sm" onclick="this.closest('.gemini-q-card').remove(); updateGeminiCountAfterDelete();" style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.25); padding: 4px 10px; border-radius: 6px;" title="حذف هذا السؤال">
+                    <i class="fa-regular fa-trash-can"></i> حذف
+                </button>
+            </div>
+            
+            <div style="margin-bottom: 12px;">
+                <label style="font-weight: 600; font-size: 0.8rem; color: var(--text-secondary); display: block; margin-bottom: 4px;">نص السؤال (Stem):</label>
+                <textarea class="gemini-edit-stem form-control" rows="3" style="width: 100%; border-radius: 8px; padding: 8px 10px; font-size: 0.85rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">${escapeHtml(q.text || "")}</textarea>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                <div>
+                    <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">الخيار (A):</label>
+                    <input type="text" class="gemini-edit-opt-a form-control" value="${escapeHtml(optA)}" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">الخيار (B):</label>
+                    <input type="text" class="gemini-edit-opt-b form-control" value="${escapeHtml(optB)}" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">الخيار (C):</label>
+                    <input type="text" class="gemini-edit-opt-c form-control" value="${escapeHtml(optC)}" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">الخيار (D):</label>
+                    <input type="text" class="gemini-edit-opt-d form-control" value="${escapeHtml(optD)}" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-bottom: 12px; align-items: center;">
+                <div>
+                    <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">الإجابة الصحيحة:</label>
+                    <select class="gemini-edit-correct form-control" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); font-weight: 700;">
+                        <option value="A" ${correct === 'A' ? 'selected' : ''}>Option A</option>
+                        <option value="B" ${correct === 'B' ? 'selected' : ''}>Option B</option>
+                        <option value="C" ${correct === 'C' ? 'selected' : ''}>Option C</option>
+                        <option value="D" ${correct === 'D' ? 'selected' : ''}>Option D</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);">الموضوع (Topic):</label>
+                    <input type="text" class="gemini-edit-topic form-control" value="${escapeHtml(q.topic || 'Infectious Diseases')}" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                </div>
+            </div>
+
+            <div>
+                <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 2px;">التفسير الطبي (Explanation):</label>
+                <textarea class="gemini-edit-explanation form-control" rows="2" style="width: 100%; border-radius: 6px; padding: 6px 10px; font-size: 0.82rem; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">${escapeHtml(q.explanation || "")}</textarea>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+window.updateGeminiCountAfterDelete = function() {
+    const cards = document.querySelectorAll(".gemini-q-card");
+    const countBadge = document.getElementById("gemini-extracted-count");
+    if (countBadge) countBadge.innerText = `${cards.length} أسئلة`;
+};
+
+function collectEditedGeminiQuestions() {
+    const cards = document.querySelectorAll(".gemini-q-card");
+    const defaultSource = (document.getElementById("gemini-opt-source")?.value || "AI_GENERATED").trim();
+    const result = [];
+
+    cards.forEach((c, idx) => {
+        const stem = c.querySelector(".gemini-edit-stem")?.value.trim() || "";
+        const optA = c.querySelector(".gemini-edit-opt-a")?.value.trim() || "";
+        const optB = c.querySelector(".gemini-edit-opt-b")?.value.trim() || "";
+        const optC = c.querySelector(".gemini-edit-opt-c")?.value.trim() || "";
+        const optD = c.querySelector(".gemini-edit-opt-d")?.value.trim() || "";
+        const correct = c.querySelector(".gemini-edit-correct")?.value || "A";
+        const topic = c.querySelector(".gemini-edit-topic")?.value.trim() || "Infectious Diseases";
+        const explanation = c.querySelector(".gemini-edit-explanation")?.value.trim() || "";
+
+        if (!stem || !optA || !optB) return;
+
+        result.push({
+            id: `q_ai_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+            text: stem,
+            options: {
+                A: optA,
+                B: optB,
+                C: optC,
+                D: optD
+            },
+            correctOption: correct,
+            explanation: explanation,
+            topic: topic,
+            source: defaultSource,
+            status: "unused",
+            notes: "",
+            highlightedHtml: ""
+        });
+    });
+
+    return result;
+}
+
 function renderAdminQuestionsTab() {
     const listContainer = document.getElementById("admin-questions-list-container");
     if (!listContainer) return;
+
+    initGeminiQuizGenerator();
 
     // Populate topic dropdown for create mode
     const qIdInput = document.getElementById("edit-question-id").value;
@@ -7414,7 +7969,7 @@ function renderAdminReportTasksTab() {
     const query = searchQueryInput ? searchQueryInput.value.trim().toLowerCase() : "";
 
     // Group active group questions by topic
-    const sourceQuestions = getGroupQuestionsSeed();
+    const sourceQuestions = (state.questions && state.questions.length > 0) ? state.questions : ((typeof globalQuestionsCache !== "undefined" && globalQuestionsCache && globalQuestionsCache.length > 0) ? globalQuestionsCache : getGroupQuestionsSeed());
     const topicsMap = {};
     sourceQuestions.forEach(q => {
         if (!topicsMap[q.topic]) {
@@ -7571,7 +8126,7 @@ function renderAdminReportTasksTab() {
             }
 
             // Collect selected question details from the group's questions seed
-            const sourceQuestions = getGroupQuestionsSeed();
+            const sourceQuestions = (state.questions && state.questions.length > 0) ? state.questions : ((typeof globalQuestionsCache !== "undefined" && globalQuestionsCache && globalQuestionsCache.length > 0) ? globalQuestionsCache : getGroupQuestionsSeed());
             const selectedQs = sourceQuestions.filter(q => window.rtSelectedQuestionIds.has(q.id)).map(q => {
                 return {
                     id: q.id,
@@ -11114,11 +11669,10 @@ function saveBlankPagesToStorage() {
 }
 
 function rebuildBookVirtualPages() {
-    if (!bookState.pdfDoc) {
-        bookState.virtualPageMap = [];
-        return;
-    }
-    const realCount = bookState.pdfDoc.numPages || 0;
+    const realCount = (bookState.pdfDoc && bookState.pdfDoc.numPages)
+        || (bookState.activeBookFile && (bookState.activeBookFile.total_pages || bookState.activeBookFile.numPages))
+        || bookState.numPages
+        || 1;
     const blankList = Array.isArray(bookState.blankPages) ? bookState.blankPages : [];
     
     const pages = [];
@@ -11346,7 +11900,7 @@ function getBookAccessLevel(user) {
     if (!user || !user.email) return { isFullGrant: false, maxPage: 10 };
     
     const cleanEmail = user.email.trim().toLowerCase();
-    const isAdmin = user.role === "admin" || user.role === "instructor" || user.is_admin === true;
+    const isAdmin = (user && (user.role === "admin" || user.role === "instructor" || user.is_admin === true)) || isUserAdmin(user);
     
     let isGranted = false;
     if (Array.isArray(state.grantedBookUsers)) {
@@ -12987,6 +13541,7 @@ window.applySelectedScratchpadTemplate = function() {
 
     const templateMap = {
         blank: "blank",
+        lined: "lined",
         ruled: "lined",
         grid: "grid",
         dotted: "dotted",
@@ -14023,9 +14578,18 @@ async function redrawBookCanvas() {
         showToast("معاينة مجانية", "تم الوصول للحد الأقصى للمعاينة المجانية (10 صفحات). يرجى طلب الوصول الكامل من المشرف.", "warning");
     }
 
+    rebuildBookVirtualPages();
     if (pageNumInput) pageNumInput.value = bookState.currentPage;
     if (totalPagesEl) totalPagesEl.innerText = bookState.numPages;
+    if (pageNumInput) pageNumInput.max = bookState.numPages;
     if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
+
+    const curVirtualEarly = bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1];
+    if (curVirtualEarly && curVirtualEarly.type === "blank") {
+        renderBlankScratchpadCanvas(curVirtualEarly);
+        redrawCurrentPageAnnotations();
+        return;
+    }
 
     // Show lock overlay if normal student exceeds page 10
     if (bookState.currentPage >= 10 && !accessInfo.isFullGrant) {

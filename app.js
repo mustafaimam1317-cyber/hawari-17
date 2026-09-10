@@ -4042,11 +4042,17 @@ function enterWorkspace() {
         roleBadge.style.backgroundColor = "var(--color-danger-soft)";
         roleBadge.style.color = "var(--color-danger)";
         adminNav.classList.remove("hidden");
+        const btnAdminAdd = document.getElementById("btn-admin-add-book");
+        if (btnAdminAdd) btnAdminAdd.classList.remove("hidden");
+        document.querySelectorAll(".admin-only-btn").forEach(el => el.classList.remove("hidden"));
     } else {
         roleBadge.innerText = "Student";
         roleBadge.style.backgroundColor = "var(--primary-color-soft)";
         roleBadge.style.color = "var(--primary-color)";
         adminNav.classList.add("hidden");
+        const btnAdminAdd = document.getElementById("btn-admin-add-book");
+        if (btnAdminAdd) btnAdminAdd.classList.add("hidden");
+        document.querySelectorAll(".admin-only-btn").forEach(el => el.classList.add("hidden"));
     }
 
     // Default route
@@ -7618,6 +7624,34 @@ function renderFlashcardsView() {
     // Navigation progress indicator
     const prog = document.getElementById("flashcard-progress-indicator");
     if (prog) prog.innerText = `Card ${activeFlashcardIdx + 1} of ${list.length}`;
+
+    // Personal Flashcard Deletion Button (Strictly forbidden on official cards)
+    const btnDeleteCard = document.getElementById("btn-delete-personal-flashcard");
+    if (btnDeleteCard) {
+        if (activeCard && activeCard.isOfficial === false) {
+            btnDeleteCard.classList.remove("hidden");
+            btnDeleteCard.onclick = (e) => {
+                e.stopPropagation();
+                if (activeCard.isOfficial !== false) {
+                    showToast("غير مسموح", "لا يمكن حذف البطاقات الرسمية للمقرر.", "error");
+                    return;
+                }
+                if (confirm("هل تريد بالتأكيد حذف هذه البطاقة التعليمية الشخصية؟")) {
+                    const cardId = activeCard.id;
+                    state.flashcards = (state.flashcards || []).filter(c => c.id !== cardId);
+                    saveStateToStorage();
+                    showToast("تم الحذف", "تم حذف البطاقة التعليمية الشخصية بنجاح.", "info");
+                    if (activeFlashcardIdx >= list.length - 1) {
+                        activeFlashcardIdx = Math.max(0, list.length - 2);
+                    }
+                    renderFlashcardsView();
+                }
+            };
+        } else {
+            btnDeleteCard.classList.add("hidden");
+            btnDeleteCard.onclick = null;
+        }
+    }
 
     // Update dynamic Anki button intervals
     const btnLabels = getSm2ButtonLabels(activeCard);
@@ -12497,6 +12531,24 @@ async function renderBookLibrary(filterCategory = "all", searchQuery = "", skipC
     const activeGroup = (state.activeGroup || "infection").toLowerCase().trim();
     console.log(`[BookDebug] renderBookLibrary CALLED — activeGroup: ${activeGroup}, filter: ${filterCategory}, skipCloud: ${skipCloudFetch}`);
 
+    // Enforce role-based visibility for Admin Add Book controls
+    const isAdmin = isUserAdmin(state.currentUser);
+    const btnAdminAdd = document.getElementById("btn-admin-add-book");
+    if (btnAdminAdd) {
+        if (isAdmin) {
+            btnAdminAdd.classList.remove("hidden");
+        } else {
+            btnAdminAdd.classList.add("hidden");
+        }
+    }
+    document.querySelectorAll("#book-library-container .admin-only-btn").forEach(el => {
+        if (isAdmin) {
+            el.classList.remove("hidden");
+        } else {
+            el.classList.add("hidden");
+        }
+    });
+
     // 1. Local-first: Check if state.books has matching books for the current group
     let hasMatchingMemoryBooks = Array.isArray(state.books) && state.books.some(b => (b.group_name || "infection").toLowerCase().trim() === activeGroup);
 
@@ -12852,6 +12904,10 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
 };
 
 window.openAdminAddBookModal = function() {
+    if (!isUserAdmin(state.currentUser)) {
+        showToast("صلاحية غير كافية", "إضافة الكتب مقتصرة فقط على المشرف (Admin).", "warning");
+        return;
+    }
     const modal = document.getElementById("modal-admin-add-book");
     if (modal) modal.classList.remove("hidden");
 };
@@ -12872,6 +12928,10 @@ function initAddBookModalForm() {
         modalForm.dataset.bound = "true";
         modalForm.onsubmit = async (event) => {
             event.preventDefault();
+            if (!isUserAdmin(state.currentUser)) {
+                showToast("صلاحية غير كافية", "إضافة الكتب مقتصرة فقط على المشرف (Admin).", "warning");
+                return;
+            }
             console.log("[BookUpload] Modal Submit button clicked!");
             
             const titleInput = document.getElementById("modal-book-title");
@@ -13153,6 +13213,7 @@ function bindBookToolbarEvents() {
 
     const colorPicker = document.getElementById("book-custom-color-picker");
     const btnAddBlank = document.getElementById("btn-add-blank-page") || document.getElementById("btn-book-add-blank-page");
+    const btnDeleteBlank = document.getElementById("btn-delete-blank-page");
     const stickerSelect = document.getElementById("book-sticker-select") || document.getElementById("book-vector-sticker-select");
     const btnStickyNote = document.getElementById("btn-add-sticky-note");
 
@@ -13404,6 +13465,14 @@ function bindBookToolbarEvents() {
             const lblPage = document.getElementById("scratchpad-target-page-num");
             if (lblPage) lblPage.innerText = `${bookState.currentPage} (المتبقي: ${20 - currentBlankCount} صفحة)`;
             if (modal) modal.classList.remove("hidden");
+        };
+    }
+
+    // Delete Scratchpad Page Trigger
+    if (btnDeleteBlank && !btnDeleteBlank.dataset.bound) {
+        btnDeleteBlank.dataset.bound = "true";
+        btnDeleteBlank.onclick = () => {
+            window.deleteCurrentBlankPage();
         };
     }
 
@@ -13730,7 +13799,8 @@ window.deleteCurrentBlankPage = function() {
             bookState.currentPage = Math.max(1, bookState.numPages);
         }
         redrawBookCanvas();
-        showToast("تم الحذف", "تم حذف الصفحة البيضاء بنجاح.", "info");
+        const remainingQuota = 20 - (bookState.blankPages || []).length;
+        showToast("تم الحذف", `تم حذف الصفحة البيضاء بنجاح. (المتبقي لك: ${remainingQuota} من 20 صفحة)`, "info");
     }
 };
 
@@ -14717,6 +14787,14 @@ async function redrawBookCanvas() {
     if (zoomPctEl) zoomPctEl.innerText = `${Math.round(bookState.zoom * 100)}%`;
 
     const curVirtualEarly = bookState.virtualPageMap && bookState.virtualPageMap[bookState.currentPage - 1];
+    const btnDeleteBlank = document.getElementById("btn-delete-blank-page");
+    if (btnDeleteBlank) {
+        if (curVirtualEarly && curVirtualEarly.type === "blank") {
+            btnDeleteBlank.classList.remove("hidden");
+        } else {
+            btnDeleteBlank.classList.add("hidden");
+        }
+    }
     if (curVirtualEarly && curVirtualEarly.type === "blank") {
         if (lockOverlay) lockOverlay.classList.add("hidden");
         renderBlankScratchpadCanvas(curVirtualEarly);

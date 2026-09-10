@@ -3205,9 +3205,26 @@ async function syncUsersWithCloud() {
                     // Smart merge for report task progress
                     lu.reportTaskProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
 
-                    // Smart merge for flashcards
-                    if (Array.isArray(cu.flashcards) && cu.flashcards.length > 0 && (!lu.flashcards || lu.flashcards.length === 0)) {
-                        lu.flashcards = cu.flashcards;
+                    // Smart bidirectional merge for flashcards (Union by card.id, preserving newest SM-2 review states)
+                    const localCards = Array.isArray(lu.flashcards) ? lu.flashcards : [];
+                    const cloudCards = Array.isArray(cu.flashcards) ? cu.flashcards : [];
+                    if (cloudCards.length > 0 || localCards.length > 0) {
+                        const cardMap = new Map();
+                        localCards.forEach(c => { if (c && c.id) cardMap.set(c.id, c); });
+                        cloudCards.forEach(cc => {
+                            if (!cc || !cc.id) return;
+                            const lc = cardMap.get(cc.id);
+                            if (!lc) {
+                                cardMap.set(cc.id, cc);
+                            } else {
+                                const lcTime = lc.lastReviewDate || lc.lastUpdated || 0;
+                                const ccTime = cc.lastReviewDate || cc.lastUpdated || 0;
+                                if (ccTime >= lcTime) {
+                                    cardMap.set(cc.id, Object.assign({}, lc, cc));
+                                }
+                            }
+                        });
+                        lu.flashcards = Array.from(cardMap.values());
                     }
 
                     // Smart Progress Sync: If cloud has answered questions, merge them!
@@ -3331,11 +3348,27 @@ async function syncUsersWithCloud() {
                     p_group: group,
                     p_tests: user.tests || [],
                     p_notebook_notes: user.notebookNotes || [],
+                    p_flashcards: user.flashcards || [],
                     p_last_updated: user.lastUpdated || Date.now()
                 })
             });
-            if (rpcRes && (rpcRes.success || !rpcRes.error)) {
+            if (rpcRes && rpcRes.success !== false && (rpcRes.success || !rpcRes.error)) {
                 rpcPushed = true;
+            } else if (rpcRes && rpcRes.error && (String(rpcRes.error).includes("PGRST202") || String(rpcRes.error).includes("schema cache") || rpcRes.status === 404)) {
+                // Graceful backward-compatibility fallback if SQL RPC does not yet accept p_flashcards
+                const fallbackRes = await supabaseRequest("rpc/update_user_progress_rpc", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        p_user_email: user.email.trim().toLowerCase(),
+                        p_group: group,
+                        p_tests: user.tests || [],
+                        p_notebook_notes: user.notebookNotes || [],
+                        p_last_updated: user.lastUpdated || Date.now()
+                    })
+                });
+                if (fallbackRes && fallbackRes.success !== false && (fallbackRes.success || !fallbackRes.error)) {
+                    rpcPushed = true;
+                }
             }
         } catch (rpcErr) {
             console.warn("[SyncUsers] update_user_progress_rpc deferred:", rpcErr);

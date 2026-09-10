@@ -280,6 +280,7 @@ CREATE OR REPLACE FUNCTION public.update_user_progress_rpc(
     p_group text DEFAULT 'infection',
     p_tests jsonb DEFAULT '[]'::jsonb,
     p_notebook_notes jsonb DEFAULT '[]'::jsonb,
+    p_flashcards jsonb DEFAULT '[]'::jsonb,
     p_last_updated bigint DEFAULT 0
 )
 RETURNS jsonb
@@ -300,6 +301,7 @@ BEGIN
     UPDATE public.hawari_users
     SET tests = coalesce(p_tests, '[]'::jsonb),
         notebook_notes = coalesce(p_notebook_notes, '[]'::jsonb),
+        flashcards = coalesce(p_flashcards, '[]'::jsonb),
         last_updated = v_ts
     WHERE lower(trim(email)) = v_clean_email
       AND lower(trim(group_name)) = v_clean_group;

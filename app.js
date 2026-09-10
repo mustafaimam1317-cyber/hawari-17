@@ -6010,7 +6010,50 @@ async function extractTextFromPdfFile(file, progressCallback) {
     return fullText;
 }
 
-async function callGeminiExtractQuestions(rawText, apiKey, defaultTopic = "Infectious Diseases", defaultSource = "PAST_PAPER") {
+async function callGeminiExtractQuestions(rawText, apiKey = "", defaultTopic = "Infectious Diseases", defaultSource = "PAST_PAPER") {
+    const backendEndpoint = `/api/gemini-extract`;
+    const clientKeyFallback = apiKey || (localStorage.getItem("hawari_gemini_api_key") || "").trim();
+
+    try {
+        const response = await fetch(backendEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                text: rawText,
+                defaultTopic,
+                defaultSource,
+                apiKey: clientKeyFallback
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && Array.isArray(data.questions)) {
+                return data.questions;
+            }
+            if (Array.isArray(data)) return data;
+            throw new Error("Invalid response format from Gemini extraction API");
+        }
+
+        // If local dev server (Vite) where /api/gemini-extract is 404 and we have a local client key
+        if ((response.status === 404 || response.status === 405) && clientKeyFallback) {
+            console.warn("[Gemini] /api/gemini-extract returned 404, using direct client fallback...");
+            return await callGeminiDirectClientFallback(rawText, clientKeyFallback, defaultTopic, defaultSource);
+        }
+
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Gemini Edge API error (Status ${response.status})`);
+    } catch (err) {
+        if (clientKeyFallback && (err.message.includes("404") || err.message.includes("Failed to fetch") || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+            console.warn("[Gemini] Edge request failed, using direct client fallback:", err.message);
+            return await callGeminiDirectClientFallback(rawText, clientKeyFallback, defaultTopic, defaultSource);
+        }
+        throw err;
+    }
+}
+
+async function callGeminiDirectClientFallback(rawText, apiKey, defaultTopic = "Infectious Diseases", defaultSource = "PAST_PAPER") {
+    if (!apiKey) throw new Error("مفتاح Gemini API غير متوفر في المتصفح أو السيرفر.");
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey.trim()}`;
     
     const systemPrompt = `You are an expert medical examination board question parser.
@@ -6117,14 +6160,19 @@ function initGeminiQuizGenerator() {
             apiKeyInput.value = savedKey;
         }
         if (keyBadge) {
-            if (savedKey) {
-                keyBadge.innerText = "✅ تم حفظ المفتاح";
+            const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+            if (!isLocalhost) {
+                keyBadge.innerText = "🔒 سحابي آمن (Cloud Secret Active)";
+                keyBadge.style.background = "rgba(16, 185, 129, 0.15)";
+                keyBadge.style.color = "#10b981";
+            } else if (savedKey) {
+                keyBadge.innerText = "✅ مفتاح محلي (Localhost)";
                 keyBadge.style.background = "rgba(16, 185, 129, 0.15)";
                 keyBadge.style.color = "#10b981";
             } else {
-                keyBadge.innerText = "⚠️ غير مضبوط";
-                keyBadge.style.background = "rgba(239, 68, 68, 0.15)";
-                keyBadge.style.color = "#ef4444";
+                keyBadge.innerText = "⚠️ تجريبي (Localhost)";
+                keyBadge.style.background = "rgba(245, 158, 11, 0.15)";
+                keyBadge.style.color = "#f59e0b";
             }
         }
     }
@@ -6232,8 +6280,9 @@ function initGeminiQuizGenerator() {
     if (btnStart) {
         btnStart.onclick = async () => {
             const apiKey = (localStorage.getItem("hawari_gemini_api_key") || (apiKeyInput ? apiKeyInput.value : "")).trim();
-            if (!apiKey) {
-                showToast("مفتاح مفقود", "يرجى إدخال وحفظ مفتاح Gemini API أولاً للمتابعة.", "danger");
+            const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+            if (isLocalhost && !apiKey) {
+                showToast("تنبيه للتطوير المحلي", "يرجى إدخال وحفظ مفتاح Gemini API للمتابعة أثناء التجربة على localhost.", "warning");
                 if (apiKeyInput) apiKeyInput.focus();
                 return;
             }

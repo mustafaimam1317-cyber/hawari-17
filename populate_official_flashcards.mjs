@@ -20,6 +20,35 @@ async function populate() {
             card_order: c.card_order
         }));
 
+        // Try RPC bulk_upsert_official_flashcards
+        try {
+            const rpcRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bulk_upsert_official_flashcards`, {
+                method: "POST",
+                headers: {
+                    "apikey": ANON_KEY,
+                    "Authorization": `Bearer ${ANON_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ p_cards: batch })
+            });
+
+            if (rpcRes.ok) {
+                const cnt = await rpcRes.json();
+                totalInserted += (typeof cnt === 'number' ? cnt : batch.length);
+                console.log(`Batch ${i / batchSize + 1} (${batch.length} cards) upserted via RPC. Total: ${totalInserted}/${cards.length}`);
+                continue;
+            } else {
+                const rpcErr = await rpcRes.text();
+                // If RPC not found, try direct table insert
+                if (i === 0) {
+                    console.log("[Note] RPC bulk_upsert_official_flashcards not found. Trying direct REST...");
+                }
+            }
+        } catch (e) {
+            console.warn("RPC call error:", e.message);
+        }
+
+        // Direct table fallback
         try {
             const res = await fetch(`${SUPABASE_URL}/rest/v1/hawari_official_flashcards`, {
                 method: "POST",
@@ -35,9 +64,9 @@ async function populate() {
             if (!res.ok) {
                 const err = await res.text();
                 console.error(`Batch ${i / batchSize + 1} failed (${res.status}):`, err);
-                if (err.includes("PGRST205") || err.includes("does not exist") || err.includes("schema cache")) {
-                    console.log("\n[NOTE] Table public.hawari_official_flashcards does not exist yet.");
-                    console.log("Please run 'supabase_official_flashcards_schema.sql' in Supabase SQL Editor first.");
+                if (err.includes("row-level security")) {
+                    console.log("\n[NOTE] RLS requires either executing 'supabase_bulk_upsert_rpc.sql' in Supabase SQL Editor");
+                    console.log("or granting INSERT to anon: CREATE POLICY \"Allow insert anon\" ON public.hawari_official_flashcards FOR INSERT TO anon WITH CHECK (true);");
                     return;
                 }
             } else {

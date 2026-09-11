@@ -7995,9 +7995,50 @@ function renderFlashcardsView() {
         };
     }
 
-    // Ensure official cards are populated from zero-egress cache if empty
-    if (!state.flashcards || state.flashcards.length === 0) {
-        const activeCourse = (state.activeGroup || "infection").toLowerCase();
+    // Active Purge & Migration: If state.flashcards has legacy cards (fc_1 to fc_5) or lacks 500 cards, migrate immediately!
+    const activeCourse = (state.activeGroup || "infection").toLowerCase();
+    if (activeCourse === "infection") {
+        const hasLegacy = (state.flashcards || []).some(c => ["fc_1", "fc_2", "fc_3", "fc_4", "fc_5"].includes(c.id));
+        const has500 = (state.flashcards || []).some(c => String(c.id).startsWith("fc_inf_"));
+        
+        if (hasLegacy || !has500 || !state.flashcards || state.flashcards.length === 0) {
+            const official500 = HawariFlashcardsCacheEngine.getOfficialCardsSync("infection");
+            
+            const userReviewMap = new Map();
+            const personalCards = [];
+            (state.flashcards || []).forEach(c => {
+                if (!c || !c.id || ["fc_1", "fc_2", "fc_3", "fc_4", "fc_5"].includes(c.id)) return;
+                if (c.isOfficial === false) {
+                    personalCards.push(c);
+                } else {
+                    userReviewMap.set(c.id, c);
+                }
+            });
+
+            const merged = (official500 || []).map(baseCard => {
+                const uProg = userReviewMap.get(baseCard.id);
+                if (uProg) {
+                    return normalizeSm2Card({
+                        ...baseCard,
+                        repetitions: uProg.repetitions !== undefined ? uProg.repetitions : baseCard.repetitions,
+                        interval: uProg.interval !== undefined ? uProg.interval : baseCard.interval,
+                        easeFactor: uProg.easeFactor !== undefined ? uProg.easeFactor : baseCard.easeFactor,
+                        nextReviewDate: uProg.nextReviewDate !== undefined ? uProg.nextReviewDate : baseCard.nextReviewDate,
+                        lastReviewDate: uProg.lastReviewDate !== undefined ? uProg.lastReviewDate : baseCard.lastReviewDate,
+                        state: uProg.state || baseCard.state,
+                        status: uProg.status || baseCard.status
+                    });
+                }
+                return normalizeSm2Card({ ...baseCard });
+            });
+
+            state.flashcards = [...merged, ...personalCards.map(c => normalizeSm2Card(c))];
+            if (state.currentUser) {
+                state.currentUser.flashcards = state.flashcards;
+            }
+            saveStateToStorage();
+        }
+    } else if (!state.flashcards || state.flashcards.length === 0) {
         const baseCards = HawariFlashcardsCacheEngine.getOfficialCardsSync(activeCourse);
         if (baseCards && baseCards.length > 0) {
             state.flashcards = baseCards.map(c => normalizeSm2Card({ ...c }));
@@ -8291,6 +8332,20 @@ let editFlashcardId = "";
 function renderAdminFlashcardsTab() {
     const listContainer = document.getElementById("admin-flashcards-list-container");
     if (!listContainer) return;
+
+    // Active Purge & Migration for Admin Tab
+    const activeCourse = (state.activeGroup || "infection").toLowerCase();
+    if (activeCourse === "infection") {
+        const hasLegacy = (state.flashcards || []).some(c => ["fc_1", "fc_2", "fc_3", "fc_4", "fc_5"].includes(c.id));
+        const has500 = (state.flashcards || []).some(c => String(c.id).startsWith("fc_inf_"));
+        if (hasLegacy || !has500 || !state.flashcards || state.flashcards.length === 0) {
+            const official500 = HawariFlashcardsCacheEngine.getOfficialCardsSync("infection");
+            const personalCards = (state.flashcards || []).filter(c => c && c.isOfficial === false);
+            state.flashcards = [...(official500 || []).map(c => normalizeSm2Card({ ...c })), ...personalCards];
+            if (state.currentUser) state.currentUser.flashcards = state.flashcards;
+            saveStateToStorage();
+        }
+    }
 
     if (!state.flashcards) state.flashcards = [];
     state.flashcards.forEach(c => normalizeSm2Card(c));

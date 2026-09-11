@@ -1,5 +1,6 @@
 
 import { APP_MARKUP } from './uiTemplate.js';
+import { OFFICIAL_INFECTION_FLASHCARDS } from './official_flashcards_data.js';
 
 // ================= SYNCHRONOUS ROOT MOUNTING =================
 // Instantly mounts complete UI DOM markup into <div id="root"> before any other logic runs
@@ -1421,6 +1422,7 @@ function switchCourseTrack() {
     state.questions = [];
     state.notebookNotes = [];
     state.flashcards = [];
+    if (window.HawariFlashcardsCacheEngine) window.HawariFlashcardsCacheEngine.clearMemoryCache();
     state.reportTasks = [];
     state.courseQuizzes = [];
     state.quizResults = [];
@@ -7607,6 +7609,191 @@ function populateAdminTopicSelect(selectedTopic) {
     }
 }
 
+// =========================================================================
+// HAWARI OFFICIAL FLASHCARDS CACHE ENGINE (ZERO-EGRESS CLIENT CACHE)
+// =========================================================================
+const FLASHCARDS_CACHE_KEY_PREFIX = "hawari_official_fc_v1_";
+
+const OFFICIAL_DERMA_FLASHCARDS = [
+    {
+        id: "fc_derma_1",
+        card_order: 1,
+        course: "dermatology",
+        deck: "Papulosquamous Disorders",
+        category: "Papulosquamous Disorders",
+        front: "What is the Auspitz sign in Psoriasis?",
+        back: "Pinpoint bleeding after the removal of psoriatic scales due to thinned suprapapillary plates over dilated capillaries.",
+        status: "review",
+        state: "new",
+        repetitions: 0,
+        interval: 0,
+        easeFactor: 2.5,
+        nextReviewDate: 0,
+        lastReviewDate: null,
+        isOfficial: true
+    },
+    {
+        id: "fc_derma_2",
+        card_order: 2,
+        course: "dermatology",
+        deck: "Infectious Dermatology",
+        category: "Infectious Dermatology",
+        front: "What is the pathognomonic clinical feature of Scabies?",
+        back: "Intensely pruritic, serpiginous burrows in web spaces of fingers, wrists, and genitalia, worse at night.",
+        status: "review",
+        state: "new",
+        repetitions: 0,
+        interval: 0,
+        easeFactor: 2.5,
+        nextReviewDate: 0,
+        lastReviewDate: null,
+        isOfficial: true
+    },
+    {
+        id: "fc_derma_3",
+        card_order: 3,
+        course: "dermatology",
+        deck: "Autoimmune Bullous",
+        category: "Autoimmune Bullous",
+        front: "How do Pemphigus Vulgaris and Bullous Pemphigoid differ regarding Nikolsky's sign?",
+        back: "Pemphigus Vulgaris is Nikolsky-positive (intraepidermal blister); Bullous Pemphigoid is Nikolsky-negative (subepidermal blister).",
+        status: "review",
+        state: "new",
+        repetitions: 0,
+        interval: 0,
+        easeFactor: 2.5,
+        nextReviewDate: 0,
+        lastReviewDate: null,
+        isOfficial: true
+    },
+    {
+        id: "fc_derma_4",
+        card_order: 4,
+        course: "dermatology",
+        deck: "Dermatological Oncology",
+        category: "Dermatological Oncology",
+        front: "What are the ABCDE criteria for Melanoma evaluation?",
+        back: "Asymmetry, Border irregularity, Color variegation, Diameter (>6mm), Evolution/Enlargement over time.",
+        status: "review",
+        state: "new",
+        repetitions: 0,
+        interval: 0,
+        easeFactor: 2.5,
+        nextReviewDate: 0,
+        lastReviewDate: null,
+        isOfficial: true
+    },
+    {
+        id: "fc_derma_5",
+        card_order: 5,
+        course: "dermatology",
+        deck: "Drug Eruptions",
+        category: "Drug Eruptions",
+        front: "What distinguishes Stevens-Johnson Syndrome (SJS) from Toxic Epidermal Necrolysis (TEN)?",
+        back: "Body surface area (BSA) epidermal detachment: SJS < 10%, SJS/TEN overlap 10-30%, TEN > 30%.",
+        status: "review",
+        state: "new",
+        repetitions: 0,
+        interval: 0,
+        easeFactor: 2.5,
+        nextReviewDate: 0,
+        lastReviewDate: null,
+        isOfficial: true
+    }
+];
+
+if (typeof window !== "undefined") {
+    window.OFFICIAL_DERMA_FLASHCARDS = OFFICIAL_DERMA_FLASHCARDS;
+}
+
+const HawariFlashcardsCacheEngine = {
+    _memoryCache: {},
+
+    getOfficialCardsSync(course = (state.activeGroup || "infection").toLowerCase()) {
+        const group = (course || "infection").toLowerCase();
+        if (this._memoryCache[group] && this._memoryCache[group].length > 0) {
+            return this._memoryCache[group];
+        }
+        const storageKey = FLASHCARDS_CACHE_KEY_PREFIX + group;
+        try {
+            const cachedRaw = localStorage.getItem(storageKey);
+            if (cachedRaw) {
+                const parsed = JSON.parse(cachedRaw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    this._memoryCache[group] = parsed;
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            console.warn("[FlashcardsCache] LocalStorage read warning:", e);
+        }
+
+        const fallback = (group === "infection")
+            ? (window.OFFICIAL_INFECTION_FLASHCARDS || (typeof OFFICIAL_INFECTION_FLASHCARDS !== "undefined" ? OFFICIAL_INFECTION_FLASHCARDS : []))
+            : (window.OFFICIAL_DERMA_FLASHCARDS || OFFICIAL_DERMA_FLASHCARDS || []);
+
+        if (fallback && fallback.length > 0) {
+            this.setCachedCards(group, fallback);
+            return fallback;
+        }
+        return [];
+    },
+
+    async getOfficialCards(course = (state.activeGroup || "infection").toLowerCase()) {
+        const group = (course || "infection").toLowerCase();
+        const syncCards = this.getOfficialCardsSync(group);
+        if (syncCards && syncCards.length > 0) {
+            return syncCards;
+        }
+
+        if (typeof supabaseRequest === "function") {
+            try {
+                const cloudRecords = await supabaseRequest(`hawari_official_flashcards?course=eq.${encodeURIComponent(group)}&order=card_order.asc&limit=1000`);
+                if (Array.isArray(cloudRecords) && cloudRecords.length > 0) {
+                    const mapped = cloudRecords.map(row => ({
+                        id: row.id,
+                        card_order: row.card_order,
+                        course: row.course,
+                        deck: row.deck,
+                        front: row.front,
+                        back: row.back,
+                        status: "review",
+                        state: "new",
+                        repetitions: 0,
+                        interval: 0,
+                        easeFactor: 2.5,
+                        nextReviewDate: 0,
+                        lastReviewDate: null,
+                        isOfficial: true
+                    }));
+                    this.setCachedCards(group, mapped);
+                    return mapped;
+                }
+            } catch (cloudErr) {
+                console.warn("[FlashcardsCache] Supabase query notice:", cloudErr);
+            }
+        }
+
+        return this.getOfficialCardsSync(group);
+    },
+
+    setCachedCards(course, cards) {
+        const group = (course || "infection").toLowerCase();
+        this._memoryCache[group] = cards;
+        try {
+            localStorage.setItem(FLASHCARDS_CACHE_KEY_PREFIX + group, JSON.stringify(cards));
+        } catch (e) {
+            console.warn("[FlashcardsCache] LocalStorage write warning:", e);
+        }
+    },
+
+    clearMemoryCache() {
+        this._memoryCache = {};
+    }
+};
+
+window.HawariFlashcardsCacheEngine = HawariFlashcardsCacheEngine;
+
 // ================= ANKI / SM-2 SPACED REPETITION ENGINE & DECK SYSTEM =================
 
 let activeFlashcardIdx = 0;
@@ -7806,6 +7993,15 @@ function renderFlashcardsView() {
             activeFlashcardIdx = 0;
             renderFlashcardsView();
         };
+    }
+
+    // Ensure official cards are populated from zero-egress cache if empty
+    if (!state.flashcards || state.flashcards.length === 0) {
+        const activeCourse = (state.activeGroup || "infection").toLowerCase();
+        const baseCards = HawariFlashcardsCacheEngine.getOfficialCardsSync(activeCourse);
+        if (baseCards && baseCards.length > 0) {
+            state.flashcards = baseCards.map(c => normalizeSm2Card({ ...c }));
+        }
     }
 
     // Normalize all flashcards in state
@@ -8681,166 +8877,46 @@ function loadUserSpecificProgress(email) {
     // Load or initialize notebook notes
     state.notebookNotes = Array.isArray(user.notebookNotes) ? user.notebookNotes : [];
 
-    // Load or initialize flashcards (course isolated seed)
-    if (Array.isArray(user.flashcards) && user.flashcards.length > 0) {
-        state.flashcards = user.flashcards.map(c => normalizeSm2Card(c));
-    } else {
-        const isDerma = (state.activeGroup || "").toLowerCase() === "dermatology";
-        const seedCards = isDerma ? [
-            {
-                id: "fc_derma_1",
-                deck: "Papulosquamous Disorders",
-                category: "Papulosquamous Disorders",
-                front: "What is the Auspitz sign in Psoriasis?",
-                back: "Pinpoint bleeding after the removal of psoriatic scales due to thinned suprapapillary plates over dilated capillaries.",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_derma_2",
-                deck: "Infectious Dermatology",
-                category: "Infectious Dermatology",
-                front: "What is the pathognomonic clinical feature of Scabies?",
-                back: "Intensely pruritic, serpiginous burrows in web spaces of fingers, wrists, and genitalia, worse at night.",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_derma_3",
-                deck: "Autoimmune Bullous",
-                category: "Autoimmune Bullous",
-                front: "How do Pemphigus Vulgaris and Bullous Pemphigoid differ regarding Nikolsky's sign?",
-                back: "Pemphigus Vulgaris is Nikolsky-positive (intraepidermal blister); Bullous Pemphigoid is Nikolsky-negative (subepidermal blister).",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_derma_4",
-                deck: "Dermatological Oncology",
-                category: "Dermatological Oncology",
-                front: "What are the ABCDE criteria for Melanoma evaluation?",
-                back: "Asymmetry, Border irregularity, Color variegation, Diameter (>6mm), Evolution/Enlargement over time.",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_derma_5",
-                deck: "Drug Eruptions",
-                category: "Drug Eruptions",
-                front: "What distinguishes Stevens-Johnson Syndrome (SJS) from Toxic Epidermal Necrolysis (TEN)?",
-                back: "Body surface area (BSA) epidermal detachment: SJS < 10%, SJS/TEN overlap 10-30%, TEN > 30%.",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            }
-        ] : [
-            {
-                id: "fc_1",
-                deck: "Virology",
-                category: "Virology",
-                front: "What is the primary mode of transmission of Rift Valley Fever virus to humans?",
-                back: "Direct contact with blood/body fluids of infected animals (e.g. during slaughtering or veterinary procedures), or mosquito bites.",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_2",
-                deck: "Bacteriology",
-                category: "Bacteriology",
-                front: "What is the recommended antibiotic combination for treating Brucellosis?",
-                back: "Doxycycline + Rifampicin (or Streptomycin/Gentamicin).",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_3",
-                deck: "Meningitis",
-                category: "Meningitis",
-                front: "What CSF profile findings suggest Tuberculous Meningitis?",
-                back: "Cloudy appearance, elevated opening pressure, raised protein count, extremely low glucose level, and lymphocyte predominance (e.g. 70-98% lymphocytes).",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_4",
-                deck: "Pharmacology",
-                category: "Pharmacology",
-                front: "What is the drug of choice for treating invasive Aspergillosis?",
-                back: "Voriconazole.",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            },
-            {
-                id: "fc_5",
-                deck: "Infection Control",
-                category: "Infection Control",
-                front: "What type of hand hygiene is required for contact with Clostridium difficile spores?",
-                back: "Washing hands with soap and water (alcohol-based hand rubs are ineffective against C. difficile spores).",
-                status: "review",
-                state: "new",
-                repetitions: 0,
-                interval: 0,
-                easeFactor: 2.5,
-                nextReviewDate: 0,
-                lastReviewDate: null,
-                isOfficial: true
-            }
-        ];
-        state.flashcards = seedCards.map(c => normalizeSm2Card(c));
-    }
+    // Load or initialize flashcards with zero-egress official curriculum caching & SM-2 merge
+    const activeCourse = (state.activeGroup || "infection").toLowerCase();
+    const officialBase = HawariFlashcardsCacheEngine.getOfficialCardsSync(activeCourse);
+    
+    // Purge legacy placeholder cards (fc_1 to fc_5)
+    const rawUserCards = Array.isArray(user.flashcards) 
+        ? user.flashcards.filter(c => c && !["fc_1", "fc_2", "fc_3", "fc_4", "fc_5"].includes(c.id))
+        : [];
+    
+    const userReviewMap = new Map();
+    const personalCards = [];
+    rawUserCards.forEach(c => {
+        if (!c || !c.id) return;
+        if (c.isOfficial === false) {
+            personalCards.push(c);
+        } else {
+            userReviewMap.set(c.id, c);
+        }
+    });
+
+    // Merge student's SM-2 progress into official curriculum cards
+    const mergedOfficial = (officialBase || []).map(baseCard => {
+        const userProgress = userReviewMap.get(baseCard.id);
+        if (userProgress) {
+            return normalizeSm2Card({
+                ...baseCard,
+                repetitions: userProgress.repetitions !== undefined ? userProgress.repetitions : baseCard.repetitions,
+                interval: userProgress.interval !== undefined ? userProgress.interval : baseCard.interval,
+                easeFactor: userProgress.easeFactor !== undefined ? userProgress.easeFactor : baseCard.easeFactor,
+                nextReviewDate: userProgress.nextReviewDate !== undefined ? userProgress.nextReviewDate : baseCard.nextReviewDate,
+                lastReviewDate: userProgress.lastReviewDate !== undefined ? userProgress.lastReviewDate : baseCard.lastReviewDate,
+                state: userProgress.state || baseCard.state,
+                status: userProgress.status || baseCard.status
+            });
+        }
+        return normalizeSm2Card({ ...baseCard });
+    });
+
+    state.flashcards = [...mergedOfficial, ...personalCards.map(c => normalizeSm2Card(c))];
+    user.flashcards = state.flashcards;
 
     // Load or initialize report task progress
     if (!user.reportTaskProgress || typeof user.reportTaskProgress !== "object") {

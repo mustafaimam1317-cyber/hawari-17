@@ -8,6 +8,9 @@
 -- Safe & Idempotent: Can be executed multiple times without affecting existing data.
 -- ==============================================================================
 
+-- Drop old 5-parameter overload to prevent PGRST203 ambiguity
+DROP FUNCTION IF EXISTS public.update_user_progress_rpc(text, text, jsonb, jsonb, bigint);
+
 CREATE OR REPLACE FUNCTION public.update_user_progress_rpc(
     p_user_email text,
     p_group text DEFAULT 'infection',

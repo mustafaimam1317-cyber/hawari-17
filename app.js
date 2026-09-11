@@ -281,6 +281,181 @@ async function ensurePdfJsLoaded() {
     });
 }
 
+// ==============================================================================
+// ENTERPRISE INDEXEDDB PDF CACHING & OFFLINE STREAMING ENGINE (HAWARI VAULT)
+// ==============================================================================
+const PDF_VAULT_DB_NAME = "hawari_pdf_vault_v1";
+const PDF_VAULT_STORE_NAME = "cached_books";
+const _hawariMemoryPdfCache = new Map();
+
+function openPdfVaultDB() {
+    return new Promise((resolve) => {
+        if (typeof indexedDB === "undefined") {
+            return resolve(null);
+        }
+        try {
+            const request = indexedDB.open(PDF_VAULT_DB_NAME, 1);
+            request.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(PDF_VAULT_STORE_NAME)) {
+                    db.createObjectStore(PDF_VAULT_STORE_NAME, { keyPath: "bookId" });
+                }
+            };
+            request.onsuccess = (e) => resolve(e.target.result);
+            request.onerror = (e) => {
+                console.warn("[PDFVault] IndexedDB open error:", e.target ? e.target.error : e);
+                resolve(null);
+            };
+        } catch (err) {
+            console.warn("[PDFVault] IndexedDB open exception:", err);
+            resolve(null);
+        }
+    });
+}
+
+const HawariPdfStorageEngine = {
+    // 1. Get cached book with smart version/URL matching
+    async getCachedBookPdf(bookId, currentStorageUrl) {
+        if (!bookId) return null;
+        
+        // Check L1 memory cache first (instant)
+        const memHit = _hawariMemoryPdfCache.get(bookId);
+        if (memHit && memHit.storageUrl === currentStorageUrl && memHit.data && memHit.data.byteLength > 0) {
+            return { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" };
+        }
+
+        try {
+            const db = await openPdfVaultDB();
+            if (!db) {
+                // Fallback to memory if IndexedDB is blocked
+                return (memHit && memHit.storageUrl === currentStorageUrl) ? { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" } : null;
+            }
+
+            return new Promise((resolve) => {
+                const tx = db.transaction(PDF_VAULT_STORE_NAME, "readonly");
+                const store = tx.objectStore(PDF_VAULT_STORE_NAME);
+                const req = store.get(bookId);
+
+                req.onsuccess = () => {
+                    const record = req.result;
+                    if (!record || !record.data || !(record.data instanceof ArrayBuffer || record.data.byteLength > 0)) {
+                        return resolve(null);
+                    }
+
+                    // Strict Invalidation: Does cached storage URL match current book file URL?
+                    if (currentStorageUrl && record.storageUrl && record.storageUrl !== currentStorageUrl) {
+                        console.warn(`[PDFVault] STALE CACHE detected for book ${bookId}: URL changed. Evicting old version...`);
+                        HawariPdfStorageEngine.deleteCachedBookPdf(bookId).catch(() => {});
+                        return resolve(null);
+                    }
+
+                    // Populate L1 cache for subsequent tab actions
+                    _hawariMemoryPdfCache.set(bookId, {
+                        storageUrl: record.storageUrl,
+                        data: record.data
+                    });
+
+                    resolve({
+                        buffer: record.data,
+                        fromCache: true,
+                        fileSize: record.fileSize || record.data.byteLength,
+                        source: "indexeddb"
+                    });
+                };
+
+                req.onerror = () => resolve(null);
+            });
+        } catch (e) {
+            console.warn(`[PDFVault] Error reading book ${bookId} from IndexedDB:`, e);
+            return null;
+        }
+    },
+
+    // 2. Set/Save downloaded book binary to IndexedDB & L1 memory
+    async setCachedBookPdf(bookId, groupName, storageUrl, arrayBuffer) {
+        if (!bookId || !arrayBuffer || arrayBuffer.byteLength === 0) return false;
+
+        // Save in L1 memory
+        _hawariMemoryPdfCache.set(bookId, {
+            storageUrl: storageUrl,
+            data: arrayBuffer
+        });
+
+        try {
+            const db = await openPdfVaultDB();
+            if (!db) return true; // memory cached
+
+            const record = {
+                bookId: bookId,
+                groupName: groupName || "infection",
+                storageUrl: storageUrl || "",
+                cachedAt: Date.now(),
+                fileSize: arrayBuffer.byteLength,
+                data: arrayBuffer
+            };
+
+            return new Promise((resolve) => {
+                const tx = db.transaction(PDF_VAULT_STORE_NAME, "readwrite");
+                const store = tx.objectStore(PDF_VAULT_STORE_NAME);
+                const req = store.put(record);
+
+                req.onsuccess = () => {
+                    console.log(`[PDFVault] Successfully persisted book ${bookId} (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB) to IndexedDB.`);
+                    resolve(true);
+                };
+
+                req.onerror = (e) => {
+                    console.warn(`[PDFVault] IndexedDB put error for book ${bookId}:`, e.target ? e.target.error : e);
+                    resolve(false);
+                };
+            });
+        } catch (e) {
+            console.warn(`[PDFVault] Failed to cache book ${bookId}:`, e);
+            return false;
+        }
+    },
+
+    // 3. Delete single book
+    async deleteCachedBookPdf(bookId) {
+        _hawariMemoryPdfCache.delete(bookId);
+        try {
+            const db = await openPdfVaultDB();
+            if (!db) return;
+            return new Promise((resolve) => {
+                const tx = db.transaction(PDF_VAULT_STORE_NAME, "readwrite");
+                const store = tx.objectStore(PDF_VAULT_STORE_NAME);
+                const req = store.delete(bookId);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+            });
+        } catch (e) {
+            console.warn(`[PDFVault] Error deleting cached book ${bookId}:`, e);
+        }
+    },
+
+    // 4. Clear all cached books (DRM security on logout / account wipe)
+    async clearAllCachedBookPdfs() {
+        _hawariMemoryPdfCache.clear();
+        try {
+            const db = await openPdfVaultDB();
+            if (!db) return;
+            return new Promise((resolve) => {
+                const tx = db.transaction(PDF_VAULT_STORE_NAME, "readwrite");
+                const store = tx.objectStore(PDF_VAULT_STORE_NAME);
+                const req = store.clear();
+                req.onsuccess = () => {
+                    console.log("[PDFVault] All local PDF caches purged securely.");
+                    resolve();
+                };
+                req.onerror = () => resolve();
+            });
+        } catch (e) {
+            console.warn("[PDFVault] Error clearing cached books:", e);
+        }
+    }
+};
+window.HawariPdfStorageEngine = HawariPdfStorageEngine;
+
 async function loadRealBookPdfDocument(bookFile) {
     if (!bookFile) return null;
     console.log("[PDFViewer] Fetching real PDF document for book:", bookFile.id, bookFile.title);
@@ -303,68 +478,84 @@ async function loadRealBookPdfDocument(bookFile) {
 
         let pdfArrayBuffer = null;
 
-        // Strategy A: Authenticated storage endpoint
-        try {
-            const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
-            const resAuth = await fetch(authEndpoint, {
-                headers: {
-                    "apikey": anonKey,
-                    "Authorization": `Bearer ${jwtToken || anonKey}`
-                }
-            });
-            if (resAuth.ok) {
-                pdfArrayBuffer = await resAuth.arrayBuffer();
-                console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-            } else {
-                console.warn("[PDFViewer] Strategy A returned status:", resAuth.status);
-            }
-        } catch (errA) {
-            console.warn("[PDFViewer] Strategy A failed:", errA.message);
-        }
+        // LAYER 1 & 2: Local IndexedDB / Memory Cache Check (Zero-Egress)
+        const cachedDoc = await HawariPdfStorageEngine.getCachedBookPdf(bookFile.id, rawUrl);
+        if (cachedDoc && cachedDoc.buffer && cachedDoc.buffer.byteLength > 0) {
+            console.log(`[PDFViewer] ⚡ CACHE HIT (${cachedDoc.source}) for book "${bookFile.title}" (${(cachedDoc.fileSize / 1024 / 1024).toFixed(2)} MB). 0 bytes network egress!`);
+            pdfArrayBuffer = cachedDoc.buffer;
+        } else {
+            console.log(`[PDFViewer] 🌐 CACHE MISS for book "${bookFile.title}". Downloading from cloud storage...`);
+            showToast("جاري تحميل الكتاب", "جاري تثبيت الكتاب على جهازك لأول مرة، سيفتح لاحقاً بدون إنترنت...", "info");
 
-        // Strategy B: Public storage endpoint
-        if (!pdfArrayBuffer && rawUrl && rawUrl.startsWith("http")) {
+            // Strategy A: Authenticated storage endpoint
             try {
-                const resPub = await fetch(rawUrl, {
-                    headers: { "apikey": anonKey }
-                });
-                if (resPub.ok) {
-                    pdfArrayBuffer = await resPub.arrayBuffer();
-                    console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-                } else {
-                    console.warn("[PDFViewer] Strategy B returned status:", resPub.status);
-                }
-            } catch (errB) {
-                console.warn("[PDFViewer] Strategy B failed:", errB.message);
-            }
-        }
-
-        // Strategy C: Signed temporary URL from Supabase
-        if (!pdfArrayBuffer && cleanPath) {
-            try {
-                const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
-                    method: "POST",
+                const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
+                const resAuth = await fetch(authEndpoint, {
                     headers: {
                         "apikey": anonKey,
-                        "Authorization": `Bearer ${jwtToken || anonKey}`,
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ expiresIn: 3600 })
+                        "Authorization": `Bearer ${jwtToken || anonKey}`
+                    }
                 });
-                if (signRes.ok) {
-                    const signJson = await signRes.json();
-                    const signedPath = signJson.signedURL || signJson.signedUrl;
-                    if (signedPath) {
-                        const signedFullUrl = signedPath.startsWith("http") ? signedPath : `${cleanUrl}/storage/v1${signedPath}`;
-                        const resSigned = await fetch(signedFullUrl);
-                        if (resSigned.ok) {
-                            pdfArrayBuffer = await resSigned.arrayBuffer();
-                            console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                if (resAuth.ok) {
+                    pdfArrayBuffer = await resAuth.arrayBuffer();
+                    console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                } else {
+                    console.warn("[PDFViewer] Strategy A returned status:", resAuth.status);
+                }
+            } catch (errA) {
+                console.warn("[PDFViewer] Strategy A failed:", errA.message);
+            }
+
+            // Strategy B: Public storage endpoint
+            if (!pdfArrayBuffer && rawUrl && rawUrl.startsWith("http")) {
+                try {
+                    const resPub = await fetch(rawUrl, {
+                        headers: { "apikey": anonKey }
+                    });
+                    if (resPub.ok) {
+                        pdfArrayBuffer = await resPub.arrayBuffer();
+                        console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                    } else {
+                        console.warn("[PDFViewer] Strategy B returned status:", resPub.status);
+                    }
+                } catch (errB) {
+                    console.warn("[PDFViewer] Strategy B failed:", errB.message);
+                }
+            }
+
+            // Strategy C: Signed temporary URL from Supabase
+            if (!pdfArrayBuffer && cleanPath) {
+                try {
+                    const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                        method: "POST",
+                        headers: {
+                            "apikey": anonKey,
+                            "Authorization": `Bearer ${jwtToken || anonKey}`,
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({ expiresIn: 3600 })
+                    });
+                    if (signRes.ok) {
+                        const signJson = await signRes.json();
+                        const signedPath = signJson.signedURL || signJson.signedUrl;
+                        if (signedPath) {
+                            const signedFullUrl = signedPath.startsWith("http") ? signedPath : `${cleanUrl}/storage/v1${signedPath}`;
+                            const resSigned = await fetch(signedFullUrl);
+                            if (resSigned.ok) {
+                                pdfArrayBuffer = await resSigned.arrayBuffer();
+                                console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                            }
                         }
                     }
+                } catch (errC) {
+                    console.warn("[PDFViewer] Strategy C failed:", errC.message);
                 }
-            } catch (errC) {
-                console.warn("[PDFViewer] Strategy C failed:", errC.message);
+            }
+
+            // If downloaded successfully, persist into IndexedDB for future zero-egress opens
+            if (pdfArrayBuffer && pdfArrayBuffer.byteLength > 0) {
+                await HawariPdfStorageEngine.setCachedBookPdf(bookFile.id, bookFile.group_name || state.activeGroup, rawUrl, pdfArrayBuffer);
+                showToast("تم الحفظ محلياً", "تم حفظ الكتاب على جهازك بنجاح. سيفتح فوراً من الآن بدون سحب ترافيك.", "success");
             }
         }
 
@@ -3956,6 +4147,11 @@ function initAuthFlow() {
         clearSupabaseSession();
         localStorage.removeItem(`hawari_jwt_${currentTrack}`);
         localStorage.removeItem("hawari_jwt_token");
+
+        // DRM Security: Purge cached PDF documents on user logout
+        if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.clearAllCachedBookPdfs) {
+            HawariPdfStorageEngine.clearAllCachedBookPdfs().catch(() => {});
+        }
 
         // Reset auth input fields
         if (emailInput) emailInput.value = "";
@@ -11563,6 +11759,11 @@ async function wipeSessionAndData(reason) {
     } catch(e) {
         console.error("Error clearing IndexedDB videos:", e);
     }
+
+    // DRM Security: Purge cached PDF documents from local vault
+    if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.clearAllCachedBookPdfs) {
+        HawariPdfStorageEngine.clearAllCachedBookPdfs().catch(() => {});
+    }
     
     // Invoke native bridge to wipe all physical downloads
     if (window.AndroidBridge && typeof window.AndroidBridge.wipeAllVideos === "function") {
@@ -12908,6 +13109,11 @@ window.deleteAdminBook = async function(bookId, bookTitle) {
 
         state.books = (state.books || []).filter(b => b.id !== bookId);
         localStorage.setItem("hawari_books_" + group, JSON.stringify(state.books));
+
+        // Purge local PDF vault cache for this deleted book
+        if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.deleteCachedBookPdf) {
+            HawariPdfStorageEngine.deleteCachedBookPdf(bookId).catch(() => {});
+        }
 
         // 3. Sync deletion with hawari_users admin row for 100% cross-device consistency
         try {

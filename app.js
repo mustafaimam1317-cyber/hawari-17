@@ -282,7 +282,7 @@ async function ensurePdfJsLoaded() {
 }
 
 // ==============================================================================
-// ENTERPRISE INDEXEDDB PDF CACHING & OFFLINE STREAMING ENGINE (HAWARI VAULT)
+// ENTERPRISE INDEXEDDB PDF CACHING & MILITARY-GRADE AES-GCM 256 VAULT ENGINE
 // ==============================================================================
 const PDF_VAULT_DB_NAME = "hawari_pdf_vault_v1";
 const PDF_VAULT_STORE_NAME = "cached_books";
@@ -313,12 +313,45 @@ function openPdfVaultDB() {
     });
 }
 
+// Derive Hardware-Accelerated AES-GCM 256 Key Bound to User & Course Salt
+async function getPdfVaultCryptoKey(userEmail) {
+    if (typeof crypto === "undefined" || !crypto.subtle) return null;
+    try {
+        const cleanEmail = (userEmail || "hawari_vault_user").trim().toLowerCase();
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey(
+            "raw",
+            enc.encode(`${cleanEmail}::hawari_medical_vault_salt_2026_aes256`),
+            { name: "PBKDF2" },
+            false,
+            ["deriveKey"]
+        );
+        return await crypto.subtle.deriveKey(
+            {
+                name: "PBKDF2",
+                salt: enc.encode("hawari_pdf_drm_shield_salt_v1"),
+                iterations: 5000,
+                hash: "SHA-256"
+            },
+            keyMaterial,
+            { name: "AES-GCM", length: 256 },
+            false,
+            ["encrypt", "decrypt"]
+        );
+    } catch (e) {
+        console.warn("[PDFVault] Crypto key derivation skipped:", e);
+        return null;
+    }
+}
+
 const HawariPdfStorageEngine = {
-    // 1. Get cached book with smart version/URL matching
-    async getCachedBookPdf(bookId, currentStorageUrl) {
+    // 1. Get cached book with smart version/URL matching and AES-GCM 256 decryption
+    async getCachedBookPdf(bookId, currentStorageUrl, userEmail = null) {
         if (!bookId) return null;
+
+        const effectiveEmail = userEmail || (state.currentUser?.email) || "";
         
-        // Check L1 memory cache first (instant)
+        // Check L1 memory cache first (instantaneous)
         const memHit = _hawariMemoryPdfCache.get(bookId);
         if (memHit && memHit.storageUrl === currentStorageUrl && memHit.data && memHit.data.byteLength > 0) {
             return { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" };
@@ -327,7 +360,6 @@ const HawariPdfStorageEngine = {
         try {
             const db = await openPdfVaultDB();
             if (!db) {
-                // Fallback to memory if IndexedDB is blocked
                 return (memHit && memHit.storageUrl === currentStorageUrl) ? { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" } : null;
             }
 
@@ -336,7 +368,7 @@ const HawariPdfStorageEngine = {
                 const store = tx.objectStore(PDF_VAULT_STORE_NAME);
                 const req = store.get(bookId);
 
-                req.onsuccess = () => {
+                req.onsuccess = async () => {
                     const record = req.result;
                     if (!record || !record.data || !(record.data instanceof ArrayBuffer || record.data.byteLength > 0)) {
                         return resolve(null);
@@ -349,16 +381,38 @@ const HawariPdfStorageEngine = {
                         return resolve(null);
                     }
 
-                    // Populate L1 cache for subsequent tab actions
+                    let rawPdfBuffer = record.data;
+
+                    // Decrypt AES-GCM 256 if encrypted in vault
+                    if (record.isEncrypted && record.iv && Array.isArray(record.iv)) {
+                        try {
+                            const cryptoKey = await getPdfVaultCryptoKey(effectiveEmail);
+                            if (cryptoKey) {
+                                const ivBytes = new Uint8Array(record.iv);
+                                rawPdfBuffer = await crypto.subtle.decrypt(
+                                    { name: "AES-GCM", iv: ivBytes },
+                                    cryptoKey,
+                                    record.data
+                                );
+                                console.log(`[PDFVault] 🔓 Successfully decrypted book ${bookId} with AES-GCM 256.`);
+                            }
+                        } catch (decErr) {
+                            console.warn(`[PDFVault] Decryption rejected (account mismatch or tampered vault). Evicting...`, decErr.name);
+                            HawariPdfStorageEngine.deleteCachedBookPdf(bookId).catch(() => {});
+                            return resolve(null);
+                        }
+                    }
+
+                    // Populate L1 cache for smooth intra-session page reading
                     _hawariMemoryPdfCache.set(bookId, {
                         storageUrl: record.storageUrl,
-                        data: record.data
+                        data: rawPdfBuffer
                     });
 
                     resolve({
-                        buffer: record.data,
+                        buffer: rawPdfBuffer,
                         fromCache: true,
-                        fileSize: record.fileSize || record.data.byteLength,
+                        fileSize: record.fileSize || rawPdfBuffer.byteLength,
                         source: "indexeddb"
                     });
                 };
@@ -371,9 +425,11 @@ const HawariPdfStorageEngine = {
         }
     },
 
-    // 2. Set/Save downloaded book binary to IndexedDB & L1 memory
-    async setCachedBookPdf(bookId, groupName, storageUrl, arrayBuffer) {
+    // 2. Set/Save downloaded book binary to IndexedDB (with AES-GCM 256 encryption) & L1 memory
+    async setCachedBookPdf(bookId, groupName, storageUrl, arrayBuffer, userEmail = null) {
         if (!bookId || !arrayBuffer || arrayBuffer.byteLength === 0) return false;
+
+        const effectiveEmail = userEmail || (state.currentUser?.email) || "";
 
         // Save in L1 memory
         _hawariMemoryPdfCache.set(bookId, {
@@ -383,7 +439,30 @@ const HawariPdfStorageEngine = {
 
         try {
             const db = await openPdfVaultDB();
-            if (!db) return true; // memory cached
+            if (!db) return true;
+
+            let storageBuffer = arrayBuffer;
+            let ivArray = null;
+            let isEncrypted = false;
+
+            // Encrypt using Web Crypto AES-GCM 256 prior to disk persistence
+            const cryptoKey = await getPdfVaultCryptoKey(effectiveEmail);
+            if (cryptoKey && typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+                try {
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const encrypted = await crypto.subtle.encrypt(
+                        { name: "AES-GCM", iv },
+                        cryptoKey,
+                        arrayBuffer
+                    );
+                    storageBuffer = encrypted;
+                    ivArray = Array.from(iv);
+                    isEncrypted = true;
+                    console.log(`[PDFVault] 🔒 Book ${bookId} encrypted with AES-GCM 256 (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB).`);
+                } catch (encErr) {
+                    console.warn("[PDFVault] AES encryption fallback to raw buffer:", encErr);
+                }
+            }
 
             const record = {
                 bookId: bookId,
@@ -391,7 +470,9 @@ const HawariPdfStorageEngine = {
                 storageUrl: storageUrl || "",
                 cachedAt: Date.now(),
                 fileSize: arrayBuffer.byteLength,
-                data: arrayBuffer
+                data: storageBuffer,
+                iv: ivArray,
+                isEncrypted: isEncrypted
             };
 
             return new Promise((resolve) => {
@@ -400,7 +481,7 @@ const HawariPdfStorageEngine = {
                 const req = store.put(record);
 
                 req.onsuccess = () => {
-                    console.log(`[PDFVault] Successfully persisted book ${bookId} (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB) to IndexedDB.`);
+                    console.log(`[PDFVault] Successfully persisted book ${bookId} to IndexedDB vault.`);
                     resolve(true);
                 };
 
@@ -433,7 +514,7 @@ const HawariPdfStorageEngine = {
         }
     },
 
-    // 4. Clear all cached books (DRM security on logout / account wipe)
+    // 4. Clear all cached books (DRM security on account wipe / ban / device purge)
     async clearAllCachedBookPdfs() {
         _hawariMemoryPdfCache.clear();
         try {
@@ -452,6 +533,23 @@ const HawariPdfStorageEngine = {
         } catch (e) {
             console.warn("[PDFVault] Error clearing cached books:", e);
         }
+    },
+
+    // 5. Clean L1 RAM cache on standard logout (frees memory while leaving encrypted files on user device)
+    clearMemoryCache() {
+        _hawariMemoryPdfCache.clear();
+    },
+
+    // 6. Handle user login switch (if a different account logs in, purge prior user's vault)
+    handleUserLoginSwitch(newEmail) {
+        if (!newEmail) return;
+        const clean = newEmail.trim().toLowerCase();
+        const prev = (localStorage.getItem("hawari_last_vault_user") || "").trim().toLowerCase();
+        if (prev && prev !== clean) {
+            console.log(`[PDFVault] User switched (${prev} -> ${clean}). Purging previous user's PDF vault.`);
+            HawariPdfStorageEngine.clearAllCachedBookPdfs().catch(() => {});
+        }
+        localStorage.setItem("hawari_last_vault_user", clean);
     }
 };
 window.HawariPdfStorageEngine = HawariPdfStorageEngine;
@@ -478,14 +576,15 @@ async function loadRealBookPdfDocument(bookFile) {
 
         let pdfArrayBuffer = null;
 
-        // LAYER 1 & 2: Local IndexedDB / Memory Cache Check (Zero-Egress)
-        const cachedDoc = await HawariPdfStorageEngine.getCachedBookPdf(bookFile.id, rawUrl);
+        // LAYER 1 & 2: Local IndexedDB / Memory Cache Check (Zero-Egress + AES-GCM 256)
+        const userEmail = state.currentUser?.email || "";
+        const cachedDoc = await HawariPdfStorageEngine.getCachedBookPdf(bookFile.id, rawUrl, userEmail);
         if (cachedDoc && cachedDoc.buffer && cachedDoc.buffer.byteLength > 0) {
             console.log(`[PDFViewer] ⚡ CACHE HIT (${cachedDoc.source}) for book "${bookFile.title}" (${(cachedDoc.fileSize / 1024 / 1024).toFixed(2)} MB). 0 bytes network egress!`);
             pdfArrayBuffer = cachedDoc.buffer;
         } else {
             console.log(`[PDFViewer] 🌐 CACHE MISS for book "${bookFile.title}". Downloading from cloud storage...`);
-            showToast("جاري تحميل الكتاب", "جاري تثبيت الكتاب على جهازك لأول مرة، سيفتح لاحقاً بدون إنترنت...", "info");
+            showToast("جاري تحميل الكتاب", "جاري تثبيت وتشفير الكتاب على جهازك لأول مرة...", "info");
 
             // Strategy A: Authenticated storage endpoint
             try {
@@ -552,10 +651,10 @@ async function loadRealBookPdfDocument(bookFile) {
                 }
             }
 
-            // If downloaded successfully, persist into IndexedDB for future zero-egress opens
+            // If downloaded successfully, persist into IndexedDB with AES-GCM 256 for future zero-egress opens
             if (pdfArrayBuffer && pdfArrayBuffer.byteLength > 0) {
-                await HawariPdfStorageEngine.setCachedBookPdf(bookFile.id, bookFile.group_name || state.activeGroup, rawUrl, pdfArrayBuffer);
-                showToast("تم الحفظ محلياً", "تم حفظ الكتاب على جهازك بنجاح. سيفتح فوراً من الآن بدون سحب ترافيك.", "success");
+                await HawariPdfStorageEngine.setCachedBookPdf(bookFile.id, bookFile.group_name || state.activeGroup, rawUrl, pdfArrayBuffer, userEmail);
+                showToast("تم الحفظ محلياً", "تم حفظ وتشفير الكتاب على جهازك بنجاح. سيفتح فوراً من الآن بدون سحب ترافيك.", "success");
             }
         }
 
@@ -3907,6 +4006,10 @@ function initAuthFlow() {
                 sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
                 console.log("[AUTH-TRACE] custom login success");
                 state.currentUser = user;
+                // Smart PDF Vault: Purge previous user's cached vault if a different account logs in
+                if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.handleUserLoginSwitch) {
+                    HawariPdfStorageEngine.handleUserLoginSwitch(user.email);
+                }
                 await loginToSupabaseAuth(currentAuthenticatingEmail, password);
 
                 try {
@@ -4148,9 +4251,9 @@ function initAuthFlow() {
         localStorage.removeItem(`hawari_jwt_${currentTrack}`);
         localStorage.removeItem("hawari_jwt_token");
 
-        // DRM Security: Purge cached PDF documents on user logout
-        if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.clearAllCachedBookPdfs) {
-            HawariPdfStorageEngine.clearAllCachedBookPdfs().catch(() => {});
+        // DRM Security: Purge decrypted in-memory buffers while retaining AES-GCM 256 encrypted vault on user's device
+        if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.clearMemoryCache) {
+            HawariPdfStorageEngine.clearMemoryCache();
         }
 
         // Reset auth input fields

@@ -4134,8 +4134,8 @@ function initAuthFlow() {
             }
             
             if (isPasswordValid && user) {
-                const isUserAdmin = user.role === "admin" || user.role === "instructor" || user.is_admin === true;
-                if (!isUserAdmin && user.status !== "approved") {
+                const isAdminUser = isUserAdmin(user);
+                if (!isAdminUser && user.status !== "approved") {
                     showToast("الحساب قيد الاعتماد", "حسابك لا يزال قيد المراجعة والموافقة من الإدارة.", "warning");
                     showAuthStep("auth-pending-step");
                     const pendingDisplay = document.getElementById("pending-email-display");
@@ -4147,39 +4147,44 @@ function initAuthFlow() {
                 btnLoginSubmit.disabled = true;
                 btnLoginSubmit.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Logging in...`;
 
-                sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
-                sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
-                console.log("[AUTH-TRACE] custom login success");
-                state.currentUser = user;
-                // Single Active Device Session: rotate local token and claim on cloud (admins exempt)
-                rotateDeviceSessionToken();
-                if (!isUserAdmin(user)) {
-                    claimActiveDeviceSession(user.email).catch(() => {});
-                }
-                // Smart PDF Vault: Purge previous user's cached vault if a different account logs in
-                if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.handleUserLoginSwitch) {
-                    HawariPdfStorageEngine.handleUserLoginSwitch(user.email);
-                }
-                await loginToSupabaseAuth(currentAuthenticatingEmail, password);
-
                 try {
-                    // Force sync cloud progress and fetch granted book access list to avoid overwriting newer progress
-                    await Promise.allSettled([
-                        syncUsersWithCloud(),
-                        fetchGrantedUsersList()
-                    ]);
-                } catch (e) {
-                    console.error("Login sync failed:", e);
+                    sessionStorage.removeItem("attempts_" + currentAuthenticatingEmail);
+                    sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
+                    console.log("[AUTH-TRACE] custom login success");
+                    state.currentUser = user;
+                    // Single Active Device Session: rotate local token and claim on cloud (admins exempt)
+                    rotateDeviceSessionToken();
+                    if (!isAdminUser) {
+                        claimActiveDeviceSession(user.email).catch(() => {});
+                    }
+                    // Smart PDF Vault: Purge previous user's cached vault if a different account logs in
+                    if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.handleUserLoginSwitch) {
+                        HawariPdfStorageEngine.handleUserLoginSwitch(user.email);
+                    }
+                    await loginToSupabaseAuth(currentAuthenticatingEmail, password);
+
+                    try {
+                        // Force sync cloud progress and fetch granted book access list to avoid overwriting newer progress
+                        await Promise.allSettled([
+                            syncUsersWithCloud(),
+                            fetchGrantedUsersList()
+                        ]);
+                    } catch (e) {
+                        console.error("Login sync failed:", e);
+                    }
+
+                    loadUserSpecificProgress(user.email);
+                    saveStateToStorage(true); // Skip cloud sync because syncUsersWithCloud() was just run and awaited above
+
+                    showToast("Login Success", `Welcome to Hawari Course study engine!`, "success");
+                    enterWorkspace();
+                } catch (loginErr) {
+                    console.error("[Auth] Login processing error:", loginErr);
+                    showToast("Login Error", "حدث خطأ أثناء إتمام تسجيل الدخول، يرجى المحاولة مرة أخرى.", "danger");
+                } finally {
+                    btnLoginSubmit.disabled = false;
+                    btnLoginSubmit.innerHTML = `Log In <i class="fa-solid fa-right-to-bracket"></i>`;
                 }
-
-                loadUserSpecificProgress(user.email);
-                saveStateToStorage(true); // Skip cloud sync because syncUsersWithCloud() was just run and awaited above
-                
-                btnLoginSubmit.disabled = false;
-                btnLoginSubmit.innerHTML = `Log In <i class="fa-solid fa-right-to-bracket"></i>`;
-
-                showToast("Login Success", `Welcome to Hawari Course study engine!`, "success");
-                enterWorkspace();
             } else {
                 let attempts = parseInt(sessionStorage.getItem("attempts_" + currentAuthenticatingEmail) || "0") + 1;
                 sessionStorage.setItem("attempts_" + currentAuthenticatingEmail, attempts.toString());
@@ -4486,8 +4491,8 @@ function enterWorkspace() {
         showLandingPage();
         return;
     }
-    const isUserAdmin = state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true;
-    if (!isUserAdmin && state.currentUser.status !== "approved") {
+    const isCurrentAdmin = isUserAdmin(state.currentUser);
+    if (!isCurrentAdmin && state.currentUser.status !== "approved") {
         showToast("حساب غير معتمد", "حسابك لا يزال بانتظار موافقة الإدارة.", "warning");
         showAuthOverlay();
         showAuthStep("auth-pending-step");

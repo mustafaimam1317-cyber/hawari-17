@@ -1,3 +1,19 @@
+/**
+ * ============================================================================
+ * HAWARI MEDICAL EDUCATIONAL PLATFORM (CLINICAL LMS & DRM SUITE)
+ * Author: Mustafa Imam
+ * Copyright (c) 2026 Hawari Platform. All Rights Reserved.
+ *
+ * PROPRIETARY AND CONFIDENTIAL SOURCE CODE.
+ * 
+ * This software and its accompanying documentation contain trade secrets and
+ * proprietary information owned exclusively by Hawari Platform. Unauthorized
+ * copying, reverse engineering, decompilation, reproduction, or distribution
+ * of this file, via any medium, in whole or in part, is strictly prohibited
+ * and punishable under international copyright and intellectual property laws.
+ * ============================================================================
+ */
+
 
 import { APP_MARKUP } from './uiTemplate.js';
 import { OFFICIAL_INFECTION_FLASHCARDS } from './official_flashcards_data.js';
@@ -965,6 +981,112 @@ function getGroupQuestionsSeed(group = state.activeGroup) {
     return SEED_QUESTIONS;
 }
 
+
+// ============================================================================
+// HAWARI SINGLE ACTIVE DEVICE ENFORCEMENT ENGINE
+// Author: Mustafa Imam | Copyright (c) 2026 Hawari Platform
+// ============================================================================
+function getDeviceFingerprint() {
+    if (typeof navigator === "undefined") return "Unknown Device";
+    const ua = navigator.userAgent || "";
+    let os = "Desktop";
+    if (/Android/i.test(ua)) os = "Android Mobile";
+    else if (/iPhone/i.test(ua)) os = "iPhone iOS";
+    else if (/iPad/i.test(ua)) os = "iPad iOS";
+    else if (/Windows/i.test(ua)) os = "Windows PC";
+    else if (/Mac/i.test(ua)) os = "Mac OS";
+    else if (/Linux/i.test(ua)) os = "Linux PC";
+
+    let browser = "Browser";
+    if (/Edg/i.test(ua)) browser = "Edge";
+    else if (/Chrome/i.test(ua)) browser = "Chrome";
+    else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browser = "Safari";
+    else if (/Firefox/i.test(ua)) browser = "Firefox";
+
+    return `${os} (${browser})`;
+}
+
+function getOrCreateDeviceSessionToken() {
+    let token = localStorage.getItem("hawari_session_token");
+    if (!token || token.length < 10) {
+        token = (typeof crypto !== "undefined" && crypto.randomUUID) 
+            ? crypto.randomUUID() 
+            : "sess_" + Date.now() + "_" + Math.random().toString(36).substring(2, 10);
+        localStorage.setItem("hawari_session_token", token);
+    }
+    return token;
+}
+
+function rotateDeviceSessionToken() {
+    const newToken = (typeof crypto !== "undefined" && crypto.randomUUID) 
+        ? crypto.randomUUID() 
+        : "sess_" + Date.now() + "_" + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem("hawari_session_token", newToken);
+    return newToken;
+}
+
+async function claimActiveDeviceSession(email) {
+    if (!email) return null;
+    const cleanEmail = email.trim().toLowerCase();
+    const token = getOrCreateDeviceSessionToken();
+    const device = getDeviceFingerprint();
+    const group = (state.activeGroup || "infection").toLowerCase().trim();
+
+    try {
+        const res = await supabaseRequest("rpc/claim_active_device_session", {
+            method: "POST",
+            body: JSON.stringify({
+                p_email: cleanEmail,
+                p_session_token: token,
+                p_device_info: device,
+                p_group: group
+            })
+        });
+        console.log("[DeviceSession] Registered active session on cloud for:", cleanEmail, "Device:", device);
+        return res;
+    } catch (err) {
+        console.warn("[DeviceSession] Session registration deferred (offline):", err);
+        return null;
+    }
+}
+
+async function verifyActiveDeviceSession(email) {
+    if (!email) return { valid: true };
+    const cleanEmail = email.trim().toLowerCase();
+    const token = localStorage.getItem("hawari_session_token") || "";
+    const group = (state.activeGroup || "infection").toLowerCase().trim();
+
+    // Admins are exempt from single device concurrency
+    if (state.currentUser && isUserAdmin(state.currentUser)) {
+        return { valid: true, is_admin: true };
+    }
+
+    try {
+        const res = await supabaseRequest("rpc/verify_active_device_session", {
+            method: "POST",
+            body: JSON.stringify({
+                p_email: cleanEmail,
+                p_session_token: token,
+                p_group: group
+            })
+        });
+
+        if (res && res.revoked === true) {
+            console.warn("[DeviceSession] Session revoked! Account opened on:", res.active_device);
+            return { valid: false, revoked: true, active_device: res.active_device || "جهاز آخر" };
+        }
+        return { valid: true, revoked: false };
+    } catch (err) {
+        // Offline / network failure: allow uninterrupted local studying
+        console.warn("[DeviceSession] Cloud session check unreachable, maintaining local session:", err);
+        return { valid: true, offline: true };
+    }
+}
+
+window.claimActiveDeviceSession = claimActiveDeviceSession;
+window.verifyActiveDeviceSession = verifyActiveDeviceSession;
+
+
 function isUserAdmin(user = state.currentUser) {
     if (!user) return false;
     return user.role === "admin" || user.role === "instructor" || user.is_admin === true;
@@ -996,6 +1118,17 @@ if (typeof window !== "undefined" && !window._hawariHeartbeatStarted) {
     setInterval(() => {
         if (_hasPendingCloudSync && state.currentUser && state.activeGroup) {
             flushPendingCloudSync().catch(() => {});
+        }
+        // Periodic single device check for students
+        if (state.currentUser && !isUserAdmin(state.currentUser)) {
+            verifyActiveDeviceSession(state.currentUser.email).then(sessCheck => {
+                if (sessCheck && sessCheck.revoked === true) {
+                    console.warn("[DeviceSession] Heartbeat revoked session by another device:", sessCheck.active_device);
+                    if (typeof window.performAppLogout === "function") {
+                        window.performAppLogout("تم تسجيل الدخول إلى حسابك من " + (sessCheck.active_device || "جهاز آخر") + ". تم إنهاء هذه الجلسة.", "warning");
+                    }
+                }
+            }).catch(() => {});
         }
     }, 300000);
 
@@ -1225,6 +1358,16 @@ function loadStateFromStorage() {
                 }).catch(err => {
                     console.warn("[Auth] Background session verification deferred (offline):", err);
                 });
+
+                // Single Active Device verification on app boot
+                verifyActiveDeviceSession(storedCurrentUser.email).then(sessCheck => {
+                    if (sessCheck && sessCheck.revoked === true) {
+                        console.warn("[DeviceSession] Usurped session on boot, device:", sessCheck.active_device);
+                        if (typeof window.performAppLogout === "function") {
+                            window.performAppLogout("تم تسجيل الدخول إلى حسابك من " + (sessCheck.active_device || "جهاز آخر") + ". تم إنهاء هذه الجلسة.", "warning");
+                        }
+                    }
+                }).catch(() => {});
             }
         } catch (e) {
             console.error("[Auth] Error loading stored current user:", e);
@@ -4008,6 +4151,11 @@ function initAuthFlow() {
                 sessionStorage.removeItem("lockout_" + currentAuthenticatingEmail);
                 console.log("[AUTH-TRACE] custom login success");
                 state.currentUser = user;
+                // Single Active Device Session: rotate local token and claim on cloud (admins exempt)
+                rotateDeviceSessionToken();
+                if (!isUserAdmin(user)) {
+                    claimActiveDeviceSession(user.email).catch(() => {});
+                }
                 // Smart PDF Vault: Purge previous user's cached vault if a different account logs in
                 if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.handleUserLoginSwitch) {
                     HawariPdfStorageEngine.handleUserLoginSwitch(user.email);
@@ -5217,7 +5365,7 @@ function loadTestQuestion(index) {
     
     if (isAnswered && state.activeTest.mode === "tutor") {
         explanationPanel.classList.remove("hidden");
-        document.getElementById("lbl-explanation-text").innerText = qObj.explanation;
+        document.getElementById("lbl-explanation-text").innerText = qObj.explanation || "جاري جلب التفسير السريري...";
     } else {
         explanationPanel.classList.add("hidden");
     }
@@ -5339,7 +5487,7 @@ function renderTestQuestionGrid() {
     });
 }
 
-function selectQuestionAnswer(qId, option) {
+async function selectQuestionAnswer(qId, option) {
     state.activeTest.selectedAnswers[qId] = option;
     
     // Save to local storage
@@ -5356,6 +5504,43 @@ function selectQuestionAnswer(qId, option) {
             testObj.answers = { ...state.activeTest.selectedAnswers };
             saveStateToStorage();
         }
+    }
+
+    const qObj = (state.activeTest.isReportTask && state.activeTest.rtQuestions) ?
+                 state.activeTest.rtQuestions.find(q => q.id === qId) :
+                 state.questions.find(q => q.id === qId);
+
+    // Tutor Mode: Fetch on-demand explanation & correct option from server grading RPC
+    if (state.activeTest.mode === "tutor" && qObj && (!qObj.correctOption || !qObj.explanation)) {
+        try {
+            const group = (state.activeGroup || "infection").toLowerCase();
+            const userEmail = (state.currentUser && state.currentUser.email) ? state.currentUser.email : "";
+            const gradeRes = await supabaseRequest("rpc/submit_and_grade_exam", {
+                method: "POST",
+                body: JSON.stringify({
+                    p_group: group,
+                    p_exam_id: state.activeTest.testId || "tutor_step",
+                    p_answers: { [qId]: option },
+                    p_email: userEmail
+                })
+            });
+            if (gradeRes && Array.isArray(gradeRes.results) && gradeRes.results.length > 0) {
+                const res = gradeRes.results.find(r => r.questionId === qId) || gradeRes.results[0];
+                if (res) {
+                    qObj.correctOption = res.correctOption;
+                    qObj.explanation = res.explanation;
+                    qObj.status = res.isCorrect ? "correct" : "incorrect";
+                    saveStateToStorage();
+                    updateDashboardStats();
+                }
+            }
+        } catch (e) {
+            console.warn("[Tutor] Explanation on-demand fetch notice:", e);
+        }
+    } else if (state.activeTest.mode === "tutor" && qObj && qObj.correctOption) {
+        qObj.status = (String(option).trim().toUpperCase() === String(qObj.correctOption).trim().toUpperCase()) ? "correct" : "incorrect";
+        saveStateToStorage();
+        updateDashboardStats();
     }
 
     // Refresh display
@@ -5378,14 +5563,18 @@ async function submitActiveTest() {
     // 1. Submit answers to Server-Side Grading RPC
     let gradeData = null;
     try {
+        const submissionAnswers = {};
+        (examQuestionIds || []).forEach(id => {
+            submissionAnswers[id] = activeTest.selectedAnswers && activeTest.selectedAnswers[id] !== undefined ? activeTest.selectedAnswers[id] : "";
+        });
+
         const gradeRes = await supabaseRequest(`rpc/submit_and_grade_exam`, {
             method: "POST",
             body: JSON.stringify({
                 p_group: group,
                 p_exam_id: activeTest.isReportTask ? activeTest.rtId : activeTest.testId,
-                p_answers: activeTest.selectedAnswers || {},
-                p_email: userEmail,
-                p_question_ids: examQuestionIds
+                p_answers: submissionAnswers,
+                p_email: userEmail
             })
         });
         if (gradeRes && (gradeRes.success || gradeRes.score !== undefined)) {
@@ -5509,6 +5698,8 @@ async function submitActiveTest() {
 
         showToast("Test Submitted", `You finished "${testObj.name}" with a score of ${testObj.score}%!`, "success");
         
+        updateDashboardStats();
+        renderDashboard();
         window.location.hash = "#my-tests";
     }
 }

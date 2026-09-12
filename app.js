@@ -3623,12 +3623,28 @@ async function syncUsersWithCloud() {
 
                     if (isLocalSessionAuthoritative) {
                         // The user on this active session has the latest state, including explicit test/note deletions!
-                        lu.tests = localTests;
+                        lu.tests = localTests.map(lt => {
+                            if (!lt.reviewData || Object.keys(lt.reviewData).length === 0) {
+                                const ct = cloudTests.find(c => c.id === lt.id);
+                                if (ct && ct.reviewData) {
+                                    return { ...lt, reviewData: ct.reviewData };
+                                }
+                            }
+                            return lt;
+                        });
                         lu.notebookNotes = Array.isArray(lu.notebookNotes) ? lu.notebookNotes : [];
                     } else {
                         // Fresh device or cloud has newer updates: pull authoritative data from cloud
                         if (cloudTests.length > 0) {
-                            lu.tests = cloudTests;
+                            lu.tests = cloudTests.map(ct => {
+                                if (!ct.reviewData || Object.keys(ct.reviewData).length === 0) {
+                                    const lt = localTests.find(l => l.id === ct.id);
+                                    if (lt && lt.reviewData) {
+                                        return { ...ct, reviewData: lt.reviewData };
+                                    }
+                                }
+                                return ct;
+                            });
                         } else if (!state.isUserProgressLoaded) {
                             lu.tests = [];
                         }
@@ -3638,7 +3654,18 @@ async function syncUsersWithCloud() {
                     }
 
                     // Smart merge for report task progress
-                    lu.reportTaskProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
+                    const mergedRtProgress = Object.assign({}, cu.reportTaskProgress || {}, lu.reportTaskProgress || {});
+                    Object.keys(mergedRtProgress).forEach(id => {
+                        const localRt = lu.reportTaskProgress && lu.reportTaskProgress[id];
+                        const cloudRt = cu.reportTaskProgress && cu.reportTaskProgress[id];
+                        const rData = (localRt && localRt.reviewData && Object.keys(localRt.reviewData).length > 0)
+                            ? localRt.reviewData
+                            : (cloudRt && cloudRt.reviewData ? cloudRt.reviewData : null);
+                        if (rData) {
+                            mergedRtProgress[id].reviewData = rData;
+                        }
+                    });
+                    lu.reportTaskProgress = mergedRtProgress;
 
                     // Smart bidirectional merge for flashcards (Union by card.id, preserving newest SM-2 review states)
                     const localCards = Array.isArray(lu.flashcards) ? lu.flashcards : [];
@@ -5364,13 +5391,32 @@ function loadTestQuestion(index) {
 
     const savedAns = state.activeTest.selectedAnswers[qId];
     
+    // Review mode authoritative data resolution (Self-Contained & Decoupled from volatile global bank)
+    const reviewInfo = (state.activeTest.isCompletedReview && state.activeTest.reviewData) 
+        ? state.activeTest.reviewData[qId] 
+        : null;
+
+    const effectiveCorrectOption = (reviewInfo && reviewInfo.correctOption)
+        ? String(reviewInfo.correctOption).trim().toUpperCase()
+        : (qObj.correctOption ? String(qObj.correctOption).trim().toUpperCase() : null);
+
+    const effectiveExplanation = (reviewInfo && reviewInfo.explanation)
+        ? reviewInfo.explanation
+        : (qObj.explanation || "");
+
     // Check if answered (tutor explanation block shows if in Tutor Mode and selected)
     const isAnswered = savedAns !== undefined;
     const explanationPanel = document.getElementById("active-question-explanation");
     
-    if (isAnswered && state.activeTest.mode === "tutor") {
+    if (state.activeTest.isCompletedReview) {
         explanationPanel.classList.remove("hidden");
-        document.getElementById("lbl-explanation-text").innerText = qObj.explanation || "جاري جلب التفسير السريري...";
+        document.getElementById("lbl-explanation-text").innerText = effectiveExplanation || "جاري جلب التفسير السريري...";
+        if (!effectiveExplanation && !state.activeTest._isFetchingReview && typeof hydrateReviewDataOnDemand === "function") {
+            hydrateReviewDataOnDemand(state.activeTest);
+        }
+    } else if (isAnswered && state.activeTest.mode === "tutor") {
+        explanationPanel.classList.remove("hidden");
+        document.getElementById("lbl-explanation-text").innerText = effectiveExplanation || "جاري جلب التفسير السريري...";
     } else {
         explanationPanel.classList.add("hidden");
     }
@@ -5383,8 +5429,8 @@ function loadTestQuestion(index) {
         
         if (isAnswered) {
             if (state.activeTest.mode === "tutor" || state.activeTest.isCompletedReview) {
-                // Tutor Mode immediate styling
-                if (letter === qObj.correctOption) {
+                // Tutor Mode & Review Mode immediate styling
+                if (effectiveCorrectOption && letter.toUpperCase() === effectiveCorrectOption) {
                     displayClass = "correct-choice";
                 } else if (letter === savedAns) {
                     displayClass = "incorrect-choice";
@@ -5395,7 +5441,7 @@ function loadTestQuestion(index) {
                     displayClass = "selected";
                 }
             }
-        } else if (state.activeTest.isCompletedReview && letter === qObj.correctOption) {
+        } else if (state.activeTest.isCompletedReview && effectiveCorrectOption && letter.toUpperCase() === effectiveCorrectOption) {
             // Show correct answer even if not answered during review
             displayClass = "correct-choice";
         }
@@ -5552,6 +5598,82 @@ async function selectQuestionAnswer(qId, option) {
     loadTestQuestion(state.activeTest.currentQuestionIdx);
 }
 
+// ============================================================================
+// SELF-HEALING ON-DEMAND EXAM REVIEW ENGINE
+// Author: Mustafa Imam | Copyright (c) 2026 Hawari Platform
+// ============================================================================
+async function hydrateReviewDataOnDemand(activeTestObj) {
+    if (!activeTestObj || !activeTestObj.isCompletedReview) return;
+    if (activeTestObj._isFetchingReview) return;
+    activeTestObj._isFetchingReview = true;
+
+    try {
+        const group = (state.activeGroup || "infection").toLowerCase();
+        const userEmail = (state.currentUser && state.currentUser.email) ? state.currentUser.email : "";
+        const examId = activeTestObj.isReportTask ? (activeTestObj.rtId || activeTestObj.testId) : activeTestObj.testId;
+        const answers = activeTestObj.selectedAnswers || {};
+        const qIds = activeTestObj.questionIds || [];
+        const submissionAnswers = {};
+        qIds.forEach(id => {
+            submissionAnswers[id] = (answers[id] !== undefined && answers[id] !== null) ? answers[id] : "";
+        });
+
+        const gradeRes = await supabaseRequest("rpc/submit_and_grade_exam", {
+            method: "POST",
+            body: JSON.stringify({
+                p_group: group,
+                p_exam_id: examId || "review_step",
+                p_answers: submissionAnswers,
+                p_email: userEmail
+            })
+        });
+
+        if (gradeRes && Array.isArray(gradeRes.results) && gradeRes.results.length > 0) {
+            if (!activeTestObj.reviewData) activeTestObj.reviewData = {};
+            gradeRes.results.forEach(res => {
+                if (res && res.questionId) {
+                    activeTestObj.reviewData[res.questionId] = {
+                        correctOption: res.correctOption,
+                        explanation: res.explanation,
+                        isCorrect: res.isCorrect,
+                        userAns: res.userAns
+                    };
+                }
+            });
+
+            // Persist into userRecord in state.users & testObj in state.tests
+            if (activeTestObj.isReportTask) {
+                const userRecord = state.users.find(u => u.email.toLowerCase() === (state.currentUser?.email || "").toLowerCase());
+                if (userRecord && userRecord.reportTaskProgress && userRecord.reportTaskProgress[activeTestObj.rtId]) {
+                    userRecord.reportTaskProgress[activeTestObj.rtId].reviewData = {
+                        ...(userRecord.reportTaskProgress[activeTestObj.rtId].reviewData || {}),
+                        ...activeTestObj.reviewData
+                    };
+                }
+            } else {
+                const targetTest = state.tests.find(t => t.id === activeTestObj.testId);
+                if (targetTest) {
+                    targetTest.reviewData = {
+                        ...(targetTest.reviewData || {}),
+                        ...activeTestObj.reviewData
+                    };
+                }
+            }
+
+            saveStateToStorage(true);
+
+            // Re-render currently active review question if still viewing the same review
+            if (state.activeTest && state.activeTest.testId === activeTestObj.testId && state.activeTest.isCompletedReview) {
+                loadTestQuestion(state.activeTest.currentQuestionIdx);
+            }
+        }
+    } catch (err) {
+        console.warn("[Review] On-demand self-healing fetch notice:", err);
+    } finally {
+        if (activeTestObj) activeTestObj._isFetchingReview = false;
+    }
+}
+
 async function submitActiveTest() {
     if (testTimerInterval) clearInterval(testTimerInterval);
     
@@ -5589,6 +5711,21 @@ async function submitActiveTest() {
         console.warn("[Grading] Server-side grading fallback:", e);
     }
 
+    // Build authoritative reviewData mapping from grading results (Self-Contained Review Payload)
+    const reviewData = {};
+    if (gradeData && Array.isArray(gradeData.results)) {
+        gradeData.results.forEach(res => {
+            if (res && res.questionId) {
+                reviewData[res.questionId] = {
+                    correctOption: res.correctOption,
+                    explanation: res.explanation,
+                    isCorrect: res.isCorrect,
+                    userAns: res.userAns
+                };
+            }
+        });
+    }
+
     if (activeTest.isReportTask) {
         const rtId = activeTest.rtId;
         const rtQuestions = activeTest.rtQuestions || [];
@@ -5621,7 +5758,7 @@ async function submitActiveTest() {
             score = totalQCount > 0 ? Math.round((correctCount / totalQCount) * 100) : 0;
         }
         
-        // Save to user progress record
+        // Save to user progress record with self-contained reviewData
         const userRecord = state.users.find(u => u.email === userEmail);
         if (userRecord) {
             if (!userRecord.reportTaskProgress) userRecord.reportTaskProgress = {};
@@ -5630,7 +5767,8 @@ async function submitActiveTest() {
                 flaggedQuestions: Array.from(activeTest.flaggedQuestions),
                 timeSpent: activeTest.rtDuration * 60 - activeTest.timeRemaining,
                 score: score,
-                completed: true
+                completed: true,
+                reviewData: reviewData
             };
         }
         
@@ -5693,6 +5831,7 @@ async function submitActiveTest() {
         testObj.flaggedQuestions = Array.from(activeTest.flaggedQuestions);
         testObj.isCompleted = true;
         testObj.timeRemaining = activeTest.timeRemaining;
+        testObj.reviewData = reviewData;
 
         state.activeTest = null;
         saveStateToStorage();
@@ -5842,7 +5981,8 @@ window.reviewCompletedTest = function(testId) {
             questionIds: [...test.questionIds],
             mode: "tutor", // Force tutor display (explanations visible)
             timeRemaining: test.timeRemaining,
-            isCompletedReview: true
+            isCompletedReview: true,
+            reviewData: test.reviewData ? { ...test.reviewData } : {}
         };
 
         document.getElementById("active-test-overlay").classList.remove("hidden");
@@ -5875,6 +6015,12 @@ window.reviewCompletedTest = function(testId) {
 
         // Load first question
         loadTestQuestion(0);
+
+        // Self-Healing: If reviewData is missing or incomplete for any questions, trigger background hydration
+        const hasAllExplanations = test.reviewData && test.questionIds.every(id => test.reviewData[id] && test.reviewData[id].explanation);
+        if (!hasAllExplanations && typeof hydrateReviewDataOnDemand === "function") {
+            hydrateReviewDataOnDemand(state.activeTest);
+        }
     }
 };
 
@@ -9665,7 +9811,8 @@ window.reviewReportTaskStudent = function(rtId) {
         isCompletedReview: true,
         isReportTask: true,
         rtId: rt.id,
-        rtQuestions: rt.questions
+        rtQuestions: rt.questions,
+        reviewData: progress.reviewData ? { ...progress.reviewData } : {}
     };
 
     document.getElementById("active-test-overlay").classList.remove("hidden");
@@ -9699,6 +9846,12 @@ window.reviewReportTaskStudent = function(rtId) {
 
     // Load first question
     loadTestQuestion(0);
+
+    // Self-Healing: If reviewData is missing or incomplete for any mock exam questions, trigger background hydration
+    const hasAllRtExplanations = progress.reviewData && rt.questions.every(q => progress.reviewData[q.id] && progress.reviewData[q.id].explanation);
+    if (!hasAllRtExplanations && typeof hydrateReviewDataOnDemand === "function") {
+        hydrateReviewDataOnDemand(state.activeTest);
+    }
 };
 
 function updateDashboardStats() {

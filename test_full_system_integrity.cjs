@@ -45,7 +45,8 @@ assert('saveBookPageAnnotationToCloud debounced upsert exists', appCode.includes
 // 6. Anki SM-2 Spaced Repetition Engine
 assert('normalizeSm2Card function exists', appCode.includes('normalizeSm2Card'));
 assert('calculateSm2Interval handles 4 grades (Again, Hard, Good, Easy)', appCode.includes('calculateSm2Interval'));
-assert('Deck chips selector and deck count rendering exists', appCode.includes('flashcard-deck-chips') && indexHtml.includes('flashcard-deck-chips'));
+const uiTemplateCode = fs.existsSync('uiTemplate.js') ? fs.readFileSync('uiTemplate.js', 'utf8') : '';
+assert('Deck chips selector and deck count rendering exists', appCode.includes('flashcard-deck-chips') && (indexHtml.includes('flashcard-deck-chips') || uiTemplateCode.includes('flashcard-deck-chips')));
 assert('Admin flashcards grouped by deck exists', appCode.includes('admin-deck-group-header') || appCode.includes('admin-fc-deck-filter'));
 
 // 7. Exam & Choice Styling Contrast

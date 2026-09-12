@@ -1430,6 +1430,26 @@ async function selectCourseTrack(groupName) {
     state.isUserProgressLoaded = false;
     state.isQuestionBankLoaded = false;
     state.isInitialSyncComplete = false;
+    // Cleanly tear down any active exam or quiz overlays, intervals, and states
+    if (testTimerInterval) {
+        clearInterval(testTimerInterval);
+        testTimerInterval = null;
+    }
+    if (quizTimerInterval) {
+        clearInterval(quizTimerInterval);
+        quizTimerInterval = null;
+    }
+    state.activeTest = null;
+    state.activeQuiz = null;
+    const activeTestOverlay = document.getElementById("active-test-overlay");
+    if (activeTestOverlay) activeTestOverlay.classList.add("hidden");
+    const activeQuizOverlay = document.getElementById("active-quiz-overlay");
+    if (activeQuizOverlay) activeQuizOverlay.classList.add("hidden");
+    const sidebarEl = document.querySelector(".sidebar");
+    if (sidebarEl) sidebarEl.classList.remove("hidden");
+    const appLayoutEl = document.getElementById("app-layout");
+    if (appLayoutEl) appLayoutEl.style.gridTemplateColumns = "";
+    document.body.style.overflow = "auto";
 
     localStorage.setItem("hawari_active_group", groupName);
     
@@ -10111,6 +10131,20 @@ function renderQuizSidebarGrid() {
 // Inflight submission lock to prevent spike duplicates
 let isQuizSubmitting = false;
 
+function resolveQuizOptionIndex(val) {
+    if (val === undefined || val === null || val === "") return null;
+    if (typeof val === "number") return val;
+    const str = String(val).trim();
+    if (/^\d+$/.test(str)) {
+        return parseInt(str, 10);
+    }
+    const letter = str.toUpperCase();
+    if (letter.length === 1 && letter >= "A" && letter <= "Z") {
+        return letter.charCodeAt(0) - 65;
+    }
+    return null;
+}
+
 async function submitActiveQuiz() {
     if (!state.activeQuiz) return;
     if (isQuizSubmitting) {
@@ -10143,11 +10177,27 @@ async function submitActiveQuiz() {
     const sourceQuestions = (qz && qz.questions && qz.questions.length > 0) ? qz.questions : questions;
 
     let correctCount = 0;
+    const reviewData = {};
+
     sourceQuestions.forEach((q, idx) => {
         const userAns = answers[idx];
-        if (userAns !== undefined && q.correctOption !== undefined && parseInt(userAns) === parseInt(q.correctOption)) {
+        const qKey = q.id || `q_${idx}`;
+        const rawCorrect = q.correctOption;
+        const correctIdx = resolveQuizOptionIndex(rawCorrect);
+        const userIdx = resolveQuizOptionIndex(userAns);
+        const isCorr = (userIdx !== null && correctIdx !== null && userIdx === correctIdx);
+        if (isCorr) {
             correctCount++;
         }
+        const entry = {
+            questionId: qKey,
+            correctOption: rawCorrect !== undefined ? rawCorrect : null,
+            explanation: q.explanation || "",
+            isCorrect: isCorr,
+            userAns: userAns !== undefined ? userAns : null
+        };
+        reviewData[qKey] = entry;
+        reviewData[idx] = entry;
     });
 
     let score = sourceQuestions.length > 0 ? Math.round((correctCount / sourceQuestions.length) * 100) : 0;
@@ -10158,15 +10208,16 @@ async function submitActiveQuiz() {
         sourceQuestions.forEach((q, idx) => {
             if (answers[idx] !== undefined) {
                 const optLetter = String.fromCharCode(65 + answers[idx]);
-                answersPayload[q.id] = optLetter;
+                answersPayload[q.id || `q_${idx}`] = optLetter;
             }
         });
-        const rpcRes = await supabaseRequest("rpc/verify_exam_answers", {
+        const rpcRes = await supabaseRequest("rpc/submit_and_grade_exam", {
             method: "POST",
             body: JSON.stringify({
-                p_exam_id: qzId,
                 p_group: (state.activeGroup || "infection").toLowerCase(),
-                p_answers: answersPayload
+                p_exam_id: qzId,
+                p_answers: answersPayload,
+                p_email: state.currentUser ? state.currentUser.email : ""
             })
         });
         if (rpcRes && rpcRes.success) {
@@ -10176,22 +10227,47 @@ async function submitActiveQuiz() {
             } else if (typeof rpcRes.score === "number") {
                 score = rpcRes.score;
             }
-            console.log("[ExamGrading] Server-side verified score applied:", score);
+            if (Array.isArray(rpcRes.results) && rpcRes.results.length > 0) {
+                rpcRes.results.forEach((res, idx) => {
+                    if (res) {
+                        const qKey = res.questionId || (sourceQuestions[idx] ? sourceQuestions[idx].id : `q_${idx}`);
+                        const rEntry = {
+                            questionId: qKey,
+                            correctOption: res.correctOption,
+                            explanation: res.explanation,
+                            isCorrect: res.isCorrect,
+                            userAns: res.userAns
+                        };
+                        reviewData[qKey] = rEntry;
+                        reviewData[idx] = rEntry;
+                    }
+                });
+            }
+            console.log("[ExamGrading] Server-side verified score and review applied:", score);
         }
     } catch (rpcErr) {
         console.warn("[ExamGrading] RPC server verification fallback:", rpcErr.message);
     }
 
+    const userEmail = state.currentUser ? state.currentUser.email : "";
     const resultObj = {
-        id: `${qzId}_${state.currentUser.email}`,
+        id: `${qzId}_${userEmail}`,
         quiz_id: qzId,
-        email: state.currentUser.email,
+        email: userEmail,
         score: score,
         total_questions: sourceQuestions.length,
         answers: answers,
+        reviewData: reviewData,
         status: "completed",
         submitted_at: new Date().toISOString()
     };
+
+    // Cache review data in persistent storage for instant offline / page-reload recovery
+    if (userEmail) {
+        try {
+            localStorage.setItem(`hawari_quiz_review_${qzId}_${userEmail}`, JSON.stringify(reviewData));
+        } catch (e) {}
+    }
 
     const isPractice = state.activeQuiz.isPractice;
 
@@ -10211,6 +10287,11 @@ async function submitActiveQuiz() {
         if (appLayout) appLayout.style.gridTemplateColumns = "";
 
         await fetchQuizResults(state.activeGroup);
+        const localRes = (state.quizResults || []).find(r => r.quiz_id === qzId && r.email === userEmail);
+        if (localRes) {
+            localRes.reviewData = reviewData;
+        }
+
         if (isPractice) {
             renderReportTaskStudentView();
         } else {
@@ -10267,15 +10348,26 @@ window.reviewCourseQuizStudent = function(quizId) {
         return;
     }
 
-    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === state.currentUser.email);
+    const userEmail = state.currentUser ? state.currentUser.email : "";
+    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === userEmail);
     if (!result) return;
+
+    let cachedReview = result.reviewData || null;
+    if (!cachedReview && userEmail) {
+        try {
+            const raw = localStorage.getItem(`hawari_quiz_review_${quizId}_${userEmail}`);
+            if (raw) cachedReview = JSON.parse(raw);
+        } catch (e) {}
+    }
 
     state.activeQuiz = {
         quizId: qz.id,
         title: qz.title,
         questions: qz.questions,
         answers: result.answers || {},
+        reviewData: cachedReview || null,
         currentQuestionIdx: 0,
+        isPractice: (qz.status === 'moved_to_reports' || qz.isPractice),
         isReview: true
     };
 
@@ -10305,12 +10397,106 @@ window.reviewCourseQuizStudent = function(quizId) {
     loadQuizQuestionReview(0);
 };
 
+async function hydrateQuizReviewDataOnDemand(activeQuizObj) {
+    if (!activeQuizObj || !activeQuizObj.isReview) return;
+    if (activeQuizObj._isFetchingReview) return;
+    activeQuizObj._isFetchingReview = true;
+
+    try {
+        const group = (state.activeGroup || "infection").toLowerCase();
+        const userEmail = (state.currentUser && state.currentUser.email) ? state.currentUser.email : "";
+        const quizId = activeQuizObj.quizId;
+        const answers = activeQuizObj.answers || {};
+        const questions = activeQuizObj.questions || [];
+
+        // 1. Check if admin source quiz in memory has correct answers and explanations
+        const sourceQz = (state.courseQuizzes || []).find(q => q.id === quizId);
+        if (sourceQz && Array.isArray(sourceQz.questions) && sourceQz.questions.some(q => q.correctOption !== undefined)) {
+            if (!activeQuizObj.reviewData) activeQuizObj.reviewData = {};
+            sourceQz.questions.forEach((q, idx) => {
+                const qKey = q.id || `q_${idx}`;
+                const entry = {
+                    questionId: qKey,
+                    correctOption: q.correctOption,
+                    explanation: q.explanation || "",
+                    userAns: answers[idx]
+                };
+                activeQuizObj.reviewData[qKey] = entry;
+                activeQuizObj.reviewData[idx] = entry;
+            });
+        }
+
+        // 2. Fetch authoritative evaluation from secure server RPC
+        const submissionAnswers = {};
+        questions.forEach((q, idx) => {
+            const qKey = q.id || `q_${idx}`;
+            const userVal = answers[idx];
+            if (userVal !== undefined && userVal !== null) {
+                const optLetter = typeof userVal === "number" ? String.fromCharCode(65 + userVal) : String(userVal);
+                submissionAnswers[qKey] = optLetter;
+            }
+        });
+
+        const gradeRes = await supabaseRequest("rpc/submit_and_grade_exam", {
+            method: "POST",
+            body: JSON.stringify({
+                p_group: group,
+                p_exam_id: quizId,
+                p_answers: submissionAnswers,
+                p_email: userEmail
+            })
+        });
+
+        if (gradeRes && Array.isArray(gradeRes.results) && gradeRes.results.length > 0) {
+            if (!activeQuizObj.reviewData) activeQuizObj.reviewData = {};
+            gradeRes.results.forEach((res, idx) => {
+                if (res) {
+                    const qKey = res.questionId || (questions[idx] ? questions[idx].id : `q_${idx}`);
+                    const entry = {
+                        questionId: qKey,
+                        correctOption: res.correctOption,
+                        explanation: res.explanation,
+                        isCorrect: res.isCorrect,
+                        userAns: res.userAns
+                    };
+                    activeQuizObj.reviewData[qKey] = entry;
+                    activeQuizObj.reviewData[idx] = entry;
+                }
+            });
+        }
+
+        // 3. Persist to state.quizResults and localStorage
+        const targetRes = (state.quizResults || []).find(r => r.quiz_id === quizId && r.email === userEmail);
+        if (targetRes && activeQuizObj.reviewData) {
+            targetRes.reviewData = {
+                ...(targetRes.reviewData || {}),
+                ...activeQuizObj.reviewData
+            };
+        }
+        if (userEmail && activeQuizObj.reviewData) {
+            try {
+                localStorage.setItem(`hawari_quiz_review_${quizId}_${userEmail}`, JSON.stringify(activeQuizObj.reviewData));
+            } catch (e) {}
+        }
+
+        // 4. Re-render currently viewed review question if still active
+        if (state.activeQuiz && state.activeQuiz.quizId === quizId && state.activeQuiz.isReview) {
+            loadQuizQuestionReview(state.activeQuiz.currentQuestionIdx);
+        }
+    } catch (err) {
+        console.warn("[QuizReview] On-demand hydration completed with fallback:", err.message);
+    } finally {
+        if (activeQuizObj) activeQuizObj._isFetchingReview = false;
+    }
+}
+
 function loadQuizQuestionReview(idx) {
     if (!state.activeQuiz) return;
     state.activeQuiz.currentQuestionIdx = idx;
 
     const q = state.activeQuiz.questions[idx];
     const total = state.activeQuiz.questions.length;
+    const qKey = q.id || `q_${idx}`;
 
     document.getElementById("active-quiz-q-index").innerText = `Question ${idx + 1} of ${total}`;
     document.getElementById("active-quiz-q-body").innerHTML = sanitizeRichHTML(q.text || "");
@@ -10319,7 +10505,22 @@ function loadQuizQuestionReview(idx) {
     container.innerHTML = "";
 
     const userAns = state.activeQuiz.answers[idx];
-    const correctAns = parseInt(q.correctOption);
+
+    // Authoritative review data lookup
+    const reviewInfo = (state.activeQuiz.reviewData && (state.activeQuiz.reviewData[qKey] || state.activeQuiz.reviewData[idx]))
+        ? (state.activeQuiz.reviewData[qKey] || state.activeQuiz.reviewData[idx])
+        : null;
+
+    const rawCorrect = (reviewInfo && reviewInfo.correctOption !== undefined && reviewInfo.correctOption !== null)
+        ? reviewInfo.correctOption
+        : q.correctOption;
+
+    const correctAnsIdx = resolveQuizOptionIndex(rawCorrect);
+    const userAnsIdx = resolveQuizOptionIndex(userAns);
+
+    const effectiveExplanation = (reviewInfo && reviewInfo.explanation)
+        ? reviewInfo.explanation
+        : (q.explanation || "");
 
     const options = q.options || [];
     options.forEach((optText, optIdx) => {
@@ -10332,9 +10533,9 @@ function loadQuizQuestionReview(idx) {
             <div class="choice-text">${sanitizeHTML(optText)}</div>
         `;
 
-        if (optIdx === correctAns) {
+        if (correctAnsIdx !== null && optIdx === correctAnsIdx) {
             optBtn.classList.add("correct-choice");
-        } else if (userAns !== undefined && parseInt(userAns) === optIdx && parseInt(userAns) !== correctAns) {
+        } else if (userAnsIdx !== null && optIdx === userAnsIdx && userAnsIdx !== correctAnsIdx) {
             optBtn.classList.add("incorrect-choice");
         }
 
@@ -10355,9 +10556,14 @@ function loadQuizQuestionReview(idx) {
             <i class="fa-solid fa-circle-info"></i> Explanation
         </div>
         <div class="explanation-body">
-            ${sanitizeRichHTML(q.explanation || "No explanation provided.")}
+            ${sanitizeRichHTML(effectiveExplanation || "جاري جلب التفسير النموذجي...")}
         </div>
     `;
+
+    // Self-healing trigger if missing explanation or correct answer
+    if ((!effectiveExplanation || correctAnsIdx === null) && !state.activeQuiz._isFetchingReview && typeof hydrateQuizReviewDataOnDemand === "function") {
+        hydrateQuizReviewDataOnDemand(state.activeQuiz);
+    }
 
     const prevBtn = document.getElementById("btn-prev-quiz-q");
     const nextBtn = document.getElementById("btn-next-quiz-q");
@@ -10369,18 +10575,25 @@ function loadQuizQuestionReview(idx) {
 }
 
 function exitQuizReview() {
+    const wasPractice = state.activeQuiz ? state.activeQuiz.isPractice : false;
     state.activeQuiz = null;
     document.getElementById("active-quiz-overlay").classList.add("hidden");
     document.body.style.overflow = "auto";
     
     const submitBtn = document.getElementById("btn-submit-active-quiz");
-    submitBtn.innerHTML = `Submit Exam <i class="fa-solid fa-paper-plane"></i>`;
-    submitBtn.className = "btn btn-danger";
+    if (submitBtn) {
+        submitBtn.innerHTML = `Submit Exam <i class="fa-solid fa-paper-plane"></i>`;
+        submitBtn.className = "btn btn-danger";
+    }
 
     const expPanel = document.getElementById("active-quiz-explanation");
     if (expPanel) expPanel.remove();
 
-    renderReportTaskStudentView();
+    if (wasPractice) {
+        renderReportTaskStudentView();
+    } else {
+        renderCourseQuizzesStudentView();
+    }
 }
 
 // ================= ADMIN: COURSE QUIZZES & LEADERBOARD =================

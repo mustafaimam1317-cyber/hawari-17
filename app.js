@@ -15680,3 +15680,107 @@ function renderAdminBookAccessManager() {
     }
 }
 window.renderAdminBookAccessManager = renderAdminBookAccessManager;
+
+// ==========================================
+// HAWARI ABOUT US & PRIVACY POLICY MODAL CONTROLLER
+// Author: Hashem Hawari | Assistant: Mustafa Imam
+// ==========================================
+function openHawariAboutModal(initialTab = 'about') {
+    const modal = document.getElementById("hawari-about-modal");
+    if (!modal) return;
+
+    // Dynamically adjust branding & icons based on active track
+    const activeTrack = (state.activeGroup || "infection").toLowerCase().trim();
+    const icon = document.getElementById("about-modal-icon");
+    const title = document.getElementById("about-modal-title");
+    const subtitle = document.getElementById("about-modal-subtitle");
+    const logoWrapper = document.getElementById("about-modal-logo-wrapper");
+
+    if (activeTrack === "dermatology") {
+        if (icon) icon.className = "fa-solid fa-hand-dots";
+        if (title) title.innerText = "Hawari Dermatology Platform";
+        if (subtitle) subtitle.innerText = "Next-Generation Clinical Dermatology Suite for Undergraduate Medics";
+        if (logoWrapper) {
+            logoWrapper.style.background = "rgba(14, 165, 233, 0.12)";
+            logoWrapper.style.color = "#0ea5e9";
+            logoWrapper.style.boxShadow = "0 8px 20px rgba(14, 165, 233, 0.15)";
+        }
+    } else {
+        if (icon) icon.className = "fa-solid fa-virus-covid";
+        if (title) title.innerText = "Hawari Infection Platform";
+        if (subtitle) subtitle.innerText = "Next-Generation Clinical Infection Suite for Undergraduate Medics";
+        if (logoWrapper) {
+            logoWrapper.style.background = "rgba(124, 58, 237, 0.12)";
+            logoWrapper.style.color = "var(--primary-color)";
+            logoWrapper.style.boxShadow = "0 8px 20px rgba(124, 58, 237, 0.15)";
+        }
+    }
+
+    switchHawariAboutTab(initialTab);
+
+    modal.classList.remove("hidden");
+    requestAnimationFrame(() => {
+        modal.style.opacity = "1";
+        const card = modal.querySelector(".about-modal-card");
+        if (card) card.style.transform = "scale(1) translateY(0)";
+    });
+}
+window.openHawariAboutModal = openHawariAboutModal;
+
+function closeHawariAboutModal() {
+    const modal = document.getElementById("hawari-about-modal");
+    if (!modal) return;
+    modal.style.opacity = "0";
+    const card = modal.querySelector(".about-modal-card");
+    if (card) card.style.transform = "scale(0.95) translateY(15px)";
+    setTimeout(() => {
+        modal.classList.add("hidden");
+    }, 250);
+}
+window.closeHawariAboutModal = closeHawariAboutModal;
+
+function switchHawariAboutTab(tab) {
+    const aboutTab = document.getElementById("about-tab-content-about");
+    const privacyTab = document.getElementById("about-tab-content-privacy");
+    const btnAbout = document.getElementById("tab-btn-about");
+    const btnPrivacy = document.getElementById("tab-btn-privacy");
+
+    if (tab === 'privacy') {
+        if (aboutTab) aboutTab.style.display = "none";
+        if (privacyTab) privacyTab.style.display = "block";
+        if (btnAbout) {
+            btnAbout.style.background = "transparent";
+            btnAbout.style.color = "var(--text-secondary)";
+        }
+        if (btnPrivacy) {
+            btnPrivacy.style.background = "var(--primary-color)";
+            btnPrivacy.style.color = "#ffffff";
+        }
+    } else {
+        if (aboutTab) aboutTab.style.display = "block";
+        if (privacyTab) privacyTab.style.display = "none";
+        if (btnAbout) {
+            btnAbout.style.background = "var(--primary-color)";
+            btnAbout.style.color = "#ffffff";
+        }
+        if (btnPrivacy) {
+            btnPrivacy.style.background = "transparent";
+            btnPrivacy.style.color = "var(--text-secondary)";
+        }
+    }
+}
+window.switchHawariAboutTab = switchHawariAboutTab;
+
+// Close on backdrop click and Escape key
+document.addEventListener("click", (e) => {
+    const modal = document.getElementById("hawari-about-modal");
+    if (modal && !modal.classList.contains("hidden") && e.target === modal) {
+        closeHawariAboutModal();
+    }
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+        closeHawariAboutModal();
+    }
+});
+

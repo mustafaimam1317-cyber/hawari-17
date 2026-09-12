@@ -1679,7 +1679,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('/sw.js')
-                .then(reg => console.log('[PWA] Service Worker registered successfully:', reg.scope))
+                .then(reg => {
+                    console.log('[PWA] Service Worker registered successfully:', reg.scope);
+                    reg.update().catch(() => {});
+                })
                 .catch(err => console.error('[PWA] Service Worker registration failed:', err));
         });
     }
@@ -5431,7 +5434,7 @@ function loadTestQuestion(index) {
     if (state.activeTest.isCompletedReview) {
         explanationPanel.classList.remove("hidden");
         document.getElementById("lbl-explanation-text").innerText = effectiveExplanation || "جاري جلب التفسير السريري...";
-        if (!effectiveExplanation && !state.activeTest._isFetchingReview && typeof hydrateReviewDataOnDemand === "function") {
+        if (!effectiveExplanation && !state.activeTest._isFetchingReview && !state.activeTest._reviewHydrated && typeof hydrateReviewDataOnDemand === "function") {
             hydrateReviewDataOnDemand(state.activeTest);
         }
     } else if (isAnswered && state.activeTest.mode === "tutor") {
@@ -5690,7 +5693,10 @@ async function hydrateReviewDataOnDemand(activeTestObj) {
     } catch (err) {
         console.warn("[Review] On-demand self-healing fetch notice:", err);
     } finally {
-        if (activeTestObj) activeTestObj._isFetchingReview = false;
+        if (activeTestObj) {
+            activeTestObj._isFetchingReview = false;
+            activeTestObj._reviewHydrated = true;
+        }
     }
 }
 
@@ -10486,7 +10492,10 @@ async function hydrateQuizReviewDataOnDemand(activeQuizObj) {
     } catch (err) {
         console.warn("[QuizReview] On-demand hydration completed with fallback:", err.message);
     } finally {
-        if (activeQuizObj) activeQuizObj._isFetchingReview = false;
+        if (activeQuizObj) {
+            activeQuizObj._isFetchingReview = false;
+            activeQuizObj._reviewHydrated = true;
+        }
     }
 }
 
@@ -10561,7 +10570,7 @@ function loadQuizQuestionReview(idx) {
     `;
 
     // Self-healing trigger if missing explanation or correct answer
-    if ((!effectiveExplanation || correctAnsIdx === null) && !state.activeQuiz._isFetchingReview && typeof hydrateQuizReviewDataOnDemand === "function") {
+    if ((!effectiveExplanation || correctAnsIdx === null) && !state.activeQuiz._isFetchingReview && !state.activeQuiz._reviewHydrated && typeof hydrateQuizReviewDataOnDemand === "function") {
         hydrateQuizReviewDataOnDemand(state.activeQuiz);
     }
 

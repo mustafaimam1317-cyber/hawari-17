@@ -1,9 +1,7 @@
-const CACHE_NAME = 'hawari-cache-v1';
+const CACHE_NAME = 'hawari-cache-v2.5';
 const ASSETS = [
   '/',
   '/index.html',
-  '/style.css',
-  '/app.js',
   '/favicon.png',
   '/manifest.json'
 ];
@@ -25,6 +23,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
+            console.log('[SW] Purging outdated cache:', key);
             return caches.delete(key);
           }
         })

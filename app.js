@@ -1510,45 +1510,85 @@ async function selectCourseTrack(groupName) {
     // 2. Check auth status & render immediately
     if (state.currentUser) {
         enterWorkspace();
-        // Background non-blocking sync of cloud data to avoid UI freeze
+
+        // Staged & Throttled Background Loading to prevent socket exhaustion and CPU freeze
+        // Stage 1: Ultra-fast metadata (50ms)
         setTimeout(async () => {
             try {
                 await Promise.allSettled([
-                    fetchGlobalQuestions(groupName),
-                    fetchReportTasksFromCloud(groupName),
-                    fetchCourseQuizzes(groupName),
-                    fetchQuizResults(groupName),
                     fetchAnnouncement(groupName),
-                    fetchBookLibraryData(groupName),
-                    fetchGrantedUsersList(),
-                    syncUsersWithCloud()
+                    fetchGrantedUsersList()
                 ]);
-                if (state.currentUser) {
+            } catch (e) {
+                console.warn("[StagedLoad:Stage1]", e);
+            }
+        }, 50);
+
+        // Stage 2: Core User Statistics & Quizzes (200ms)
+        setTimeout(async () => {
+            try {
+                await Promise.allSettled([
+                    fetchCourseQuizzes(groupName),
+                    fetchQuizResults(groupName)
+                ]);
+                if (state.currentUser && (state.activeView === "dashboard" || !state.activeView || state.activeView === "my-tests")) {
                     loadUserSpecificProgress(state.currentUser.email);
                     if (state.activeView === "dashboard" || !state.activeView) {
                         renderDashboard();
-                    } else if (state.activeView === "generate-test") {
-                        renderGenerateTest();
                     } else if (state.activeView === "my-tests") {
                         renderMyTests();
                     }
                 }
             } catch (e) {
-                console.warn("[StagedLoad] Background sync:", e);
+                console.warn("[StagedLoad:Stage2]", e);
             }
-        }, 10);
-    } else {
-        showLandingPage();
-        // Background fetch of public metadata
+        }, 200);
+
+        // Stage 3: Question Bank & Book Library (450ms)
         setTimeout(async () => {
             try {
                 await Promise.allSettled([
-                    fetchAnnouncement(groupName),
+                    fetchGlobalQuestions(groupName),
+                    fetchBookLibraryData(groupName)
+                ]);
+                if (state.currentUser && state.activeView === "generate-test") {
+                    renderGenerateTest();
+                }
+            } catch (e) {
+                console.warn("[StagedLoad:Stage3]", e);
+            }
+        }, 450);
+
+        // Stage 4: Background Sync & Report Tasks (800ms)
+        setTimeout(async () => {
+            try {
+                await Promise.allSettled([
+                    fetchReportTasksFromCloud(groupName),
+                    syncUsersWithCloud()
+                ]);
+                if (state.currentUser) {
+                    loadUserSpecificProgress(state.currentUser.email);
+                }
+            } catch (e) {
+                console.warn("[StagedLoad:Stage4]", e);
+            }
+        }, 800);
+    } else {
+        showLandingPage();
+        // Background fetch of public metadata staged
+        setTimeout(async () => {
+            try {
+                await fetchAnnouncement(groupName);
+            } catch(e){}
+        }, 100);
+        setTimeout(async () => {
+            try {
+                await Promise.allSettled([
                     fetchBookLibraryData(groupName),
                     fetchGrantedUsersList()
                 ]);
             } catch(e){}
-        }, 10);
+        }, 400);
     }
 }
 
@@ -4211,7 +4251,11 @@ function initAuthFlow() {
                     if (typeof HawariPdfStorageEngine !== "undefined" && HawariPdfStorageEngine.handleUserLoginSwitch) {
                         HawariPdfStorageEngine.handleUserLoginSwitch(user.email);
                     }
-                    await loginToSupabaseAuth(currentAuthenticatingEmail, password);
+                    const existingSession = getStoredSupabaseSession();
+                    const isSessionValid = existingSession && existingSession.access_token && (existingSession.expires_at > Date.now() + 60000);
+                    if (!isSessionValid) {
+                        await loginToSupabaseAuth(currentAuthenticatingEmail, password);
+                    }
 
                     try {
                         // Force sync cloud progress and fetch granted book access list to avoid overwriting newer progress

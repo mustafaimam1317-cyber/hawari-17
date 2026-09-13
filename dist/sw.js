@@ -1,9 +1,13 @@
-const CACHE_NAME = 'hawari-cache-v2.5';
+const CACHE_NAME = 'hawari-cache-v3.0';
 const ASSETS = [
   '/',
   '/index.html',
   '/favicon.png',
-  '/manifest.json'
+  '/manifest.json',
+  '/css/all.min.css',
+  '/vendor/chartjs/chart.min.js',
+  '/vendor/pdfjs/pdf.min.js',
+  '/vendor/pdfjs/pdf.worker.min.js'
 ];
 
 // Install Event: cache static assets

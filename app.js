@@ -27,7 +27,7 @@ import { OFFICIAL_INFECTION_FLASHCARDS } from './official_flashcards_data.js';
             root.innerHTML = APP_MARKUP;
         }
         if (window.pdfjsLib) {
-            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
         }
     }
 })();
@@ -278,24 +278,46 @@ async function saveBookReadingProgress(email, bookId, page, totalPages) {
 async function ensurePdfJsLoaded() {
     if (window.pdfjsLib) {
         if (window.pdfjsLib.GlobalWorkerOptions) {
-            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
         }
         return window.pdfjsLib;
     }
-    return new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-        script.onload = () => {
-            if (window.pdfjsLib) {
-                window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-                resolve(window.pdfjsLib);
-            } else {
-                reject(new Error("pdfjsLib not available after script load"));
+
+    // Multi-tier resilient loader: Local Origin (Primary 0ms) -> jsDelivr -> unpkg -> cdnjs
+    const candidateSources = [
+        "/vendor/pdfjs/pdf.min.js",
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js",
+        "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js",
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+    ];
+
+    for (const src of candidateSources) {
+        try {
+            const loaded = await new Promise((resolve) => {
+                const script = document.createElement("script");
+                script.src = src;
+                script.onload = () => {
+                    if (window.pdfjsLib) {
+                        if (window.pdfjsLib.GlobalWorkerOptions) {
+                            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
+                        }
+                        resolve(true);
+                    } else {
+                        resolve(false);
+                    }
+                };
+                script.onerror = () => resolve(false);
+                document.head.appendChild(script);
+            });
+            if (loaded && window.pdfjsLib) {
+                return window.pdfjsLib;
             }
-        };
-        script.onerror = () => reject(new Error("Failed to load PDF.js CDN script"));
-        document.head.appendChild(script);
-    });
+        } catch (e) {
+            console.warn(`[PDFJS-Loader] Failed from ${src}:`, e);
+        }
+    }
+
+    throw new Error("Failed to load PDF.js viewer library");
 }
 
 // ==============================================================================

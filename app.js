@@ -4795,12 +4795,36 @@ function renderDashboard() {
                     q.userAnswer = null;
                 });
 
+                // Reset flashcards SM-2 review progress
+                if (Array.isArray(state.flashcards)) {
+                    state.flashcards.forEach(c => {
+                        c.status = "review";
+                        c.state = "new";
+                        c.repetitions = 0;
+                        c.interval = 0;
+                        c.easeFactor = 2.5;
+                        c.nextReviewDate = 0;
+                        c.lastReviewDate = null;
+                    });
+                }
+
+                // Clean local book progress and annotations keys for this user
+                try {
+                    Object.keys(localStorage).forEach(k => {
+                        if (k.startsWith(`hawari_progress_${userEmail}`) || k.startsWith(`hawari_anns_${userEmail}`)) {
+                            localStorage.removeItem(k);
+                        }
+                    });
+                } catch (e) {}
+
                 // Update local user record
                 if (userEmail && Array.isArray(state.users)) {
                     const localUser = state.users.find(u => u.email && u.email.toLowerCase() === userEmail);
                     if (localUser) {
                         localUser.tests = [];
                         localUser.notebookNotes = [];
+                        localUser.reportTaskProgress = {};
+                        localUser.flashcards = state.flashcards;
                         localUser.questions = state.questions.map(q => ({
                             id: q.id,
                             status: "unused",
@@ -4814,6 +4838,7 @@ function renderDashboard() {
                 }
                 if (state.currentUser) {
                     state.currentUser.lastUpdated = newTimestamp;
+                    state.currentUser.reportTaskProgress = {};
                 }
 
                 // 2. Direct authoritative push to Supabase (Server-First Wipe)
@@ -4844,6 +4869,7 @@ function renderDashboard() {
                                     p_group: group,
                                     p_tests: [],
                                     p_notebook_notes: [],
+                                    p_flashcards: state.flashcards || [],
                                     p_last_updated: newTimestamp
                                 })
                             });
@@ -4851,12 +4877,19 @@ function renderDashboard() {
                             console.warn("[ResetSite] update_user_progress_rpc fallback deferred:", fErr);
                         }
                     }
+
+                    // Optional: wipe server book reading progress for clean slate
+                    try {
+                        supabaseRequest(`hawari_user_book_progress?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${encodeURIComponent(group)}`, {
+                            method: "DELETE"
+                        }).catch(() => {});
+                    } catch (e) {}
                 }
 
                 // 3. Persist cleanly to local storage
                 saveStateToStorage(true);
 
-                showToast("Success", "All progress, tests, and notebook notes have been permanently reset.", "success");
+                showToast("Success", "All progress, tests, notebook notes, and reviews have been permanently reset.", "success");
                 setTimeout(() => {
                     window.location.reload();
                 }, 400);
@@ -7383,7 +7416,7 @@ function renderAdminQuestionsTab() {
 
     // Form submission action setup
     const form = document.getElementById("admin-question-form");
-    form.onsubmit = (e) => {
+    form.onsubmit = async (e) => {
         e.preventDefault();
         
         const qIdInput = document.getElementById("edit-question-id").value;
@@ -7432,7 +7465,7 @@ function renderAdminQuestionsTab() {
                 existingQ.correctOption = correctOpt;
                 existingQ.explanation = explanationVal;
                 
-                showToast("Question Updated", "Question was updated successfully in the bank database.", "success");
+                showToast("Question Updated", "Question was updated locally & syncing with cloud...", "info");
             }
         } else {
             // CREATE MODE
@@ -7450,10 +7483,22 @@ function renderAdminQuestionsTab() {
                 highlightedHtml: ""
             };
             state.questions.push(newQ);
-            showToast("Question Created", "New question added successfully to the bank database.", "success");
+            showToast("Question Created", "New question added locally & syncing with cloud...", "info");
         }
 
         saveStateToStorage();
+
+        // Instant cloud sync for global questions bank
+        if (typeof saveGlobalQuestionsToCloud === "function") {
+            try {
+                await saveGlobalQuestionsToCloud();
+                showToast("Cloud Synced", "Question Bank updated on Supabase database for all students.", "success");
+            } catch (syncErr) {
+                console.warn("[AdminQuestion] Cloud sync error:", syncErr);
+                showToast("Sync Notice", "Saved locally. Cloud sync will retry in background.", "warning");
+            }
+        }
+
         resetAdminForm();
         renderAdminQuestionsTab();
     };
@@ -7514,13 +7559,23 @@ window.editQuestionAdmin = function(qId) {
     }
 };
 
-window.deleteQuestionAdmin = function(qId) {
+window.deleteQuestionAdmin = async function(qId) {
     if (confirm("Are you sure you want to delete this question? It will be removed permanently from the database.")) {
         const index = state.questions.findIndex(q => q.id === qId);
         if (index > -1) {
             state.questions.splice(index, 1);
             saveStateToStorage();
-            showToast("Question Deleted", "Question removed successfully.", "success");
+            if (typeof saveGlobalQuestionsToCloud === "function") {
+                try {
+                    await saveGlobalQuestionsToCloud();
+                    showToast("Question Deleted", "Question removed locally and synced with cloud.", "success");
+                } catch (syncErr) {
+                    console.warn("[AdminQuestion] Cloud delete sync error:", syncErr);
+                    showToast("Question Deleted", "Question removed locally. Cloud sync will retry in background.", "warning");
+                }
+            } else {
+                showToast("Question Deleted", "Question removed successfully.", "success");
+            }
             renderAdminQuestionsTab();
         }
     }
@@ -8945,6 +9000,14 @@ function renderAdminFlashcardsTab() {
             showToast("Flashcard Created", `New card added to deck "${categoryVal}".`, "success");
         }
 
+        if (state.currentUser) {
+            state.currentUser.flashcards = state.flashcards;
+        }
+        if (window.HawariFlashcardsCacheEngine) {
+            const officialOnly = (state.flashcards || []).filter(c => c && c.isOfficial);
+            HawariFlashcardsCacheEngine.setCachedCards(state.activeGroup || "infection", officialOnly);
+        }
+
         saveStateToStorage();
         resetAdminFlashcardForm();
         renderAdminFlashcardsTab();
@@ -8986,6 +9049,13 @@ window.editFlashcardAdmin = function(fcId) {
 window.deleteFlashcardAdmin = function(fcId) {
     if (confirm("Are you sure you want to delete this flashcard?")) {
         state.flashcards = state.flashcards.filter(c => c.id !== fcId);
+        if (state.currentUser) {
+            state.currentUser.flashcards = state.flashcards;
+        }
+        if (window.HawariFlashcardsCacheEngine) {
+            const officialOnly = (state.flashcards || []).filter(c => c && c.isOfficial);
+            HawariFlashcardsCacheEngine.setCachedCards(state.activeGroup || "infection", officialOnly);
+        }
         saveStateToStorage();
         showToast("Flashcard Deleted", "Flashcard was deleted successfully.", "warning");
         renderAdminFlashcardsTab();

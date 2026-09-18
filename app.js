@@ -2402,18 +2402,29 @@ async function revalidateQuestionBankVersion(group, cachedVersion) {
     };
 
     try {
+        let serverVersion = null;
         const checkRes = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}&select=group_name,last_updated`);
         if (checkRes && Array.isArray(checkRes) && checkRes.length > 0) {
-            const serverVersion = checkRes[0].last_updated;
-            if (serverVersion && serverVersion !== cachedVersion) {
-                console.log(`[QuestionCache] VERSION CHANGED for ${group}: cached ${cachedVersion} != server ${serverVersion}. Downloading updated question bank in background...`);
-                await downloadFullQuestionBankFromCloud(group, serverVersion);
-            } else {
-                console.log(`[QuestionCache] Version UNCHANGED for course ${group} (${cachedVersion}). Cache is valid.`);
-                await markChecked();
-            }
+            serverVersion = checkRes[0].last_updated;
         } else {
-            // RLS 401 or non-array: record check timestamp so we don't spam the endpoint in a tight loop
+            try {
+                const rpcRes = await supabaseRequest(`rpc/get_question_bank_version`, {
+                    method: "POST",
+                    body: JSON.stringify({ p_group: group })
+                });
+                if (rpcRes !== null && rpcRes !== undefined && !isNaN(Number(rpcRes)) && Number(rpcRes) > 0) {
+                    serverVersion = Number(rpcRes);
+                }
+            } catch (rpcErr) {}
+        }
+
+        if (serverVersion && serverVersion !== cachedVersion) {
+            console.log(`[QuestionCache] VERSION CHANGED for ${group}: cached ${cachedVersion} != server ${serverVersion}. Downloading updated question bank in background...`);
+            await downloadFullQuestionBankFromCloud(group, serverVersion);
+        } else if (serverVersion) {
+            console.log(`[QuestionCache] Version UNCHANGED for course ${group} (${cachedVersion}). Cache is valid.`);
+            await markChecked();
+        } else {
             await markChecked();
         }
     } catch (e) {

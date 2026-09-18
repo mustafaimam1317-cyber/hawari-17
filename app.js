@@ -3763,22 +3763,45 @@ async function syncUsersWithCloud() {
                     });
                     lu.reportTaskProgress = mergedRtProgress;
 
-                    // Smart bidirectional merge for flashcards (Union by card.id, preserving newest SM-2 review states)
+                    // Smart bidirectional merge for flashcards (Official SM-2 & Personal Decks)
                     const localCards = Array.isArray(lu.flashcards) ? lu.flashcards : [];
                     const cloudCards = Array.isArray(cu.flashcards) ? cu.flashcards : [];
                     if (cloudCards.length > 0 || localCards.length > 0) {
                         const cardMap = new Map();
-                        localCards.forEach(c => { if (c && c.id) cardMap.set(c.id, c); });
+                        const deletedSet = new Set(Array.isArray(lu.deletedPersonalFlashcards) ? lu.deletedPersonalFlashcards : []);
+                        const isCloudNewer = (cu.lastUpdated || 0) > (lu.lastUpdated || 0);
+                        const cloudCardIdSet = new Set(cloudCards.map(c => c && c.id).filter(Boolean));
+                        
+                        // 1. Add valid local cards that have not been marked as deleted
+                        localCards.forEach(c => { 
+                            if (!c || !c.id) return;
+                            if (deletedSet.has(c.id)) return;
+                            // If cloud is strictly newer and this personal card does not exist in cloud, it was deleted remotely
+                            if (c.isOfficial === false && isCloudNewer && !cloudCardIdSet.has(c.id)) {
+                                return;
+                            }
+                            cardMap.set(c.id, c); 
+                        });
+
+                        // 2. Process cloud cards
                         cloudCards.forEach(cc => {
                             if (!cc || !cc.id) return;
+                            // If this personal card was deleted locally, do NOT resurrect it!
+                            if (deletedSet.has(cc.id)) return;
+
                             const lc = cardMap.get(cc.id);
                             if (!lc) {
+                                // For personal cards: if local state is newer or equal, local deletion is authoritative
+                                const isPersonal = cc.isOfficial === false;
+                                if (isPersonal && !isCloudNewer) {
+                                    return;
+                                }
                                 cardMap.set(cc.id, cc);
                             } else {
                                 const lcTime = lc.lastReviewDate || lc.lastUpdated || 0;
                                 const ccTime = cc.lastReviewDate || cc.lastUpdated || 0;
-                                if (ccTime >= lcTime) {
-                                    cardMap.set(cc.id, Object.assign({}, lc, cc));
+                                if (ccTime > lcTime) {
+                                    cardMap.set(cc.id, cc);
                                 }
                             }
                         });
@@ -8504,12 +8527,18 @@ function renderFlashcardsView() {
         if (hasLegacy || !has500 || !state.flashcards || state.flashcards.length === 0) {
             const official500 = HawariFlashcardsCacheEngine.getOfficialCardsSync("infection");
             
+            const uRec = state.currentUser && Array.isArray(state.users)
+                ? state.users.find(u => u.email && u.email.toLowerCase() === state.currentUser.email.toLowerCase())
+                : null;
+            const deletedPersonalSet = new Set(Array.isArray(uRec ? uRec.deletedPersonalFlashcards : null) ? uRec.deletedPersonalFlashcards : []);
             const userReviewMap = new Map();
             const personalCards = [];
             (state.flashcards || []).forEach(c => {
                 if (!c || !c.id || ["fc_1", "fc_2", "fc_3", "fc_4", "fc_5"].includes(c.id)) return;
                 if (c.isOfficial === false) {
-                    personalCards.push(c);
+                    if (!deletedPersonalSet.has(c.id)) {
+                        personalCards.push(c);
+                    }
                 } else {
                     userReviewMap.set(c.id, c);
                 }
@@ -8708,12 +8737,46 @@ function renderFlashcardsView() {
                 if (confirm("هل تريد بالتأكيد حذف هذه البطاقة التعليمية الشخصية؟")) {
                     const cardId = activeCard.id;
                     state.flashcards = (state.flashcards || []).filter(c => c.id !== cardId);
-                    saveStateToStorage();
+                    if (state.currentUser) {
+                        state.currentUser.flashcards = state.flashcards;
+                    }
+                    if (state.currentUser && Array.isArray(state.users)) {
+                        const uRec = state.users.find(u => u.email && u.email.toLowerCase() === state.currentUser.email.toLowerCase());
+                        if (uRec) {
+                            uRec.flashcards = state.flashcards;
+                            uRec.deletedPersonalFlashcards = uRec.deletedPersonalFlashcards || [];
+                            if (!uRec.deletedPersonalFlashcards.includes(cardId)) {
+                                uRec.deletedPersonalFlashcards.push(cardId);
+                            }
+                            uRec.lastUpdated = Date.now();
+                            state.currentUser.lastUpdated = uRec.lastUpdated;
+                        }
+                    }
+                    saveStateToStorage(true);
                     showToast("تم الحذف", "تم حذف البطاقة التعليمية الشخصية بنجاح.", "info");
                     if (activeFlashcardIdx >= list.length - 1) {
                         activeFlashcardIdx = Math.max(0, list.length - 2);
                     }
                     renderFlashcardsView();
+
+                    // Instantly sync deletion with Supabase cloud (Server-Authoritative Delete)
+                    if (state.currentUser && state.currentUser.email) {
+                        const userEmail = state.currentUser.email.trim().toLowerCase();
+                        const group = (state.activeGroup || "infection").toLowerCase();
+                        const uRec = state.users.find(u => u.email && u.email.toLowerCase() === userEmail);
+                        const ts = (uRec && uRec.lastUpdated) ? uRec.lastUpdated : Date.now();
+                        supabaseRequest("rpc/update_user_progress_rpc", {
+                            method: "POST",
+                            body: JSON.stringify({
+                                p_user_email: userEmail,
+                                p_group: group,
+                                p_tests: (uRec && uRec.tests) || [],
+                                p_notebook_notes: (uRec && uRec.notebookNotes) || [],
+                                p_flashcards: state.flashcards || [],
+                                p_last_updated: ts
+                            })
+                        }).catch(syncErr => console.warn("[FlashcardDelete] Direct cloud delete sync warning:", syncErr));
+                    }
                 }
             };
         } else {
@@ -8840,7 +8903,11 @@ function renderAdminFlashcardsTab() {
         const has500 = (state.flashcards || []).some(c => String(c.id).startsWith("fc_inf_"));
         if (hasLegacy || !has500 || !state.flashcards || state.flashcards.length === 0) {
             const official500 = HawariFlashcardsCacheEngine.getOfficialCardsSync("infection");
-            const personalCards = (state.flashcards || []).filter(c => c && c.isOfficial === false);
+            const uRec = state.currentUser && Array.isArray(state.users)
+                ? state.users.find(u => u.email && u.email.toLowerCase() === state.currentUser.email.toLowerCase())
+                : null;
+            const deletedPersonalSet = new Set(Array.isArray(uRec ? uRec.deletedPersonalFlashcards : null) ? uRec.deletedPersonalFlashcards : []);
+            const personalCards = (state.flashcards || []).filter(c => c && c.isOfficial === false && !deletedPersonalSet.has(c.id));
             state.flashcards = [...(official500 || []).map(c => normalizeSm2Card({ ...c })), ...personalCards];
             if (state.currentUser) state.currentUser.flashcards = state.flashcards;
             saveStateToStorage();
@@ -9458,10 +9525,13 @@ function loadUserSpecificProgress(email) {
     
     const userReviewMap = new Map();
     const personalCards = [];
+    const deletedPersonalSet = new Set(Array.isArray(user.deletedPersonalFlashcards) ? user.deletedPersonalFlashcards : []);
     rawUserCards.forEach(c => {
         if (!c || !c.id) return;
         if (c.isOfficial === false) {
-            personalCards.push(c);
+            if (!deletedPersonalSet.has(c.id)) {
+                personalCards.push(c);
+            }
         } else {
             userReviewMap.set(c.id, c);
         }

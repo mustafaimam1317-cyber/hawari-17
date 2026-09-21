@@ -17,6 +17,7 @@
 
 import { APP_MARKUP } from './uiTemplate.js';
 import { OFFICIAL_INFECTION_FLASHCARDS } from './official_flashcards_data.js';
+import { renderBattleRoomView } from './battleRoom.js';
 
 // ================= SYNCHRONOUS ROOT MOUNTING =================
 // Instantly mounts complete UI DOM markup into <div id="root"> before any other logic runs
@@ -977,6 +978,7 @@ let state = {
     isQuestionBankLoaded: false,
     isInitialSyncComplete: false
 };
+window.state = state;
 
 // ================= LOCAL STORAGE MANAGER =================
 const STORAGE_KEYS = {
@@ -1363,7 +1365,7 @@ function loadStateFromStorage() {
             loadUserSpecificProgress(state.currentUser.email);
 
             // Background Live Status Introspection for Non-Admin Users (RFC 7009 Session Revocation)
-            if (storedCurrentUser.role !== "admin" && storedCurrentUser.email) {
+            if (storedCurrentUser.role !== "admin" && storedCurrentUser.email && typeof fetchUserStatusFromCloud === "function") {
                 fetchUserStatusFromCloud(storedCurrentUser.email).then(liveStatus => {
                     if (liveStatus && !liveStatus.exists) {
                         console.warn("[Auth] Live introspection: User deleted from cloud by administrator. Revoking session.");
@@ -1434,6 +1436,7 @@ function showToast(title, msg, type = "info") {
         setTimeout(() => toast.remove(), 300);
     }, 3000);
 }
+window.showToast = showToast;
 
 // ================= INITIALIZATION & ROUTING =================
 async function selectCourseTrack(groupName) {
@@ -1963,6 +1966,8 @@ function switchView(viewName) {
         renderFlashcardsView();
     } else if (viewName === "report-task") {
         renderReportTaskStudentView();
+    } else if (viewName === "battle-room") {
+        renderBattleRoomView();
     } else if (viewName === "hawari-book") {
         renderHawariBookView();
     } else if (viewName === "admin-panel") {

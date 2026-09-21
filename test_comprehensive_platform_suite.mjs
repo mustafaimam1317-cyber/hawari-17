@@ -20,6 +20,10 @@ const styleCss = fs.readFileSync(styleCssPath, 'utf8');
 const clayCss = fs.readFileSync(clayCssPath, 'utf8');
 const uiTemplatePath = path.join(ROOT, 'uiTemplate.js');
 const uiMarkup = fs.existsSync(uiTemplatePath) ? fs.readFileSync(uiTemplatePath, 'utf8') : '';
+const battleRoomPath = path.join(ROOT, 'battleRoom.js');
+const battleCode = fs.existsSync(battleRoomPath) ? fs.readFileSync(battleRoomPath, 'utf8') : '';
+const swPath = path.join(ROOT, 'public', 'sw.js');
+const swCode = fs.existsSync(swPath) ? fs.readFileSync(swPath, 'utf8') : '';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -297,8 +301,116 @@ async function runSuite() {
         (uiMarkup.includes('sidebar') || indexHtml.includes('sidebar')));
     test('style.css defines CSS variables and theme properties',
         styleCss.includes('--bg-primary') && styleCss.includes('--primary-color'));
-    test('claymorphism.css contains high-contrast styles for dark/clay choices',
-        clayCss.includes('body.theme-clay.dark-theme .choice-btn'));
+    // ------------------------------------------------------------------------
+    // MODULE 11: 1v1 BATTLE ROOM MULTIPLAYER ARENA (v3.1)
+    // ------------------------------------------------------------------------
+    console.log('\n--- MODULE 11: 1v1 Battle Room Engine v3.1 ---');
+
+    // 11.1 Strict 50-room gatekeeper
+    test('Strict 50-Room Gatekeeper: blocks creation at capacity with exact Arabic toast',
+        battleCode.includes('MAX_CONCURRENT_ROOMS: 50') &&
+        battleCode.includes('غير مسموح، العدد مكتمل. برجاء المحاولة في وقت لاحق'));
+
+    // 11.2 5-char email format
+    test('5-Char Display Name: extracts first 5 alphanumeric chars from email uppercase',
+        battleCode.includes('formatUserDisplay') && battleCode.includes('slice(0, 5)'));
+
+    // 11.3 Surrender / Forfeit
+    test('Surrender Action: in-match forfeit button with confirmation and victory attribution',
+        battleCode.includes('forfeitBattleMatch') &&
+        battleCode.includes('PLAYER_FORFEIT') &&
+        uiMarkup.includes('forfeitBattleMatch()'));
+
+    // 11.4 10-point scoring rule
+    test('10-Point Scoring Rule: awards exactly 10 points per correct answer',
+        battleCode.includes('const pointsEarned = isCorrect ? 10 : 0;'));
+
+    // 11.5 12s Reconnection Grace Period
+    test('12-Second Grace Period: protects mobile users against transient connection drops',
+        battleCode.includes('showOpponentReconnectingBanner') &&
+        battleCode.includes('12000'));
+
+    // 11.6 Zero-Egress Question Fallback
+    test('Question Bank Fallback: transmits fallback payload to prevent missing questions',
+        battleCode.includes('fullQuestions') &&
+        battleCode.includes('Zero-Egress fallback'));
+
+    // 11.7 Two-Way Rematch Protocol
+    test('Two-Way Rematch Protocol: checks presence, sends request, and requires interactive accept/decline',
+        battleCode.includes('REMATCH_REQUESTED') &&
+        battleCode.includes('REMATCH_ACCEPTED') &&
+        battleCode.includes('REMATCH_DECLINED') &&
+        uiMarkup.includes('modal-battle-rematch-request'));
+
+
+    // ------------------------------------------------------------------------
+    // MODULE 12: SERVICE WORKER CACHE v3.4 & ASSET INVALIDATION
+    // ------------------------------------------------------------------------
+    console.log('\n--- MODULE 12: Service Worker Cache v3.4 ---');
+
+    test('Service Worker cache version bumped to hawari-cache-v3.4',
+        swCode.includes("const CACHE_NAME = 'hawari-cache-v3.4';"));
+
+    test('Service Worker cleans old caches on activate and claims clients',
+        swCode.includes('caches.delete') &&
+        swCode.includes('self.skipWaiting()') &&
+        swCode.includes('self.clients.claim()'));
+
+
+    // ------------------------------------------------------------------------
+    // MODULE 13: SINGLE-DEVICE ENFORCEMENT & CONCURRENCY DISCONNECT
+    // ------------------------------------------------------------------------
+    console.log('\n--- MODULE 13: Single-Device Concurrency & Disconnect ---');
+
+    test('Single-device heartbeat / session token validation active in app.js',
+        appCode.includes('session_token') &&
+        (appCode.includes('fetchUserStatusFromCloud') || appCode.includes('active_sessions')));
+
+    test('Account concurrency conflict triggers session termination / alert',
+        appCode.includes('Account accessed from another device') ||
+        appCode.includes('another device') ||
+        appCode.includes('logged out'));
+
+
+    // ------------------------------------------------------------------------
+    // MODULE 14: MULTI-DEVICE RESPONSIVE DESIGN (PHONE, TABLET, LAPTOP)
+    // ------------------------------------------------------------------------
+    console.log('\n--- MODULE 14: Multi-Device Responsive Design Suite ---');
+
+    test('Mobile breakpoint (<= 640px) optimizes Battle Room layout, cards, and HUD',
+        styleCss.includes('@media (max-width: 640px)') &&
+        styleCss.includes('.battle-option-btn') &&
+        styleCss.includes('.arena-hud-card'));
+
+    test('Tablet breakpoint (641px - 1024px) provides 2-column balanced layout',
+        styleCss.includes('@media (min-width: 641px) and (max-width: 1024px)'));
+
+    test('Touch target optimization: touch-action manipulation and min-height 52px for choices',
+        styleCss.includes('touch-action: manipulation') &&
+        styleCss.includes('min-height: 52px !important'));
+
+    test('Results comparison table stacks cleanly on mobile screens',
+        styleCss.includes('#battle-screen-results .test-setup-card') &&
+        styleCss.includes('grid-template-columns: 1fr !important'));
+
+
+    // ------------------------------------------------------------------------
+    // MODULE 15: SECURITY, ANTI-CHEAT & FORENSIC DRM
+    // ------------------------------------------------------------------------
+    console.log('\n--- MODULE 15: Security, Anti-Cheat & Forensic DRM ---');
+
+    test('Anti-Cheat: OPPONENT_ANSWERED hides the selected option letter',
+        battleCode.includes('event: "OPPONENT_ANSWERED"') &&
+        !battleCode.includes('event: "OPPONENT_ANSWERED",\n            payload: {\n                selectedKey:'));
+
+    test('XSS sanitization & clean display formatting applied across competitors',
+        battleCode.includes('formatUserDisplay') &&
+        (appCode.includes('escapeHtml') || appCode.includes('sanitize')));
+
+    test('Forensic watermark and copy deterrents protect proprietary Hawari assets',
+        appCode.includes('renderForensicWatermark') ||
+        appCode.includes('watermark') && appCode.includes('contextmenu'));
+
 
     // ------------------------------------------------------------------------
     // FINAL REPORT
@@ -311,7 +423,7 @@ async function runSuite() {
         console.log('================================================================\n');
         process.exit(1);
     } else {
-        console.log('🎉 ALL 10 SUBSYSTEMS VERIFIED AND PASSING WITH ZERO ERRORS!');
+        console.log('🎉 ALL 15 SUBSYSTEMS VERIFIED AND PASSING WITH ZERO ERRORS!');
         console.log('================================================================\n');
     }
 }

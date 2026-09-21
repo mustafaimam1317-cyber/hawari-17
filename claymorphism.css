@@ -733,11 +733,22 @@ body.theme-clay .admin-tab-btn.active {
 }
 
 /* ---------------- 12. GPU ACCELERATION & RENDERING OPTIMIZATIONS ---------------- */
-.clay-card, .clay-btn, .hawari-book-card, .test-card, .stat-card {
+.clay-card, .clay-btn, .hawari-book-card, .test-card, .stat-card, .battle-card {
     will-change: transform;
     transform: translateZ(0);
     backface-visibility: hidden;
     contain: layout style;
+}
+
+body.theme-clay .battle-card {
+    background: var(--clay-card-bg) !important;
+    border: var(--clay-card-border) !important;
+    box-shadow: var(--clay-card-shadow) !important;
+}
+
+body.theme-clay .battle-source-card.active {
+    border-color: var(--primary-color) !important;
+    background: rgba(155, 113, 178, 0.18) !important;
 }
 
 html {

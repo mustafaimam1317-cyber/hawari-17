@@ -3518,3 +3518,218 @@ html.instant-boot-active #app-layout:not(.hidden) {
     transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* ================= 1v1 BATTLE ROOM ARENA STYLES ================= */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes battlePulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.08); opacity: 0.85; }
+}
+
+.battle-nav-badge {
+    animation: battlePulse 2s infinite ease-in-out;
+}
+
+.battle-option-btn:hover {
+    border-color: var(--primary-color) !important;
+    background: var(--bg-secondary) !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.battle-option-btn:active {
+    transform: translateY(0);
+}
+
+/* ================= RESPONSIVE BATTLE ROOM SUITE (MOBILE, TABLET & DESKTOP) ================= */
+
+/* Common touch and button styling */
+.battle-option-btn,
+.battle-quick-chip,
+.battle-action-btn,
+#btn-battle-surrender,
+#btn-battle-rematch {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* 1. TABLET SCREENS (641px - 1024px) */
+@media (min-width: 641px) and (max-width: 1024px) {
+    #battle-room-view .page-header > div {
+        flex-direction: row;
+        align-items: center !important;
+        gap: 16px;
+    }
+    #battle-screen-lobby .generate-form-layout {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+    #battle-screen-waiting .waiting-competitors-box {
+        gap: 20px;
+    }
+    .battle-option-btn {
+        min-height: 50px;
+        padding: 12px 16px;
+    }
+}
+
+/* 2. SMARTPHONE / MOBILE SCREENS (<= 640px) */
+@media (max-width: 640px) {
+    #battle-room-view {
+        padding: 10px 4px !important;
+    }
+    #battle-room-view .page-header {
+        margin-bottom: 14px !important;
+    }
+    #battle-room-view .page-header > div {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 12px !important;
+    }
+    #battle-server-capacity-widget {
+        align-self: flex-start;
+        padding: 6px 12px !important;
+        font-size: 0.82rem !important;
+    }
+    #battle-screen-lobby .generate-form-layout {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 14px !important;
+    }
+    .source-cards-grid {
+        grid-template-columns: repeat(3, 1fr) !important;
+        gap: 8px !important;
+    }
+    .battle-source-card {
+        padding: 10px 6px !important;
+        text-align: center !important;
+    }
+    .battle-source-card h4 {
+        font-size: 0.78rem !important;
+        margin-bottom: 4px !important;
+    }
+    .battle-source-card .badge {
+        font-size: 0.65rem !important;
+        padding: 2px 4px !important;
+    }
+    .battle-chips-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px !important;
+    }
+    .battle-quick-chip {
+        flex: 1 1 calc(25% - 6px);
+        min-width: 48px;
+        text-align: center;
+        padding: 6px 4px !important;
+        font-size: 0.78rem !important;
+    }
+
+    /* Waiting screen mobile stacking */
+    #battle-screen-waiting .waiting-competitors-box {
+        flex-direction: column !important;
+        align-items: center !important;
+        gap: 14px !important;
+    }
+    #battle-screen-waiting .vs-badge-wrapper {
+        margin: 4px 0 !important;
+    }
+
+    /* Arena HUD mobile optimization */
+    #battle-screen-arena .test-setup-card.battle-card {
+        grid-template-columns: 1fr !important;
+        gap: 12px !important;
+        padding: 12px 14px !important;
+        text-align: center !important;
+    }
+    #battle-screen-arena .test-setup-card.battle-card > div {
+        justify-content: center !important;
+    }
+    #battle-screen-arena .arena-hud-card {
+        padding: 12px 10px !important;
+        margin-bottom: 12px !important;
+    }
+    #battle-screen-arena .arena-hud-grid {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 10px !important;
+    }
+    #battle-screen-arena .hud-players-row {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        width: 100% !important;
+    }
+    #battle-screen-arena .hud-player-left,
+    #battle-screen-arena .hud-player-right {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+    }
+    #battle-screen-arena .hud-center-progress {
+        width: 100% !important;
+        order: 3;
+    }
+
+    /* Arena Choice buttons for touch */
+    .battle-option-btn {
+        min-height: 52px !important;
+        padding: 12px 14px !important;
+        margin-bottom: 8px !important;
+        font-size: 0.92rem !important;
+        border-radius: 12px !important;
+    }
+    .battle-option-btn .choice-letter {
+        width: 32px !important;
+        height: 32px !important;
+        min-width: 32px !important;
+        font-size: 0.85rem !important;
+    }
+    .battle-option-btn .choice-text {
+        font-size: 0.88rem !important;
+        line-height: 1.4 !important;
+    }
+
+    /* Surrender action bar */
+    .battle-arena-actions-bar {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        margin-bottom: 10px !important;
+    }
+    #btn-battle-surrender {
+        padding: 6px 12px !important;
+        font-size: 0.78rem !important;
+    }
+
+    /* Results screen mobile */
+    #battle-screen-results .test-setup-card {
+        padding: 24px 14px !important;
+    }
+    #battle-screen-results .test-setup-card > div[style*="grid-template-columns: 1fr 1fr"] {
+        grid-template-columns: 1fr !important;
+        gap: 12px !important;
+    }
+    #battle-screen-results .results-actions-wrapper {
+        flex-direction: column !important;
+        width: 100% !important;
+        gap: 10px !important;
+    }
+    #battle-screen-results .results-actions-wrapper .btn {
+        width: 100% !important;
+        min-height: 46px !important;
+        font-size: 0.95rem !important;
+    }
+
+    /* Rematch Modal on narrow screens */
+    #modal-battle-rematch-request .auth-card {
+        width: 92vw !important;
+        max-width: 380px !important;
+        padding: 20px 16px !important;
+    }
+}
+
+

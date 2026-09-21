@@ -462,12 +462,25 @@ export async function createBattleRoom() {
  */
 export async function joinBattleRoomByCode(directCode = null) {
     const input = document.getElementById("battle-input-join-code");
-    const code = (directCode || input?.value || "").trim().toUpperCase();
+    let code = (directCode || input?.value || "").trim().toUpperCase().replace(/\s+/g, "");
 
-    if (!code || code.length < 4) {
+    if (!code) {
         window.showToast?.("Invalid Code", "Please enter a valid room code (e.g. HAW-782)", "warning");
         return;
     }
+
+    // Auto-prefix HAW- if user only entered digits (e.g. 782 -> HAW-782)
+    if (!code.startsWith("HAW-") && /^\d+$/.test(code)) {
+        code = "HAW-" + code;
+    }
+
+    if (code.length < 4) {
+        window.showToast?.("Invalid Code", "Please enter a valid room code (e.g. HAW-782)", "warning");
+        return;
+    }
+
+    const currentUser = getActiveUser();
+    const userDisplayName = formatUserDisplay(currentUser);
 
     battleState.activeRoom = {
         id: code,
@@ -477,7 +490,39 @@ export async function joinBattleRoomByCode(directCode = null) {
         opponent: null
     };
 
+    // Immediate visual feedback on Guest screen
+    switchBattleSubscreen("waiting");
+    const codeEl = document.getElementById("battle-waiting-room-code");
+    if (codeEl) codeEl.innerText = code;
+
+    const p1Name = document.getElementById("battle-lobby-p1-name");
+    const p1Avatar = document.getElementById("battle-lobby-p1-avatar");
+    if (p1Name) p1Name.innerText = "Connecting to Host...";
+    if (p1Avatar) p1Avatar.innerText = "⏳";
+
+    const p2Name = document.getElementById("battle-lobby-p2-name");
+    const p2Avatar = document.getElementById("battle-lobby-p2-avatar");
+    const p2Badge = document.getElementById("battle-lobby-p2-badge");
+    if (p2Name) p2Name.innerText = userDisplayName;
+    if (p2Avatar) p2Avatar.innerText = userDisplayName[0];
+    if (p2Badge) {
+        p2Badge.innerText = "Connecting";
+        p2Badge.style.background = "#f59e0b";
+        p2Badge.style.color = "white";
+    }
+
+    window.showToast?.("Joining Room", `جاري الاتصال بالغرفة ${code}...`, "info");
+
     joinRoomChannel(code, false);
+
+    // Safety timeout: if guest remains in waiting for 10s without host
+    clearTimeout(battleState.guestWaitTimeout);
+    battleState.guestWaitTimeout = setTimeout(() => {
+        if (battleState.gameStatus === "waiting" && (!battleState.questions || battleState.questions.length === 0)) {
+            window.showToast?.("Host Not Found", "لم يتم العثور على منشئ الغرفة. يرجى التأكد من صحة الكود أو أن زميلك لا يزال متصلاً في شاشة الانتظار.", "warning");
+            leaveBattleRoom();
+        }
+    }, 10000);
 }
 
 /**
@@ -494,10 +539,15 @@ function joinRoomChannel(code, isHost) {
     const currentUser = getActiveUser();
     const userDisplayName = formatUserDisplay(currentUser);
     const userEmail = currentUser.email;
+    const clientSessionId = Math.random().toString(36).slice(2, 9);
+    battleState.clientSessionId = clientSessionId;
+
+    // Unique presence key per device connection to allow testing from same account!
+    const presenceKey = `${userEmail || 'user'}_${isHost ? 'host' : 'guest'}_${clientSessionId}`;
 
     battleState.roomChannel = client.channel(`battle_room_${code}`, {
         config: {
-            presence: { key: userEmail }
+            presence: { key: presenceKey }
         }
     });
 
@@ -505,6 +555,16 @@ function joinRoomChannel(code, isHost) {
         // Broadcast Events
         .on("broadcast", { event: "LOBBY_DATA" }, ({ payload }) => {
             handleLobbyData(payload);
+        })
+        .on("broadcast", { event: "GUEST_READY" }, ({ payload }) => {
+            if (isHost && battleState.activeRoom && battleState.gameStatus === "waiting") {
+                const guest = payload?.guest;
+                if (guest) {
+                    battleState.activeRoom.opponent = guest;
+                    updateLobbyCompetitorUI(guest);
+                    sendLobbyDataToGuest();
+                }
+            }
         })
         .on("broadcast", { event: "START_COUNTDOWN" }, ({ payload }) => {
             handleStartCountdown(payload);
@@ -537,11 +597,60 @@ function joinRoomChannel(code, isHost) {
                     email: currentUser.email,
                     displayName: userDisplayName,
                     isHost: isHost,
+                    clientId: clientSessionId,
                     ready: true,
                     joinedAt: Date.now()
                 });
+
+                if (!isHost) {
+                    // Guest proactively announces presence to Host
+                    battleState.roomChannel.send({
+                        type: "broadcast",
+                        event: "GUEST_READY",
+                        payload: {
+                            guest: {
+                                email: currentUser.email,
+                                displayName: userDisplayName,
+                                isHost: false,
+                                clientId: clientSessionId
+                            }
+                        }
+                    });
+                }
             }
         });
+}
+
+function sendLobbyDataToGuest() {
+    if (!battleState.roomChannel || !battleState.activeRoom) return;
+
+    const currentUser = getActiveUser();
+    const userDisplayName = formatUserDisplay(currentUser);
+
+    battleState.roomChannel.send({
+        type: "broadcast",
+        event: "LOBBY_DATA",
+        payload: {
+            source: battleState.activeRoom.source,
+            count: battleState.activeRoom.count,
+            timeLimit: battleState.activeRoom.timeLimit,
+            questionIds: battleState.activeRoom.questionIds,
+            fullQuestions: battleState.questions, // Zero-Egress fallback payload
+            host: {
+                email: currentUser.email,
+                displayName: userDisplayName,
+                isHost: true,
+                clientId: battleState.clientSessionId
+            }
+        }
+    });
+
+    // Trigger countdown after 1.2 seconds if in waiting
+    setTimeout(() => {
+        if (battleState.gameStatus === "waiting") {
+            triggerRoomCountdown();
+        }
+    }, 1200);
 }
 
 /**
@@ -555,10 +664,13 @@ function handleRoomPresenceSync(isHost) {
     let p2 = null;
 
     Object.keys(presence).forEach(key => {
-        const item = presence[key]?.[0];
-        if (!item) return;
-        if (item.isHost) p1 = item;
-        else p2 = item;
+        const list = presence[key];
+        if (Array.isArray(list)) {
+            list.forEach(item => {
+                if (item.isHost) p1 = item;
+                else p2 = item;
+            });
+        }
     });
 
     // Check if opponent reconnected during grace period
@@ -572,29 +684,11 @@ function handleRoomPresenceSync(isHost) {
         window.showToast?.("Opponent Reconnected!", "عاد الخصم واستؤنفت الجولة بنجاح!", "success");
     }
 
-    // If opponent joined
+    // If opponent joined while waiting
     if (isHost && p2 && battleState.gameStatus === "waiting") {
         battleState.activeRoom.opponent = p2;
         updateLobbyCompetitorUI(p2);
-
-        // Host transmits room configuration and question IDs to guest
-        battleState.roomChannel.send({
-            type: "broadcast",
-            event: "LOBBY_DATA",
-            payload: {
-                source: battleState.activeRoom.source,
-                count: battleState.activeRoom.count,
-                timeLimit: battleState.activeRoom.timeLimit,
-                questionIds: battleState.activeRoom.questionIds,
-                fullQuestions: battleState.questions, // Zero-Egress fallback payload
-                host: p1
-            }
-        });
-
-        // Trigger countdown after 1.2 seconds
-        setTimeout(() => {
-            triggerRoomCountdown();
-        }, 1200);
+        sendLobbyDataToGuest();
     } else if (!isHost && p1) {
         battleState.activeRoom.opponent = p1;
         updateLobbyCompetitorUI(p1);
@@ -629,7 +723,8 @@ function updateLobbyCompetitorUI(opponent) {
  * Handle Guest receiving Room data from Host
  */
 function handleLobbyData(payload) {
-    if (battleState.activeRoom.isHost) return;
+    clearTimeout(battleState.guestWaitTimeout);
+    if (battleState.activeRoom?.isHost) return;
 
     battleState.activeRoom.source = payload.source;
     battleState.activeRoom.count = payload.count;
@@ -1132,7 +1227,16 @@ export function requestBattleRematch() {
     let opponentConnected = false;
 
     Object.keys(presence).forEach(key => {
-        if (key !== myEmail) opponentConnected = true;
+        const list = presence[key];
+        if (Array.isArray(list)) {
+            list.forEach(item => {
+                if (item.clientId && item.clientId !== battleState.clientSessionId) {
+                    opponentConnected = true;
+                } else if (!item.clientId && key !== myEmail) {
+                    opponentConnected = true;
+                }
+            });
+        }
     });
 
     if (!opponentConnected) {
@@ -1271,6 +1375,7 @@ export function returnToBattleLobby() {
 export function leaveBattleRoom() {
     clearInterval(battleState.timerInterval);
     clearTimeout(battleState.rematchTimeout);
+    clearTimeout(battleState.guestWaitTimeout);
     clearTimeout(opponentReconnectTimeout);
     clearInterval(opponentReconnectInterval);
     opponentReconnectTimeout = null;

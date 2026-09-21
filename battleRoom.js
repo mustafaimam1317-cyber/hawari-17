@@ -96,6 +96,7 @@ export function getBattleSupabaseClient() {
         
         battleState.supabaseClient = createClient(url, anonKey, {
             realtime: {
+                timeout: 35000,
                 params: {
                     eventsPerSecond: 15
                 }
@@ -538,7 +539,8 @@ function joinRoomChannel(code, isHost) {
     if (!client) return;
 
     if (battleState.roomChannel) {
-        try { battleState.roomChannel.unsubscribe(); } catch(e) {}
+        try { client.removeChannel(battleState.roomChannel); } catch(e) {}
+        battleState.roomChannel = null;
     }
 
     const currentUser = getActiveUser();
@@ -650,11 +652,11 @@ function joinRoomChannel(code, isHost) {
                     // Send immediately
                     sendGuestReady();
 
-                    // Resend every 1.5s (up to 8 times = 12s) to guarantee arrival over real network latency
+                    // Resend every 1.5s (up to 12 times = 18s) to guarantee arrival over real network latency
                     let retryCount = 0;
                     battleState.guestHandshakeInterval = setInterval(() => {
                         retryCount++;
-                        if (battleState.gameStatus !== "waiting" || (battleState.questions && battleState.questions.length > 0) || retryCount > 8) {
+                        if (battleState.gameStatus !== "waiting" || (battleState.questions && battleState.questions.length > 0) || retryCount > 12) {
                             clearInterval(battleState.guestHandshakeInterval);
                             battleState.guestHandshakeInterval = null;
                             return;
@@ -662,22 +664,24 @@ function joinRoomChannel(code, isHost) {
                         sendGuestReady();
                     }, 1500);
 
-                    // Generous 30-second timeout ONLY started after successful SUBSCRIBED status
+                    // Generous 35-second timeout ONLY started after successful SUBSCRIBED status
                     battleState.guestWaitTimeout = setTimeout(() => {
                         if (battleState.gameStatus === "waiting" && (!battleState.questions || battleState.questions.length === 0)) {
                             window.showToast?.("Host Not Found", "لم يتم العثور على منشئ الغرفة. يرجى التأكد من بقاء زميلك داخل شاشة الانتظار وصحة كود الغرفة.", "warning");
                             leaveBattleRoom();
                         }
-                    }, 30000);
+                    }, 35000);
                 }
             } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-                console.error(`[BattleRoom] Channel subscription failed with status: ${status}`);
+                console.warn(`[BattleRoom] Channel status warning: ${status}. Realtime client is retrying connection in background...`);
                 if (!isHost && battleState.gameStatus === "waiting") {
-                    window.showToast?.("Connection Error", "تعذر الاتصال بسيرفر الغرف عبر الشبكة. يرجى إعادة المحاولة.", "danger");
-                    leaveBattleRoom();
+                    const p1Name = document.getElementById("battle-lobby-p1-name");
+                    if (p1Name) {
+                        p1Name.innerText = "جاري إعادة المحاولة والاتصال بالسيرفر...";
+                    }
                 }
             }
-        });
+        }, 35000);
 }
 
 function sendLobbyDataToGuest() {
@@ -1461,7 +1465,11 @@ export function leaveBattleRoom() {
     if (modal) modal.classList.add("hidden");
 
     if (battleState.roomChannel) {
-        try { battleState.roomChannel.unsubscribe(); } catch(e) {}
+        try {
+            const client = getBattleSupabaseClient();
+            if (client) client.removeChannel(battleState.roomChannel);
+            else battleState.roomChannel.unsubscribe();
+        } catch(e) {}
         battleState.roomChannel = null;
     }
 

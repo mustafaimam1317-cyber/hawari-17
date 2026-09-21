@@ -973,6 +973,7 @@ let state = {
     quizResults: [],
     activeQuiz: null,
     announcement: "",
+    isBattleRoomOpen: localStorage.getItem("hawari_battle_room_open") === "true",
     grantedBookUsers: [],
     isUserProgressLoaded: false,
     isQuestionBankLoaded: false,
@@ -1737,8 +1738,10 @@ document.addEventListener("DOMContentLoaded", () => {
     initBackupRestoreFlow();
     initAddBookModalForm();
 
-    // Admin Announcements Form bindings
+    // Admin Announcements & Battle Room Controls bindings
     bindAdminAnnouncementControls();
+    bindBattleRoomAdminControls();
+    fetchBattleRoomPublicStatus();
 
     // Register PWA Service Worker
     if ('serviceWorker' in navigator) {
@@ -1875,6 +1878,13 @@ function initRouter() {
             return;
         }
 
+        // Prevent accessing battle room if not admin and not publicly available
+        if (hash === "battle-room" && state.currentUser.role !== "admin" && !isBattleRoomAvailable()) {
+            showToast("🚀 قريباً...", "ميزة غرف التحدي 1v1 قيد الإطلاق التجريبي وسيتم فتحها رسمياً لجميع الطلاب قريباً!", "warning");
+            window.location.hash = state.activeView && state.activeView !== "battle-room" ? `#${state.activeView}` : "#dashboard";
+            return;
+        }
+
         switchView(hash);
     };
 
@@ -1886,6 +1896,10 @@ function initRouter() {
         item.addEventListener("click", (e) => {
             e.preventDefault();
             const href = item.getAttribute("href");
+            if (href === "#battle-room" && state.currentUser && state.currentUser.role !== "admin" && !isBattleRoomAvailable()) {
+                showToast("🚀 قريباً...", "ميزة غرف التحدي 1v1 قيد الإطلاق التجريبي وسيتم فتحها رسمياً لجميع الطلاب قريباً!", "warning");
+                return;
+            }
             window.location.hash = href;
         });
     });
@@ -1924,6 +1938,14 @@ function switchView(viewName) {
         if (!state.currentUser || state.currentUser.role !== "admin") {
             showToast("Access Denied", "You do not have administrative privileges to access this page.", "danger");
             window.location.hash = "#dashboard";
+            return;
+        }
+    }
+
+    if (viewName === "battle-room") {
+        if (state.currentUser && state.currentUser.role !== "admin" && !isBattleRoomAvailable()) {
+            showToast("🚀 قريباً...", "ميزة غرف التحدي 1v1 قيد الإطلاق التجريبي وسيتم فتحها رسمياً لجميع الطلاب قريباً!", "warning");
+            window.location.hash = state.activeView && state.activeView !== "battle-room" ? `#${state.activeView}` : "#dashboard";
             return;
         }
     }
@@ -3275,6 +3297,7 @@ async function fetchAnnouncement(groupName, forceBypassCache = false) {
     } catch (e) {
         console.error("[Sync] Failed to fetch announcement:", e);
     }
+    fetchBattleRoomPublicStatus().catch(() => {});
     renderAnnouncementWidget();
 }
 
@@ -3441,6 +3464,160 @@ function renderAnnouncementWidget() {
             adminBadge.style.color = "#6b7280";
         }
     }
+}
+
+// ================= 1V1 BATTLE ROOM ACCESS CONTROL & GATEKEEPER =================
+function isBattleRoomAvailable() {
+    if (state.currentUser && state.currentUser.role === "admin") {
+        return true;
+    }
+    return state.isBattleRoomOpen === true;
+}
+
+function updateBattleRoomUIElements() {
+    const battleBadge = document.querySelector("#nav-battle-room .battle-nav-badge");
+    const isAdmin = state.currentUser && state.currentUser.role === "admin";
+    const isOpen = state.isBattleRoomOpen === true;
+
+    if (battleBadge) {
+        if (isAdmin || isOpen) {
+            battleBadge.textContent = "1v1";
+            battleBadge.style.background = "linear-gradient(135deg, #ef4444, #f97316)";
+            battleBadge.style.color = "white";
+            battleBadge.style.boxShadow = "0 0 10px rgba(239, 68, 68, 0.4)";
+            battleBadge.title = isAdmin && !isOpen ? "متاح للأدمن (مغلق للطلاب)" : "متاح للجميع";
+        } else {
+            battleBadge.textContent = "Soon ⏳";
+            battleBadge.style.background = "linear-gradient(135deg, #f59e0b, #d97706)";
+            battleBadge.style.color = "#ffffff";
+            battleBadge.style.boxShadow = "0 0 10px rgba(245, 158, 11, 0.4)";
+            battleBadge.title = "قريباً لجميع الطلاب";
+        }
+    }
+
+    const adminStatusBadge = document.getElementById("admin-battle-room-status-badge");
+    const adminToggleBtn = document.getElementById("btn-toggle-battle-room-access");
+    const adminToggleIcon = document.getElementById("icon-toggle-battle-room");
+    const adminToggleText = document.getElementById("text-toggle-battle-room");
+
+    if (adminStatusBadge) {
+        if (isOpen) {
+            adminStatusBadge.textContent = "متاح للجميع ✅";
+            adminStatusBadge.style.background = "rgba(16, 185, 129, 0.15)";
+            adminStatusBadge.style.color = "#10b981";
+        } else {
+            adminStatusBadge.textContent = "مغلق للطلاب (قريباً ⏳)";
+            adminStatusBadge.style.background = "rgba(249, 115, 22, 0.15)";
+            adminStatusBadge.style.color = "#f97316";
+        }
+    }
+
+    if (adminToggleBtn && adminToggleText && adminToggleIcon) {
+        if (isOpen) {
+            adminToggleText.textContent = "إغلاق للطلاب (تحويل إلى قريباً ⏳)";
+            adminToggleIcon.className = "fa-solid fa-toggle-on";
+            adminToggleBtn.className = "btn btn-secondary btn-outline";
+            adminToggleBtn.style.borderColor = "#f97316";
+            adminToggleBtn.style.color = "#f97316";
+        } else {
+            adminToggleText.textContent = "إتاحة لجميع الطلاب الآن ✅";
+            adminToggleIcon.className = "fa-solid fa-toggle-off";
+            adminToggleBtn.className = "btn btn-primary";
+            adminToggleBtn.style.borderColor = "";
+            adminToggleBtn.style.color = "";
+        }
+    }
+}
+
+async function fetchBattleRoomPublicStatus(forceBypassCache = false) {
+    try {
+        const cached = localStorage.getItem("hawari_battle_room_open");
+        if (cached !== null) {
+            state.isBattleRoomOpen = cached === "true";
+            updateBattleRoomUIElements();
+        }
+
+        const cacheBuster = forceBypassCache ? `&_t=${Date.now()}` : "";
+        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1", "Cache-Control": "no-cache" } } : undefined;
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.system_battle_room_config&select=content,updated_at${cacheBuster}`, fetchOptions);
+
+        let configData = null;
+        if (Array.isArray(records) && records.length > 0 && records[0] && records[0].content) {
+            try { configData = JSON.parse(records[0].content); } catch (e) {}
+        } else if (records && Array.isArray(records.data) && records.data[0] && records.data[0].content) {
+            try { configData = JSON.parse(records.data[0].content); } catch (e) {}
+        }
+
+        if (configData && typeof configData.is_open === "boolean") {
+            state.isBattleRoomOpen = configData.is_open;
+            try {
+                localStorage.setItem("hawari_battle_room_open", configData.is_open ? "true" : "false");
+            } catch (e) {}
+            updateBattleRoomUIElements();
+        }
+    } catch (err) {
+        console.error("[BattleRoom] Error fetching public status:", err);
+    }
+}
+
+async function saveBattleRoomPublicStatus(isOpen) {
+    state.isBattleRoomOpen = isOpen;
+    try {
+        localStorage.setItem("hawari_battle_room_open", isOpen ? "true" : "false");
+    } catch (e) {}
+    updateBattleRoomUIElements();
+
+    const payload = {
+        group_name: "system_battle_room_config",
+        content: JSON.stringify({ is_open: isOpen, updated_at: new Date().toISOString() }),
+        updated_at: new Date().toISOString()
+    };
+
+    try {
+        const res = await supabaseRequest("hawari_announcements?on_conflict=group_name", {
+            method: "POST",
+            headers: {
+                "Prefer": "resolution=merge-duplicates,return=representation"
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (res && res.error) {
+            console.error("[BattleRoom] Error saving public status:", res.error);
+            showToast("خطأ", "فشل حفظ حالة غرف التحدي سحابياً.", "danger");
+            return false;
+        }
+
+        if (isOpen) {
+            showToast("تم فتح غرف التحدي 🚀", "أصبحت غرف التحدي 1v1 الآن متاحة لجميع الطلاب على المنصة!", "success");
+        } else {
+            showToast("تم تحويل الغرفة إلى قريباً ⏳", "غرف التحدي الآن مغلقة أمام الطلاب (قريباً)، وتبقى متاحة لحساب الأدمن فقط.", "info");
+        }
+
+        fetchBattleRoomPublicStatus(true).catch(() => {});
+        return true;
+    } catch (err) {
+        console.error("[BattleRoom] Exception saving public status:", err);
+        showToast("خطأ", "فشل الاتصال بالسيرفر لحفظ الحالة.", "danger");
+        return false;
+    }
+}
+
+function bindBattleRoomAdminControls() {
+    const toggleBtn = document.getElementById("btn-toggle-battle-room-access");
+    if (toggleBtn && !toggleBtn.dataset.bound) {
+        toggleBtn.dataset.bound = "true";
+        toggleBtn.onclick = async () => {
+            const nextState = !state.isBattleRoomOpen;
+            toggleBtn.disabled = true;
+            const originalHtml = toggleBtn.innerHTML;
+            toggleBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> جاري التحديث...`;
+            await saveBattleRoomPublicStatus(nextState);
+            toggleBtn.disabled = false;
+            updateBattleRoomUIElements();
+        };
+    }
+    updateBattleRoomUIElements();
 }
 
 const _lastQuizResultsFetch = {};
@@ -4729,6 +4906,9 @@ function enterWorkspace() {
         if (btnAdminAdd) btnAdminAdd.classList.add("hidden");
         document.querySelectorAll(".admin-only-btn").forEach(el => el.classList.add("hidden"));
     }
+
+    updateBattleRoomUIElements();
+    fetchBattleRoomPublicStatus();
 
     // Default route
     try {
@@ -6621,6 +6801,8 @@ function renderAdminPanel() {
                 });
             } else if (target === "admin-announcements-tab") {
                 bindAdminAnnouncementControls();
+                bindBattleRoomAdminControls();
+                fetchBattleRoomPublicStatus(true);
                 fetchAnnouncement(state.activeGroup).then(() => {
                     const txt = document.getElementById("admin-announcement-text");
                     if (txt) txt.value = state.announcement || "";

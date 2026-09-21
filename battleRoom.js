@@ -46,6 +46,9 @@ export const battleState = {
     opponentScore: 0,
     myAnswered: false,
     opponentAnswered: false,
+    myCurrentSelection: null,
+    myAnswerLocked: false,
+    opponentAnswerLocked: false,
     myAnswers: {}, // { [qIdx]: { selectedOption, isCorrect, timeRemaining, scoreEarned } }
     opponentAnswers: {},
 
@@ -587,6 +590,9 @@ function joinRoomChannel(code, isHost) {
         .on("broadcast", { event: "START_COUNTDOWN" }, ({ payload }) => {
             handleStartCountdown(payload);
         })
+        .on("broadcast", { event: "OPPONENT_SELECTING" }, () => {
+            handleOpponentSelecting();
+        })
         .on("broadcast", { event: "OPPONENT_ANSWERED" }, ({ payload }) => {
             handleOpponentAnswered(payload);
         })
@@ -805,17 +811,14 @@ function handleLobbyData(payload) {
     battleState.activeRoom.questionIds = payload.questionIds;
     battleState.activeRoom.opponent = payload.host;
 
-    // Load question objects from local cache using IDs (Zero-Egress)
-    const pool = getQuestionsBase();
-    const questionMap = new Map(pool.map(q => [q.id, q]));
-    let resolvedQuestions = payload.questionIds.map(id => questionMap.get(id)).filter(Boolean);
-
-    // Fallback: If guest local cache is missing any question, use host fullQuestions payload
-    if (resolvedQuestions.length < payload.questionIds.length && Array.isArray(payload.fullQuestions) && payload.fullQuestions.length === payload.questionIds.length) {
-        console.warn("[BattleRoom] Incomplete local question cache; using host fallback payload.");
-        resolvedQuestions = payload.fullQuestions;
+    // Use Host's synchronized questions payload directly to guarantee identical questions and correctOption parity
+    if (Array.isArray(payload.fullQuestions) && payload.fullQuestions.length > 0) {
+        battleState.questions = payload.fullQuestions;
+    } else {
+        const pool = getQuestionsBase();
+        const questionMap = new Map(pool.map(q => [q.id, q]));
+        battleState.questions = payload.questionIds.map(id => questionMap.get(id)).filter(Boolean);
     }
-    battleState.questions = resolvedQuestions;
 
     // Switch to waiting screen with connected opponent
     const codeEl = document.getElementById("battle-waiting-room-code");
@@ -941,6 +944,9 @@ function renderCurrentArenaQuestion() {
 
     battleState.myAnswered = false;
     battleState.opponentAnswered = false;
+    battleState.myCurrentSelection = null;
+    battleState.myAnswerLocked = false;
+    battleState.opponentAnswerLocked = false;
 
     // Reset Player Badges to "Thinking..."
     const p1Status = document.getElementById("battle-arena-p1-status");
@@ -989,6 +995,28 @@ function renderCurrentArenaQuestion() {
         optionsContainer.appendChild(btn);
     });
 
+    // Dynamic Action Row below Options for Confirm Button & Hint
+    let actionRow = document.getElementById("battle-arena-action-row");
+    if (!actionRow) {
+        actionRow = document.createElement("div");
+        actionRow.id = "battle-arena-action-row";
+        actionRow.style.cssText = "display: flex; justify-content: space-between; align-items: center; margin-top: 18px; flex-wrap: wrap; gap: 12px;";
+        optionsContainer.parentNode.appendChild(actionRow);
+    }
+    actionRow.innerHTML = `
+        <span id="battle-selection-hint" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">
+            <i class="fa-solid fa-hand-pointer"></i> يمكنك تغيير إجابتك بحرية طالما العداد شغال
+        </span>
+        <button type="button" id="battle-btn-confirm" class="btn btn-primary" style="display: none; font-weight: 700; padding: 8px 20px; border-radius: 8px; font-size: 0.9rem; align-items: center; gap: 6px;">
+            <i class="fa-solid fa-check-circle"></i> تأكيد الإجابة ⚡
+        </button>
+    `;
+
+    const btnConfirm = document.getElementById("battle-btn-confirm");
+    if (btnConfirm) {
+        btnConfirm.onclick = () => lockAndSubmitCurrentAnswer(q, false);
+    }
+
     // Start Timer
     battleState.totalTime = battleState.activeRoom?.timeLimit || 30;
     battleState.timeRemaining = battleState.totalTime;
@@ -1008,65 +1036,131 @@ function renderCurrentArenaQuestion() {
 
         if (battleState.timeRemaining <= 0) {
             clearInterval(battleState.timerInterval);
-            handleQuestionTimeout(q);
+            // AUTO-SUBMIT: Whatever choice is selected when timer reaches 0 is counted 100%!
+            lockAndSubmitCurrentAnswer(q, true);
         }
     }, 1000);
 }
 
 /**
- * Handle Current Player Selecting an Answer Option
+ * Handle Current Player Selecting an Answer Option (Allows changing choice anytime before lock)
  */
 function handlePlayerSelectAnswer(selectedKey, question) {
-    if (battleState.myAnswered) return;
-    battleState.myAnswered = true;
+    if (battleState.myAnswerLocked) return;
+    battleState.myCurrentSelection = selectedKey;
 
-    // Highlight selected button using platform .selected class
+    // Highlight selected button, clear others
+    const allBtns = document.querySelectorAll(".battle-option-btn");
+    allBtns.forEach(b => b.classList.remove("selected"));
+
     const selectedBtn = document.getElementById(`battle-opt-${selectedKey}`);
     if (selectedBtn) {
         selectedBtn.classList.add("selected");
     }
 
-    // Disable option clicks
+    // Reveal and enable confirm button
+    const btnConfirm = document.getElementById("battle-btn-confirm");
+    if (btnConfirm) {
+        btnConfirm.style.display = "inline-flex";
+    }
+
+    const hint = document.getElementById("battle-selection-hint");
+    if (hint) {
+        hint.innerHTML = `<i class="fa-solid fa-check-circle" style="color: #10b981;"></i> تم اختيار <strong>[${selectedKey}]</strong> (يمكنك التغيير أو التأكيد الآن)`;
+    }
+
+    // Status badge: Selected
+    const p1Status = document.getElementById("battle-arena-p1-status");
+    if (p1Status) {
+        p1Status.innerText = "Selected ✓";
+        p1Status.style.background = "rgba(59, 130, 246, 0.2)";
+        p1Status.style.color = "#3b82f6";
+    }
+
+    // Notify opponent neutrally (without revealing chosen option or points)
+    if (battleState.roomChannel) {
+        battleState.roomChannel.send({
+            type: "broadcast",
+            event: "OPPONENT_SELECTING",
+            payload: { hasSelection: true }
+        }).catch(() => {});
+    }
+}
+
+/**
+ * Handle Opponent Selecting Event
+ */
+function handleOpponentSelecting() {
+    const p2Status = document.getElementById("battle-arena-p2-status");
+    if (p2Status && !battleState.opponentAnswerLocked) {
+        p2Status.innerText = "Selected 💭";
+        p2Status.style.background = "rgba(239, 68, 68, 0.2)";
+        p2Status.style.color = "#ef4444";
+    }
+}
+
+/**
+ * Lock and Submit Current Answer (Called via "تأكيد" button OR automatically on timer timeout)
+ */
+function lockAndSubmitCurrentAnswer(question, isTimeout = false) {
+    if (battleState.myAnswerLocked) return;
+    battleState.myAnswerLocked = true;
+    battleState.myAnswered = true;
+
+    // Lock option buttons
     const allBtns = document.querySelectorAll(".battle-option-btn");
     allBtns.forEach(b => b.style.pointerEvents = "none");
 
-    const isCorrect = selectedKey === question.correctOption;
-    const timeRem = battleState.timeRemaining;
-    const pointsEarned = isCorrect ? 10 : 0;
+    const btnConfirm = document.getElementById("battle-btn-confirm");
+    if (btnConfirm) {
+        btnConfirm.style.display = "none";
+    }
 
+    const selectedKey = battleState.myCurrentSelection;
+    const isCorrect = (selectedKey && selectedKey === question.correctOption);
+    const pointsEarned = isCorrect ? 10 : 0;
     battleState.myScore += pointsEarned;
+
+    const timeRem = battleState.timeRemaining;
     battleState.myAnswers[battleState.currentQuestionIndex] = {
-        selected: selectedKey,
+        selected: selectedKey || null,
         correct: question.correctOption,
-        isCorrect: isCorrect,
+        isCorrect: !!isCorrect,
         timeRemaining: timeRem,
         points: pointsEarned
     };
 
-    // Update HUD Score & Status Badge
-    const p1Score = document.getElementById("battle-arena-p1-score");
+    // Update HUD Badge
     const p1Status = document.getElementById("battle-arena-p1-status");
-    if (p1Score) p1Score.innerText = `${battleState.myScore} pts`;
     if (p1Status) {
-        p1Status.innerText = "Answered ⚡";
+        p1Status.innerText = selectedKey ? "Locked ⚡" : "Timed Out ⏱️";
         p1Status.style.background = "rgba(16, 185, 129, 0.15)";
         p1Status.style.color = "#10b981";
     }
 
-    // Notify Opponent without revealing the chosen option
+    const hint = document.getElementById("battle-selection-hint");
+    if (hint) {
+        hint.innerHTML = selectedKey
+            ? `<i class="fa-solid fa-lock" style="color: #10b981;"></i> تم تثبيت اختيارك [${selectedKey}] بنجاح.`
+            : `<i class="fa-solid fa-clock" style="color: #ef4444;"></i> انتهى الوقت دون اختيار.`;
+    }
+
+    // Broadcast neutral lock notification to opponent (sharing selectedKey for the end-of-match review card)
     if (battleState.roomChannel) {
         battleState.roomChannel.send({
             type: "broadcast",
             event: "OPPONENT_ANSWERED",
             payload: {
+                locked: true,
+                selectedKey: selectedKey || null,
                 pointsEarned: pointsEarned,
                 totalScore: battleState.myScore,
                 timeRemaining: timeRem
             }
-        });
+        }).catch(() => {});
     }
 
-    // Check if both players have answered
+    // Check if both players have locked
     checkBothAnsweredAdvance(question);
 }
 
@@ -1075,13 +1169,15 @@ function handlePlayerSelectAnswer(selectedKey, question) {
  */
 function handleOpponentAnswered(payload) {
     battleState.opponentAnswered = true;
-    battleState.opponentScore = payload.totalScore;
+    battleState.opponentAnswerLocked = true;
+    if (typeof payload.totalScore === "number") {
+        battleState.opponentScore = payload.totalScore;
+    }
+    battleState.opponentAnswers[battleState.currentQuestionIndex] = payload;
 
-    const p2Score = document.getElementById("battle-arena-p2-score");
     const p2Status = document.getElementById("battle-arena-p2-status");
-    if (p2Score) p2Score.innerText = `${battleState.opponentScore} pts`;
     if (p2Status) {
-        p2Status.innerText = "Answered ⚡";
+        p2Status.innerText = payload.selectedKey ? "Locked ⚡" : "Timed Out ⏱️";
         p2Status.style.background = "rgba(16, 185, 129, 0.15)";
         p2Status.style.color = "#10b981";
     }
@@ -1133,48 +1229,32 @@ function handleOpponentForfeit(payload) {
  * Handle Question Timeout (0 seconds left)
  */
 function handleQuestionTimeout(question) {
-    if (!battleState.myAnswered) {
-        battleState.myAnswered = true;
-        battleState.myAnswers[battleState.currentQuestionIndex] = {
-            selected: null,
-            correct: question.correctOption,
-            isCorrect: false,
-            timeRemaining: 0,
-            points: 0
-        };
-    }
-    revealQuestionFeedbackAndAdvance(question);
+    lockAndSubmitCurrentAnswer(question, true);
 }
 
 /**
  * Check if both players have submitted and advance
  */
 function checkBothAnsweredAdvance(question) {
-    if (battleState.myAnswered && battleState.opponentAnswered) {
+    if (battleState.myAnswerLocked && battleState.opponentAnswerLocked) {
         clearInterval(battleState.timerInterval);
-        revealQuestionFeedbackAndAdvance(question);
+        advanceToNextQuestionClean();
     }
 }
 
 /**
- * Reveal correct answer highlight using platform .correct-choice / .incorrect-choice classes
+ * Clean transition without showing green/red answers mid-match (Zero-Reveal)
  */
-function revealQuestionFeedbackAndAdvance(question) {
-    const correctBtn = document.getElementById(`battle-opt-${question.correctOption}`);
-    if (correctBtn) {
-        correctBtn.classList.add("correct-choice");
-    }
-
-    const myChoice = battleState.myAnswers[battleState.currentQuestionIndex]?.selected;
-    if (myChoice && myChoice !== question.correctOption) {
-        const wrongBtn = document.getElementById(`battle-opt-${myChoice}`);
-        if (wrongBtn) wrongBtn.classList.add("incorrect-choice");
-    }
+function advanceToNextQuestionClean() {
+    const p1Status = document.getElementById("battle-arena-p1-status");
+    const p2Status = document.getElementById("battle-arena-p2-status");
+    if (p1Status) p1Status.innerText = "Next Q...";
+    if (p2Status) p2Status.innerText = "Next Q...";
 
     setTimeout(() => {
         battleState.currentQuestionIndex++;
         renderCurrentArenaQuestion();
-    }, 1800);
+    }, 900);
 }
 
 /**
@@ -1264,24 +1344,39 @@ function renderBattleReviewList() {
     if (!list) return;
     list.innerHTML = "";
 
+    const opponent = battleState.activeRoom?.opponent;
+    const opName = opponent?.displayName || formatUserDisplay(opponent) || "Colleague";
+
     battleState.questions.forEach((q, idx) => {
         const myAns = battleState.myAnswers[idx];
         const isCorrect = myAns?.isCorrect;
         const myChoice = myAns?.selected || "None (Timed Out)";
 
+        const opAns = battleState.opponentAnswers[idx];
+        const opChoice = opAns?.selectedKey || "None (Timed Out)";
+        const opIsCorrect = (opChoice && opChoice === q.correctOption);
+
         const item = document.createElement("div");
         item.className = "card";
-        item.style.cssText = "padding: 16px; margin-bottom: 10px;";
+        item.style.cssText = "padding: 16px; margin-bottom: 12px; border-radius: 12px;";
         item.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">Q${idx + 1}: ${q.source || 'Exam'} • ${q.topic || 'Medical Case'}</span>
-                <span class="badge" style="font-size: 0.78rem; font-weight: 700; padding: 2px 8px; ${isCorrect ? 'background: rgba(16,185,129,0.15); color: #10b981;' : 'background: rgba(239,68,68,0.15); color: #ef4444;'}">
-                    ${isCorrect ? 'Correct (+points)' : 'Incorrect'}
+                <span class="badge" style="font-size: 0.78rem; font-weight: 700; padding: 3px 10px; ${isCorrect ? 'background: rgba(16,185,129,0.15); color: #10b981;' : 'background: rgba(239,68,68,0.15); color: #ef4444;'}">
+                    ${isCorrect ? 'You: Correct (+10 pts)' : 'You: Incorrect (0 pts)'}
                 </span>
             </div>
-            <div style="font-size: 0.92rem; color: var(--text-primary); margin-bottom: 8px; line-height: 1.5;">${q.text}</div>
-            <div style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 6px;">
-                <strong>Your Choice:</strong> Option ${myChoice} &bull; <strong>Model Answer:</strong> Option ${q.correctOption}
+            <div style="font-size: 0.92rem; color: var(--text-primary); margin-bottom: 10px; line-height: 1.5;">${q.text}</div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; font-size: 0.85rem;">
+                <span style="padding: 4px 10px; border-radius: 6px; font-weight: 700; ${isCorrect ? 'background: rgba(16,185,129,0.15); color: #10b981;' : 'background: rgba(239,68,68,0.15); color: #ef4444;'}">
+                    You: Option [${myChoice}] ${isCorrect ? '(+10 pts)' : '(0 pts)'}
+                </span>
+                <span style="padding: 4px 10px; border-radius: 6px; font-weight: 700; ${opIsCorrect ? 'background: rgba(16,185,129,0.15); color: #10b981;' : 'background: rgba(239,68,68,0.15); color: #ef4444;'}">
+                    ${opName}: Option [${opChoice}] ${opIsCorrect ? '(+10 pts)' : '(0 pts)'}
+                </span>
+                <span style="padding: 4px 10px; border-radius: 6px; font-weight: 700; background: rgba(59,130,246,0.15); color: #3b82f6;">
+                    Model Answer: Option [${q.correctOption}]
+                </span>
             </div>
             <div style="font-size: 0.86rem; background: var(--bg-primary); border-radius: 8px; padding: 10px 14px; color: var(--text-secondary); line-height: 1.5; border-left: 3px solid var(--primary-color);">
                 <strong>Clinical Rationale:</strong> ${q.explanation || 'Verified evidence-based clinical answer.'}

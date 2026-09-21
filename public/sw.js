@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hawari-cache-v3.2';
+const CACHE_NAME = 'hawari-cache-v3.3';
 const ASSETS = [
   '/',
   '/index.html',

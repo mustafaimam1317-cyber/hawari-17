@@ -3039,6 +3039,39 @@ async function deleteReportTaskFromCloud(id) {
     }
 }
 
+async function updateReportTaskInCloud(rt) {
+    if (!rt || !rt.id) return;
+    const group = (state.activeGroup || "infection").toLowerCase();
+    const payload = {
+        title: rt.title,
+        time_limit: rt.duration,
+        question_ids: rt.questions
+    };
+    try {
+        await supabaseRequest(`hawari_report_tasks?id=eq.${encodeURIComponent(rt.id)}`, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                "Prefer": "return=representation"
+            },
+            body: JSON.stringify(payload)
+        });
+        if (window.HawariExamCacheMemory && window.HawariExamCacheMemory[group]) {
+            delete window.HawariExamCacheMemory[group];
+        }
+        if (questionBankSyncChannel) {
+            questionBankSyncChannel.postMessage({
+                type: "EXAM_LIST_UPDATED",
+                group: group
+            });
+        }
+        console.log(`[Sync] Successfully updated report task "${rt.title}" in cloud`);
+    } catch (e) {
+        console.error("[Sync] Failed to update report task in cloud:", e);
+        showToast("Cloud Sync Warning", "Could not sync exam updates to cloud immediately.", "warning");
+    }
+}
+
 async function fetchCourseQuizzes(group, forceRefresh = false) {
     if (!group) return;
 
@@ -9204,6 +9237,57 @@ function renderAdminReportTasksTab() {
 
     renderManualQuestionsPreview();
 
+    // Render interactive questions manager for exams in edit mode
+    function renderEditingQuestionsManager() {
+        const section = document.getElementById("admin-rt-editing-questions-section");
+        const listEl = document.getElementById("admin-rt-editing-questions-list");
+        const countEl = document.getElementById("admin-rt-editing-q-count");
+        if (!section || !listEl || !countEl) return;
+
+        const editIdInput = document.getElementById("admin-rt-edit-id");
+        const isEditMode = !!(editIdInput && editIdInput.value);
+
+        if (!isEditMode || !Array.isArray(window.rtEditingQuestions) || window.rtEditingQuestions.length === 0) {
+            section.classList.add("hidden");
+            listEl.innerHTML = "";
+            countEl.innerText = "0";
+            return;
+        }
+
+        section.classList.remove("hidden");
+        countEl.innerText = window.rtEditingQuestions.length;
+        listEl.innerHTML = "";
+
+        window.rtEditingQuestions.forEach((q, idx) => {
+            const row = document.createElement("div");
+            row.style.cssText = "display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 8px; font-size: 0.85rem;";
+            
+            const promptSnippet = (q.text || "").replace(/<[^>]*>?/gm, "").substring(0, 140);
+            row.innerHTML = `
+                <div style="flex: 1; min-width: 0; margin-right: 12px; text-align: left;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
+                        <span style="font-weight: 700; color: var(--primary-color);">Q${idx + 1}</span>
+                        <span class="badge" style="background: rgba(59, 130, 246, 0.15); color: var(--primary-color); font-size: 0.72rem; padding: 2px 6px;">Ans: ${q.correctOption || "A"}</span>
+                    </div>
+                    <div style="color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;">
+                        ${promptSnippet}
+                    </div>
+                </div>
+                <div style="display: flex; gap: 6px; flex-shrink: 0;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="openEditRtQuestionModal(${idx})" style="padding: 3px 8px; font-size: 0.78rem;" title="Edit question, options, and explanation">
+                        <i class="fa-solid fa-pen-to-square"></i> Edit
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeQuestionFromEditingTask(${idx})" style="padding: 3px 8px; font-size: 0.78rem;" title="Remove from exam">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </div>
+            `;
+            listEl.appendChild(row);
+        });
+    }
+
+    renderEditingQuestionsManager();
+
     // Bind manual add question button click
     const btnAddManual = document.getElementById("btn-admin-rt-add-manual");
     if (btnAddManual && !btnAddManual.dataset.bound) {
@@ -9387,6 +9471,9 @@ function renderAdminReportTasksTab() {
                 </div>
             </div>
             <div class="admin-q-actions">
+                <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem;margin-right:6px;" onclick="editReportTaskAdmin('${rt.id}')">
+                    <i class="fa-solid fa-pen-to-square"></i> Edit
+                </button>
                 <button class="btn btn-danger" style="padding:6px 12px;font-size:0.8rem" onclick="deleteReportTaskAdmin('${rt.id}')">
                     <i class="fa-regular fa-trash-can"></i> Delete
                 </button>
@@ -9412,6 +9499,69 @@ function renderAdminReportTasksTab() {
                 showToast("Invalid Duration", "Please enter a valid exam duration in minutes.", "danger");
                 return;
             }
+
+            const editIdInput = document.getElementById("admin-rt-edit-id");
+            const editId = editIdInput ? editIdInput.value.trim() : "";
+
+            const sourceQuestions = (state.questions && state.questions.length > 0) ? state.questions : ((typeof globalQuestionsCache !== "undefined" && globalQuestionsCache && globalQuestionsCache.length > 0) ? globalQuestionsCache : getGroupQuestionsSeed());
+
+            // Check if we are updating an existing exam (Edit Mode)
+            if (editId) {
+                // Merge any newly checked DB questions or manual questions into window.rtEditingQuestions
+                const dbSelected = sourceQuestions.filter(q => window.rtSelectedQuestionIds.has(q.id)).map(q => ({
+                    id: q.id,
+                    source: q.source,
+                    topic: q.topic,
+                    text: q.text,
+                    options: { ...q.options },
+                    correctOption: q.correctOption,
+                    explanation: q.explanation || "Correct answer confirmed.",
+                    status: "unused",
+                    marked: false,
+                    notes: "",
+                    highlightedHtml: ""
+                }));
+                const existingIdSet = new Set((window.rtEditingQuestions || []).map(q => q.id));
+                dbSelected.forEach(q => {
+                    if (!existingIdSet.has(q.id)) {
+                        window.rtEditingQuestions.push(q);
+                    }
+                });
+                if (window.rtManualQuestions && window.rtManualQuestions.length > 0) {
+                    window.rtEditingQuestions.push(...window.rtManualQuestions);
+                }
+
+                if (!window.rtEditingQuestions || window.rtEditingQuestions.length === 0) {
+                    showToast("No Questions", "Exam must have at least one question.", "danger");
+                    return;
+                }
+
+                const targetIdx = state.reportTasks.findIndex(t => t.id === editId);
+                if (targetIdx !== -1) {
+                    const existing = state.reportTasks[targetIdx];
+                    const updatedRt = {
+                        ...existing,
+                        title: title,
+                        duration: parseInt(duration),
+                        questions: window.rtEditingQuestions,
+                        lastUpdated: Date.now()
+                    };
+                    state.reportTasks[targetIdx] = updatedRt;
+                    saveStateToStorage(true);
+                    updateReportTaskInCloud(updatedRt);
+
+                    showToast("Mock Exam Updated", `Successfully updated "${title}" with ${updatedRt.questions.length} questions.`, "success");
+
+                    cancelEditReportTaskAdmin();
+                    renderAdminReportTasksTab();
+                    updateDashboardStats();
+                    if (state.activeView === "report-task") {
+                        renderReportTaskStudentView();
+                    }
+                }
+                return;
+            }
+
             const dbCount = window.rtSelectedQuestionIds ? window.rtSelectedQuestionIds.size : 0;
             const manualCount = window.rtManualQuestions ? window.rtManualQuestions.length : 0;
             if (dbCount === 0 && manualCount === 0) {
@@ -9420,7 +9570,6 @@ function renderAdminReportTasksTab() {
             }
 
             // Collect selected question details from the group's questions seed
-            const sourceQuestions = (state.questions && state.questions.length > 0) ? state.questions : ((typeof globalQuestionsCache !== "undefined" && globalQuestionsCache && globalQuestionsCache.length > 0) ? globalQuestionsCache : getGroupQuestionsSeed());
             const selectedQs = sourceQuestions.filter(q => window.rtSelectedQuestionIds.has(q.id)).map(q => {
                 return {
                     id: q.id,
@@ -9485,6 +9634,10 @@ function renderAdminReportTasksTab() {
 
 window.deleteReportTaskAdmin = async function(id) {
     if (confirm("Are you sure you want to delete this mock exam?")) {
+        const editIdInput = document.getElementById("admin-rt-edit-id");
+        if (editIdInput && editIdInput.value === id) {
+            cancelEditReportTaskAdmin();
+        }
         state.reportTasks = state.reportTasks.filter(rt => rt.id !== id);
         saveStateToStorage();
         
@@ -9497,6 +9650,162 @@ window.deleteReportTaskAdmin = async function(id) {
         if (state.activeView === "report-task") {
             renderReportTaskStudentView();
         }
+    }
+};
+
+window.editReportTaskAdmin = function(rtId) {
+    if (!state.reportTasks) return;
+    const task = state.reportTasks.find(t => t.id === rtId);
+    if (!task) {
+        showToast("Task Not Found", "Could not locate this exam record.", "error");
+        return;
+    }
+
+    const editIdInput = document.getElementById("admin-rt-edit-id");
+    const titleInput = document.getElementById("admin-rt-title");
+    const durationInput = document.getElementById("admin-rt-duration");
+    const headingEl = document.getElementById("admin-rt-form-heading");
+    const descEl = document.getElementById("admin-rt-form-desc");
+    const editBanner = document.getElementById("admin-rt-edit-banner");
+    const badgeTitle = document.getElementById("admin-rt-editing-title-badge");
+    const submitText = document.getElementById("admin-rt-submit-text");
+
+    if (editIdInput) editIdInput.value = task.id;
+    if (titleInput) titleInput.value = task.title || "";
+    if (durationInput) durationInput.value = task.duration || 60;
+    if (headingEl) headingEl.innerText = "Edit Timed Mock Exam";
+    if (descEl) descEl.innerText = "Modify exam title, time limit, questions, and explanations.";
+    if (editBanner) editBanner.classList.remove("hidden");
+    if (badgeTitle) badgeTitle.innerText = task.title || task.id;
+    if (submitText) submitText.innerText = "Update Mock Exam";
+
+    // Deep clone questions for editing
+    window.rtEditingQuestions = JSON.parse(JSON.stringify(task.questions || []));
+
+    // Clear previous draft manual questions & DB selections to avoid mixing
+    window.rtManualQuestions = [];
+    window.rtSelectedQuestionIds = new Set();
+    const manualPreview = document.getElementById("admin-rt-manual-preview-section");
+    if (manualPreview) manualPreview.classList.add("hidden");
+
+    renderAdminReportTasksTab();
+
+    // Scroll smoothly to form
+    const form = document.getElementById("admin-report-task-form");
+    if (form) form.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    showToast("Editing Exam", `Now editing "${task.title}". You can modify its questions below.`, "info");
+};
+
+window.cancelEditReportTaskAdmin = function() {
+    const editIdInput = document.getElementById("admin-rt-edit-id");
+    const titleInput = document.getElementById("admin-rt-title");
+    const durationInput = document.getElementById("admin-rt-duration");
+    const headingEl = document.getElementById("admin-rt-form-heading");
+    const descEl = document.getElementById("admin-rt-form-desc");
+    const editBanner = document.getElementById("admin-rt-edit-banner");
+    const submitText = document.getElementById("admin-rt-submit-text");
+    const qSection = document.getElementById("admin-rt-editing-questions-section");
+
+    if (editIdInput) editIdInput.value = "";
+    if (titleInput) titleInput.value = "";
+    if (durationInput) durationInput.value = "";
+    if (headingEl) headingEl.innerText = "Create Timed Mock Exam";
+    if (descEl) descEl.innerText = "Design a custom, timed exam with selected questions.";
+    if (editBanner) editBanner.classList.add("hidden");
+    if (submitText) submitText.innerText = "Publish Mock Exam";
+    if (qSection) qSection.classList.add("hidden");
+
+    window.rtEditingQuestions = [];
+    window.rtManualQuestions = [];
+    window.rtSelectedQuestionIds = new Set();
+
+    renderAdminReportTasksTab();
+    showToast("Edit Cancelled", "Exited edit mode. Returned to new exam creation.", "info");
+};
+
+window.openEditRtQuestionModal = function(idx) {
+    if (!window.rtEditingQuestions || !window.rtEditingQuestions[idx]) return;
+    const q = window.rtEditingQuestions[idx];
+
+    const idxInput = document.getElementById("edit-rt-q-index");
+    const textInput = document.getElementById("edit-rt-q-text");
+    const optAInput = document.getElementById("edit-rt-q-opt-a");
+    const optBInput = document.getElementById("edit-rt-q-opt-b");
+    const optCInput = document.getElementById("edit-rt-q-opt-c");
+    const optDInput = document.getElementById("edit-rt-q-opt-d");
+    const optEInput = document.getElementById("edit-rt-q-opt-e");
+    const correctSelect = document.getElementById("edit-rt-q-correct");
+    const explInput = document.getElementById("edit-rt-q-explanation");
+
+    if (idxInput) idxInput.value = idx;
+    if (textInput) textInput.value = q.text || "";
+    
+    const opts = q.options || {};
+    if (optAInput) optAInput.value = opts.A || "";
+    if (optBInput) optBInput.value = opts.B || "";
+    if (optCInput) optCInput.value = opts.C || "";
+    if (optDInput) optDInput.value = opts.D || "";
+    if (optEInput) optEInput.value = opts.E || "";
+    
+    if (correctSelect) correctSelect.value = q.correctOption || "A";
+    if (explInput) explInput.value = q.explanation || "";
+
+    const modal = document.getElementById("modal-edit-rt-question");
+    if (modal) modal.classList.remove("hidden");
+};
+
+window.closeEditRtQuestionModal = function() {
+    const modal = document.getElementById("modal-edit-rt-question");
+    if (modal) modal.classList.add("hidden");
+};
+
+window.saveEditedRtQuestion = function() {
+    const idx = parseInt(document.getElementById("edit-rt-q-index")?.value);
+    if (isNaN(idx) || idx < 0 || !window.rtEditingQuestions || !window.rtEditingQuestions[idx]) {
+        showToast("Error", "Invalid question target index.", "danger");
+        return;
+    }
+
+    const text = (document.getElementById("edit-rt-q-text")?.value || "").trim();
+    const optA = (document.getElementById("edit-rt-q-opt-a")?.value || "").trim();
+    const optB = (document.getElementById("edit-rt-q-opt-b")?.value || "").trim();
+    const optC = (document.getElementById("edit-rt-q-opt-c")?.value || "").trim();
+    const optD = (document.getElementById("edit-rt-q-opt-d")?.value || "").trim();
+    const optE = (document.getElementById("edit-rt-q-opt-e")?.value || "").trim();
+    const correctOption = document.getElementById("edit-rt-q-correct")?.value || "A";
+    const explanation = (document.getElementById("edit-rt-q-explanation")?.value || "").trim();
+
+    if (!text || !optA || !optB || !optC || !optD) {
+        showToast("Missing Fields", "Please provide question text and Options A-D.", "warning");
+        return;
+    }
+
+    const targetQ = window.rtEditingQuestions[idx];
+    targetQ.text = sanitizeHTML(text);
+    targetQ.options = {
+        A: sanitizeHTML(optA),
+        B: sanitizeHTML(optB),
+        C: sanitizeHTML(optC),
+        D: sanitizeHTML(optD)
+    };
+    if (optE) targetQ.options.E = sanitizeHTML(optE);
+    else delete targetQ.options.E;
+
+    targetQ.correctOption = correctOption;
+    targetQ.explanation = sanitizeHTML(explanation) || "Correct answer confirmed.";
+
+    closeEditRtQuestionModal();
+    renderAdminReportTasksTab();
+    showToast("Question Saved", `Updated Question ${idx + 1} details.`, "success");
+};
+
+window.removeQuestionFromEditingTask = function(idx) {
+    if (!window.rtEditingQuestions || !window.rtEditingQuestions[idx]) return;
+    if (confirm(`Remove Question ${idx + 1} from this exam?`)) {
+        window.rtEditingQuestions.splice(idx, 1);
+        renderAdminReportTasksTab();
+        showToast("Question Removed", `Question was removed from current exam draft.`, "warning");
     }
 };
 

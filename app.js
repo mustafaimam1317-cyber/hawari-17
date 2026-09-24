@@ -3261,9 +3261,8 @@ async function fetchAnnouncement(groupName, forceBypassCache = false) {
     }
 
     try {
-        const cacheBuster = forceBypassCache ? `&_t=${Date.now()}` : "";
-        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1", "Cache-Control": "no-cache" } } : undefined;
-        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${encodeURIComponent(cleanGroup)}&select=content,updated_at${cacheBuster}`, fetchOptions);
+        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1", "Cache-Control": "no-cache", "Pragma": "no-cache" } } : undefined;
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.${encodeURIComponent(cleanGroup)}&select=content,updated_at`, fetchOptions);
         
         let serverContent = null;
         let isConfirmedEmpty = false;
@@ -3537,9 +3536,8 @@ async function fetchBattleRoomPublicStatus(forceBypassCache = false) {
             updateBattleRoomUIElements();
         }
 
-        const cacheBuster = forceBypassCache ? `&_t=${Date.now()}` : "";
-        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1", "Cache-Control": "no-cache" } } : undefined;
-        const records = await supabaseRequest(`hawari_announcements?group_name=eq.system_battle_room_config&select=content,updated_at${cacheBuster}`, fetchOptions);
+        const fetchOptions = forceBypassCache ? { headers: { "x-hawari-purge": "1", "Cache-Control": "no-cache", "Pragma": "no-cache" } } : undefined;
+        const records = await supabaseRequest(`hawari_announcements?group_name=eq.system_battle_room_config&select=content,updated_at`, fetchOptions);
 
         let configData = null;
         if (Array.isArray(records) && records.length > 0 && records[0] && records[0].content) {

@@ -41,9 +41,9 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Bypass cache for Supabase API and external CDNs if they need real-time data
-  if (url.origin.includes('supabase.co') || event.request.method !== 'GET') {
-    return; // Let browser handle it directly
+  // Only manage own origin assets - let browser handle external CDNs/fonts natively
+  if (url.origin !== self.location.origin || event.request.method !== 'GET') {
+    return; // Let browser handle external requests directly
   }
 
   // Network-First with Cache Fallback for maximum reliability
@@ -51,7 +51,7 @@ self.addEventListener('fetch', (event) => {
     fetch(event.request)
       .then((response) => {
         // Cache successful GET responses for our own origin
-        if (response && response.status === 200 && url.origin === self.location.origin) {
+        if (response && response.status === 200) {
           const responseToCache = response.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseToCache);
@@ -61,7 +61,7 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() => {
         // Fallback to cache if network is offline
-        return caches.match(event.request);
+        return caches.match(event.request).then((cached) => cached || Response.error());
       })
   );
 });

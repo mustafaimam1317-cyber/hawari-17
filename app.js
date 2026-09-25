@@ -10281,15 +10281,31 @@ window.retakeReportTaskStudent = function(rtId) {
 };
 
 window.retakeCourseQuizStudent = async function(quizId) {
-    if (!confirm("Are you sure you want to retake this quiz? This will delete your current score and allow you to re-solve it.")) return;
+    const qz = state.courseQuizzes.find(q => q.id === quizId);
+    const now = Date.now();
+    const isPractice = !qz || qz.status === 'moved_to_reports' || now > new Date(qz.endTime).getTime();
+
+    if (qz && !isPractice) {
+        showToast("غير مسموح", "لا يمكن إعادة الاختبار أثناء فترة انعقاده الرسمية. يتاح التدريب وإعادة المحاولة فقط بعد انتهاء موعد الاختبار وانتقاله لقسم الريبورتات.", "danger");
+        return;
+    }
+
+    if (!confirm("هل أنت متأكد من رغبتك في إعادة هذا الاختبار كتدريب؟ سيتم إعادة تهيئة محاولتك الحالية.")) return;
     
+    const userEmail = state.currentUser ? state.currentUser.email : "";
+    if (userEmail) {
+        try {
+            localStorage.removeItem(`hawari_quiz_submitted_${quizId}_${userEmail}`);
+        } catch (e) {}
+    }
+
     // Optimistic UI updates: update local state immediately so user sees changes instantly
-    state.quizResults = state.quizResults.filter(res => res.quiz_id !== quizId || res.email !== state.currentUser.email);
+    state.quizResults = state.quizResults.filter(res => res.quiz_id !== quizId || res.email !== userEmail);
     renderReportTaskStudentView();
-    showToast("Quiz Reset", "You can now start the quiz again.", "success");
+    showToast("تم إعادة تهيئة الاختبار", "يمكنك الآن بدء جولة تدريبية جديدة.", "success");
 
     try {
-        const id = `${quizId}_${state.currentUser.email}`;
+        const id = `${quizId}_${userEmail}`;
         await supabaseRequest(`hawari_quiz_results?id=eq.${id}`, {
             method: "DELETE"
         });
@@ -10357,7 +10373,13 @@ function renderCourseQuizzesStudentView() {
 
     quizzes.forEach(qz => {
         const start = new Date(qz.startTime).getTime();
-        const result = state.quizResults.find(r => r.quiz_id === qz.id && r.email === state.currentUser.email);
+        const end = new Date(qz.endTime).getTime();
+        const userEmail = state.currentUser ? state.currentUser.email : "";
+        let result = state.quizResults.find(r => r.quiz_id === qz.id && r.email === userEmail);
+        const localSubmitted = userEmail ? localStorage.getItem(`hawari_quiz_submitted_${qz.id}_${userEmail}`) : null;
+        if (!result && localSubmitted) {
+            result = { status: 'completed', score: 0, isLocalPending: true };
+        }
 
         let statusHtml = "";
         let scoreHtml = "";
@@ -10369,16 +10391,20 @@ function renderCourseQuizzesStudentView() {
                 ? `<div class="rt-status-indicator rt-status-inprogress" style="background-color: var(--color-danger-soft); color: var(--color-danger);"><i class="fa-solid fa-circle-xmark"></i> Failed (Left Exam)</div>`
                 : `<div class="rt-status-indicator rt-status-completed"><i class="fa-solid fa-circle-check"></i> Submitted</div>`;
             
-            scoreHtml = `<div class="rt-score-display">${result.score}%</div>`;
-            const end = new Date(qz.endTime).getTime();
+            const endFormatted = new Date(qz.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             if (now < end) {
-                const endFormatted = new Date(qz.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                scoreHtml = `
+                    <div class="rt-score-display" style="font-size: 0.92rem; color: var(--color-warning); background: var(--color-warning-soft, rgba(245, 158, 11, 0.1)); padding: 8px 12px; border-radius: 8px; border: 1px dashed var(--color-warning); margin: 12px 0; text-align: center;">
+                        <i class="fa-solid fa-hourglass-half"></i> قيد التصحيح (تعلن النتيجة في ${endFormatted})
+                    </div>
+                `;
                 buttonHtml = `
                     <button class="btn btn-secondary btn-block" disabled style="cursor: not-allowed; opacity: 0.75;" title="ستتاح المراجعة التفصيلية بعد انتهاء موعد الامتحان لجميع الطلاب في ${endFormatted}">
                         <i class="fa-solid fa-lock"></i> مراجعة الإجابات مغلقة حتى (${endFormatted})
                     </button>
                 `;
             } else {
+                scoreHtml = `<div class="rt-score-display">${result.isLocalPending ? 'Completed' : (result.score + '%')}</div>`;
                 buttonHtml = `
                     <button class="btn btn-secondary btn-block" onclick="reviewCourseQuizStudent('${qz.id}')">
                         <i class="fa-solid fa-chart-pie"></i> مراجعة الإجابات النموذجية
@@ -10623,18 +10649,21 @@ function updateDashboardStats() {
 
 // ================= COURSE QUIZ STRICT WORKSPACE & FLOW =================
 let quizTimerInterval = null;
+let _activeQuizVisibilityHandler = null;
 
 window.startCourseQuizStudent = function(quizId) {
     const qz = state.courseQuizzes.find(q => q.id === quizId);
     if (!qz) return;
 
-    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === state.currentUser.email);
-    if (result) {
-        showToast("Error", "You have already submitted this quiz.", "danger");
+    const userEmail = state.currentUser ? state.currentUser.email : "";
+    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === userEmail);
+    const localSubmitted = userEmail ? localStorage.getItem(`hawari_quiz_submitted_${quizId}_${userEmail}`) : null;
+    const isPractice = qz.status === "moved_to_reports" || new Date().getTime() > new Date(qz.endTime).getTime();
+
+    if (!isPractice && (result || localSubmitted)) {
+        showToast("عفواً - غير مسموح", "لقد أتممت تسليم هذا الاختبار بالفعل! لا يمكن إعادة الدخول أثناء فترة انعقاده الرسمية. يرجى انتظار انتهاء موعد الاختبار بالكامل لرؤية النتيجة والمراجعة.", "warning");
         return;
     }
-
-    const isPractice = qz.status === "moved_to_reports" || new Date().getTime() > new Date(qz.endTime).getTime();
 
     if (isPractice) {
         if (!confirm("هل تريد بدء هذا الاختبار كتدريب؟")) return;
@@ -10678,6 +10707,53 @@ window.startCourseQuizStudent = function(quizId) {
     overlay.oncopy = (e) => e.preventDefault();
     overlay.oncut = (e) => e.preventDefault();
     overlay.oncontextmenu = (e) => e.preventDefault();
+    overlay.style.userSelect = "none";
+    overlay.style.webkitUserSelect = "none";
+
+    // Dynamic Forensic Watermark Overlay
+    let qzWatermark = document.getElementById("quiz-watermark-overlay");
+    if (!qzWatermark) {
+        qzWatermark = document.createElement("div");
+        qzWatermark.id = "quiz-watermark-overlay";
+        qzWatermark.style.cssText = "position: absolute; inset: 0; pointer-events: none; z-index: 1; overflow: hidden; display: flex; flex-wrap: wrap; justify-content: space-around; align-items: center; opacity: 0.07; gap: 40px; padding: 20px;";
+        overlay.appendChild(qzWatermark);
+    }
+    const studentTag = userEmail || "HAWARI-EXAM";
+    qzWatermark.innerHTML = `
+        <div style="transform: rotate(-25deg); font-size: 1.1rem; font-weight: 700; color: var(--text-primary); user-select: none;">${studentTag}</div>
+        <div style="transform: rotate(-25deg); font-size: 1.1rem; font-weight: 700; color: var(--text-primary); user-select: none;">HAWARI PLATFORM &bull; ${studentTag}</div>
+        <div style="transform: rotate(-25deg); font-size: 1.1rem; font-weight: 700; color: var(--text-primary); user-select: none;">${studentTag}</div>
+    `;
+
+    // Strict Mode: Tab visibility listener during live official exam
+    if (_activeQuizVisibilityHandler) {
+        document.removeEventListener("visibilitychange", _activeQuizVisibilityHandler);
+        _activeQuizVisibilityHandler = null;
+    }
+    if (!isPractice) {
+        _activeQuizVisibilityHandler = () => {
+            if (document.visibilityState === "hidden" && state.activeQuiz && !state.activeQuiz.isPractice && !isQuizSubmitting) {
+                console.warn("[StrictExam] Student left or switched tab during live exam.");
+                const qId = state.activeQuiz.quizId;
+                const uEmail = state.currentUser ? state.currentUser.email : "";
+                if (_activeQuizVisibilityHandler) {
+                    document.removeEventListener("visibilitychange", _activeQuizVisibilityHandler);
+                    _activeQuizVisibilityHandler = null;
+                }
+                if (quizTimerInterval) clearInterval(quizTimerInterval);
+                state.activeQuiz = null;
+                const ov = document.getElementById("active-quiz-overlay");
+                if (ov) ov.classList.add("hidden");
+                document.body.style.overflow = "auto";
+                const sb = document.querySelector(".sidebar");
+                if (sb) sb.classList.remove("hidden");
+                const lay = document.getElementById("app-layout");
+                if (lay) lay.style.gridTemplateColumns = "";
+                submitQuizCheatZero(qId, uEmail);
+            }
+        };
+        document.addEventListener("visibilitychange", _activeQuizVisibilityHandler);
+    }
 
     document.getElementById("btn-prev-quiz-q").onclick = () => {
         if (state.activeQuiz.currentQuestionIdx > 0) {
@@ -10986,12 +11062,26 @@ async function submitActiveQuiz() {
         } catch (e) {}
     }
 
-    const isPractice = state.activeQuiz.isPractice;
+    const isPractice = state.activeQuiz ? state.activeQuiz.isPractice : false;
 
     try {
         await saveQuizResultToCloud(resultObj);
-        showToast("Success", `لقد أنهيت الاختبار بنجاح بنسبة ${score}%!`, "success");
         
+        if (!isPractice) {
+            if (userEmail) {
+                try {
+                    localStorage.setItem(`hawari_quiz_submitted_${qzId}_${userEmail}`, "1");
+                } catch (e) {}
+            }
+            showToast("تم التسليم بنجاح", "تم تسليم إجابتك بنجاح! انتظر ظهور النتيجة ومراجعة الإجابات بعد انتهاء موعد الاختبار بالكامل.", "success");
+        } else {
+            showToast("Success", `لقد أنهيت الاختبار بنجاح بنسبة ${score}%!`, "success");
+        }
+        
+        if (_activeQuizVisibilityHandler) {
+            document.removeEventListener("visibilitychange", _activeQuizVisibilityHandler);
+            _activeQuizVisibilityHandler = null;
+        }
         localStorage.removeItem("active_quiz_session");
         state.activeQuiz = null;
 
@@ -11030,7 +11120,16 @@ async function submitQuizCheatZero(quizId, email) {
     const quiz = state.courseQuizzes.find(q => q.id === quizId);
     const title = quiz ? quiz.title : "Course Quiz";
     
+    if (_activeQuizVisibilityHandler) {
+        document.removeEventListener("visibilitychange", _activeQuizVisibilityHandler);
+        _activeQuizVisibilityHandler = null;
+    }
     localStorage.removeItem("active_quiz_session");
+    if (email) {
+        try {
+            localStorage.setItem(`hawari_quiz_submitted_${quizId}_${email}`, "1");
+        } catch (e) {}
+    }
     
     const resultObj = {
         id: `${quizId}_${email}`,

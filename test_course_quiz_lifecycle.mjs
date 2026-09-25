@@ -37,6 +37,10 @@ assert(
     'startCourseQuizStudent checks both cloud result and localSubmitted lock to block active re-entry'
 );
 assert(
+    appCode.includes('const localSubmitted = userEmail ? localStorage.getItem'),
+    'startCourseQuizStudent properly defines localSubmitted preventing mobile ReferenceError'
+);
+assert(
     appCode.includes('لا يمكن إعادة الدخول أثناء فترة انعقاده الرسمية'),
     'Clear Arabic toast message displayed when a student attempts re-entry during active quiz window'
 );
@@ -63,12 +67,16 @@ assert(
     'Review button is enabled with full review trigger when now >= end'
 );
 assert(
-    appCode.includes('reviewCourseQuizStudent = function(quizId)'),
+    appCode.includes('reviewCourseQuizStudent = async function(quizId)') || appCode.includes('reviewCourseQuizStudent = function(quizId)'),
     'reviewCourseQuizStudent verifies quiz end time before rendering review'
 );
 assert(
     appCode.includes("qz.status !== 'moved_to_reports'"),
     'Course Quizzes student view keeps quizzes visible after end time until manually moved to reports'
+);
+assert(
+    appCode.includes('hawari_quiz_result_${qz.id}_${userEmail}'),
+    'renderCourseQuizzesStudentView self-heals by retrieving persistent local result to avoid Completed fallback'
 );
 
 // 4. Retake Restrictions & Report Tasks Archive
@@ -110,12 +118,12 @@ assert(
     'Admin panel keeps Move to Reports button enabled after quiz end time'
 );
 assert(
-    appCode.includes('fetchQuizResults(state.activeGroup, true)'),
+    appCode.includes('fetchQuizResults(state.activeGroup, true)') || appCode.includes('fetchQuizResults(state.activeGroup || "infection", true)'),
     'Admin panel forces fresh fetch of quiz results bypassing 3-minute cache'
 );
 
-// 6. Resilient Grading & Option Normalization
-console.log('\n--- TEST GROUP 6: Resilient Grading & Option Normalization ---');
+// 6. Resilient Grading & Optimistic Persistence
+console.log('\n--- TEST GROUP 6: Resilient Grading & Optimistic Persistence ---');
 assert(
     appCode.includes('function isOptionMatch(') && appCode.includes('resolveQuizOptionLetter('),
     'Bi-directional option matching resolves letters (A-D) and indices (0-3)'
@@ -123,6 +131,18 @@ assert(
 assert(
     appCode.includes('_quizGradingTemplates'),
     'Server question templates with correct options are secured in closure scope'
+);
+assert(
+    appCode.includes('hawari_quiz_result_${qzId}_${userEmail}'),
+    'Full quiz result object is backed up persistently in localStorage upon submission'
+);
+assert(
+    appCode.includes('state.quizResults.push({ ...resultObj, reviewData })') || appCode.includes('state.quizResults.push(resultObj)'),
+    'Optimistic in-memory state update ensures immediate local availability of quiz results'
+);
+assert(
+    !appCode.includes('cleanPath.includes("hawari_quiz_results")') && appCode.includes('directOriginUrl'),
+    'hawari_quiz_results queries bypass Cloudflare edge cache proxy to guarantee real-time origin freshness'
 );
 
 // 7. Strict Mode Anti-Cheat & DRM Protections

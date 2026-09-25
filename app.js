@@ -2165,7 +2165,6 @@ async function supabaseRequest(path, options = {}) {
         // Check if path is eligible for Cloudflare Edge Proxy Caching (READ-ONLY GET requests only)
         const isCacheableEdgePath = SUPABASE_CONFIG.proxyUrl && (method === "GET" || method === "HEAD") && (
             cleanPath.includes("rpc/get_sanitized_questions") ||
-            cleanPath.includes("hawari_quiz_results") ||
             cleanPath.includes("hawari_book_files")
         );
 
@@ -3717,7 +3716,7 @@ async function saveQuizResultToCloud(result, isQueueFlush = false) {
             enqueueSyncItem({
                 id: payload.id,
                 entityType: "quiz_result",
-                group: state.activeGroup,
+                group: activeCourse,
                 email: result.email,
                 payload: payload
             });
@@ -10386,6 +10385,21 @@ function renderCourseQuizzesStudentView() {
         const end = new Date(qz.endTime).getTime();
         const userEmail = state.currentUser ? state.currentUser.email : "";
         let result = state.quizResults.find(r => r.quiz_id === qz.id && r.email === userEmail);
+        if (!result && userEmail) {
+            try {
+                const rawStored = localStorage.getItem(`hawari_quiz_result_${qz.id}_${userEmail}`);
+                if (rawStored) {
+                    const parsed = JSON.parse(rawStored);
+                    if (parsed && typeof parsed.score === "number") {
+                        result = parsed;
+                        if (!Array.isArray(state.quizResults)) state.quizResults = [];
+                        const exIdx = state.quizResults.findIndex(r => r.quiz_id === qz.id && r.email === userEmail);
+                        if (exIdx >= 0) state.quizResults[exIdx] = result;
+                        else state.quizResults.push(result);
+                    }
+                }
+            } catch (e) {}
+        }
         const localSubmitted = userEmail ? localStorage.getItem(`hawari_quiz_submitted_${qz.id}_${userEmail}`) : null;
         if (!result && localSubmitted) {
             result = { status: 'completed', score: 0, isLocalPending: true };
@@ -10675,7 +10689,14 @@ window.startCourseQuizStudent = function(quizId) {
     if (!qz) return;
 
     const userEmail = state.currentUser ? state.currentUser.email : "";
-    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === userEmail);
+    const localSubmitted = userEmail ? localStorage.getItem(`hawari_quiz_submitted_${quizId}_${userEmail}`) : null;
+    let result = state.quizResults.find(r => r.quiz_id === quizId && r.email === userEmail);
+    if (!result && userEmail) {
+        try {
+            const rawStored = localStorage.getItem(`hawari_quiz_result_${quizId}_${userEmail}`);
+            if (rawStored) result = JSON.parse(rawStored);
+        } catch (e) {}
+    }
     const now = Date.now();
     const isPractice = qz.status === "moved_to_reports";
 
@@ -11098,11 +11119,21 @@ async function submitActiveQuiz() {
         submitted_at: new Date().toISOString()
     };
 
-    // Cache review data in persistent storage for instant offline / page-reload recovery
+    // Cache full result object & review data in persistent storage for instant offline / page-reload recovery
     if (userEmail) {
         try {
+            localStorage.setItem(`hawari_quiz_result_${qzId}_${userEmail}`, JSON.stringify(resultObj));
             localStorage.setItem(`hawari_quiz_review_${qzId}_${userEmail}`, JSON.stringify(reviewData));
         } catch (e) {}
+    }
+
+    // Optimistic In-Memory State Update: ensures immediate local availability of result
+    if (!Array.isArray(state.quizResults)) state.quizResults = [];
+    const exIdx = state.quizResults.findIndex(r => r.quiz_id === qzId && r.email === userEmail);
+    if (exIdx >= 0) {
+        state.quizResults[exIdx] = { ...resultObj, reviewData };
+    } else {
+        state.quizResults.push({ ...resultObj, reviewData });
     }
 
     const isPractice = state.activeQuiz ? state.activeQuiz.isPractice : false;
@@ -11136,10 +11167,13 @@ async function submitActiveQuiz() {
         const appLayout = document.getElementById("app-layout");
         if (appLayout) appLayout.style.gridTemplateColumns = "";
 
-        await fetchQuizResults(state.activeGroup);
+        await fetchQuizResults(state.activeGroup || "infection", true);
         const localRes = (state.quizResults || []).find(r => r.quiz_id === qzId && r.email === userEmail);
         if (localRes) {
             localRes.reviewData = reviewData;
+            localRes.score = score;
+        } else {
+            state.quizResults.push({ ...resultObj, reviewData });
         }
 
         if (isPractice) {
@@ -11171,31 +11205,26 @@ async function submitQuizCheatZero(quizId, email) {
     if (email) {
         try {
             localStorage.setItem(`hawari_quiz_submitted_${quizId}_${email}`, "1");
+            localStorage.setItem(`hawari_quiz_result_${quizId}_${email}`, JSON.stringify(resultObj));
         } catch (e) {}
     }
-    
-    const resultObj = {
-        id: `${quizId}_${email}`,
-        quiz_id: quizId,
-        email: email,
-        score: 0,
-        total_questions: quiz ? quiz.questions.length : 0,
-        answers: {},
-        status: "failed",
-        submitted_at: new Date().toISOString()
-    };
+
+    if (!Array.isArray(state.quizResults)) state.quizResults = [];
+    const czIdx = state.quizResults.findIndex(r => r.quiz_id === quizId && r.email === email);
+    if (czIdx >= 0) state.quizResults[czIdx] = resultObj;
+    else state.quizResults.push(resultObj);
     
     try {
         await saveQuizResultToCloud(resultObj);
         showToast("Strict Exam Violation", `لقد حصلت على درجة صفر في اختبار "${title}" لمغادرتك الصفحة.`, "danger");
-        await fetchQuizResults(state.activeGroup);
+        await fetchQuizResults(state.activeGroup || "infection", true);
         triggerViewRefresh();
     } catch (e) {
         console.error("Failed to submit cheat zero:", e);
     }
 }
 
-window.reviewCourseQuizStudent = function(quizId) {
+window.reviewCourseQuizStudent = async function(quizId) {
     const qz = state.courseQuizzes.find(q => q.id === quizId);
     if (!qz) return;
 
@@ -11208,8 +11237,34 @@ window.reviewCourseQuizStudent = function(quizId) {
     }
 
     const userEmail = state.currentUser ? state.currentUser.email : "";
-    const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === userEmail);
-    if (!result) return;
+    let result = (state.quizResults || []).find(r => r.quiz_id === quizId && r.email === userEmail);
+    if (!result && userEmail) {
+        try {
+            const rawStored = localStorage.getItem(`hawari_quiz_result_${quizId}_${userEmail}`);
+            if (rawStored) {
+                const parsed = JSON.parse(rawStored);
+                if (parsed) {
+                    result = parsed;
+                    if (!Array.isArray(state.quizResults)) state.quizResults = [];
+                    const exIdx = state.quizResults.findIndex(r => r.quiz_id === quizId && r.email === userEmail);
+                    if (exIdx >= 0) state.quizResults[exIdx] = result;
+                    else state.quizResults.push(result);
+                }
+            }
+        } catch (e) {}
+    }
+
+    if (!result && userEmail) {
+        try {
+            await fetchQuizResults(state.activeGroup || "infection", true);
+            result = (state.quizResults || []).find(r => r.quiz_id === quizId && r.email === userEmail);
+        } catch (e) {}
+    }
+
+    if (!result) {
+        showToast("تنبيه", "جاري استرداد بيانات إجاباتك، يرجى الانتظار ثوانٍ والمحاولة مجدداً.", "info");
+        return;
+    }
 
     let cachedReview = result.reviewData || null;
     if (!cachedReview && userEmail) {

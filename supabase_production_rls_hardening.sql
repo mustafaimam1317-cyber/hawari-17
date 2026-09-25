@@ -357,17 +357,26 @@ BEGIN
             correct_opt := upper(trim(COALESCE(elem->>'correctOption', '')));
             explanation_txt := elem->>'explanation';
 
-            IF user_ans != '' AND user_ans = correct_opt THEN
-                correct_count := correct_count + 1;
-            END IF;
+            DECLARE
+                matched_corr boolean := false;
+            BEGIN
+                IF user_ans != '' AND (
+                    user_ans = correct_opt OR
+                    (correct_opt ~ '^[0-9]+$' AND user_ans = chr(65 + correct_opt::int)) OR
+                    (user_ans ~ '^[0-9]+$' AND correct_opt = chr(65 + user_ans::int))
+                ) THEN
+                    matched_corr := true;
+                    correct_count := correct_count + 1;
+                END IF;
 
-            results_array := results_array || jsonb_build_object(
-                'questionId', q_id,
-                'userAns', user_ans,
-                'correctOption', correct_opt,
-                'explanation', explanation_txt,
-                'isCorrect', (user_ans != '' AND user_ans = correct_opt)
-            );
+                results_array := results_array || jsonb_build_object(
+                    'questionId', q_id,
+                    'userAns', user_ans,
+                    'correctOption', correct_opt,
+                    'explanation', explanation_txt,
+                    'isCorrect', matched_corr
+                );
+            END;
         END IF;
     END LOOP;
 

@@ -3099,6 +3099,8 @@ async function updateReportTaskInCloud(rt) {
     }
 }
 
+const _quizGradingTemplates = {};
+
 async function fetchCourseQuizzes(group, forceRefresh = false) {
     if (!group) return;
 
@@ -3116,6 +3118,11 @@ async function fetchCourseQuizzes(group, forceRefresh = false) {
     try {
         const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
+            records.forEach(row => {
+                if (row.id && Array.isArray(row.questions)) {
+                    _quizGradingTemplates[row.id] = row.questions;
+                }
+            });
             const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
             state.courseQuizzes = records.map(row => {
                 let quizQuestions = row.questions || [];
@@ -3155,6 +3162,11 @@ async function revalidateCourseQuizzes(group) {
     try {
         const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}`);
         if (records && Array.isArray(records)) {
+            records.forEach(row => {
+                if (row.id && Array.isArray(row.questions)) {
+                    _quizGradingTemplates[row.id] = row.questions;
+                }
+            });
             const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
             const mapped = records.map(row => {
                 let quizQuestions = row.questions || [];
@@ -3622,11 +3634,12 @@ const _lastQuizResultsFetch = {};
 
 async function fetchQuizResults(group, forceRefresh = false) {
     if (!group) return;
+    const normalizedGroup = group.toLowerCase();
     const now = Date.now();
-    const cacheKey = `hawari_cached_quiz_results_${group}`;
+    const cacheKey = `hawari_cached_quiz_results_${normalizedGroup}`;
 
     // 1. In-memory fresh check (TTL: 180s = 3 minutes)
-    if (!forceRefresh && _lastQuizResultsFetch[group] && (now - _lastQuizResultsFetch[group] < 180000) && Array.isArray(state.quizResults) && state.quizResults.length > 0) {
+    if (!forceRefresh && _lastQuizResultsFetch[normalizedGroup] && (now - _lastQuizResultsFetch[normalizedGroup] < 180000) && Array.isArray(state.quizResults) && state.quizResults.length > 0) {
         return;
     }
 
@@ -3638,7 +3651,7 @@ async function fetchQuizResults(group, forceRefresh = false) {
                 const parsed = JSON.parse(raw);
                 if (parsed.timestamp && (now - parsed.timestamp < 180000) && Array.isArray(parsed.data)) {
                     state.quizResults = parsed.data;
-                    _lastQuizResultsFetch[group] = parsed.timestamp;
+                    _lastQuizResultsFetch[normalizedGroup] = parsed.timestamp;
                     return;
                 }
             }
@@ -3646,10 +3659,10 @@ async function fetchQuizResults(group, forceRefresh = false) {
     }
 
     try {
-        const records = await supabaseRequest(`hawari_quiz_results?group_name=eq.${encodeURIComponent(group)}`);
+        const records = await supabaseRequest(`hawari_quiz_results?group_name=eq.${encodeURIComponent(normalizedGroup)}`);
         if (records && Array.isArray(records)) {
             state.quizResults = records;
-            _lastQuizResultsFetch[group] = now;
+            _lastQuizResultsFetch[normalizedGroup] = now;
             try {
                 sessionStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: records }));
             } catch (e) {}
@@ -3661,7 +3674,7 @@ async function fetchQuizResults(group, forceRefresh = false) {
 }
 
 async function saveQuizResultToCloud(result, isQueueFlush = false) {
-    const activeCourse = state.activeGroup || "infection";
+    const activeCourse = (state.activeGroup || "infection").toLowerCase();
     // Invalidate local leaderboard cache so the submitting student sees fresh score
     _lastQuizResultsFetch[activeCourse] = 0;
     try {
@@ -3672,7 +3685,7 @@ async function saveQuizResultToCloud(result, isQueueFlush = false) {
         id: result.id || `${result.quiz_id}_${result.email}`,
         quiz_id: result.quiz_id,
         email: result.email,
-        group_name: state.activeGroup,
+        group_name: activeCourse,
         score: result.score,
         total_questions: result.total_questions,
         answers: result.answers,
@@ -3692,7 +3705,7 @@ async function saveQuizResultToCloud(result, isQueueFlush = false) {
             enqueueSyncItem({
                 id: payload.id,
                 entityType: "quiz_result",
-                group: state.activeGroup,
+                group: activeCourse,
                 email: result.email,
                 payload: payload
             });
@@ -6793,7 +6806,7 @@ function renderAdminPanel() {
             } else if (target === "admin-quizzes-tab") {
                 Promise.all([
                     fetchCourseQuizzes(state.activeGroup),
-                    fetchQuizResults(state.activeGroup)
+                    fetchQuizResults(state.activeGroup, true)
                 ]).then(() => {
                     renderAdminQuizzesTab();
                 });
@@ -10149,10 +10162,9 @@ function renderReportTaskStudentView() {
     container.innerHTML = "";
     
     // Merge standard report tasks and archived quizzes
-    const now = new Date().getTime();
+    // Only quizzes that the admin explicitly moved to reports
     const archivedQuizzes = state.courseQuizzes.filter(qz => {
-        const end = new Date(qz.endTime).getTime();
-        return qz.status === 'moved_to_reports' || now > end;
+        return qz.status === 'moved_to_reports';
     }).map(qz => {
         return {
             id: qz.id,
@@ -10282,11 +10294,10 @@ window.retakeReportTaskStudent = function(rtId) {
 
 window.retakeCourseQuizStudent = async function(quizId) {
     const qz = state.courseQuizzes.find(q => q.id === quizId);
-    const now = Date.now();
-    const isPractice = !qz || qz.status === 'moved_to_reports' || now > new Date(qz.endTime).getTime();
+    const isPractice = qz && qz.status === 'moved_to_reports';
 
-    if (qz && !isPractice) {
-        showToast("غير مسموح", "لا يمكن إعادة الاختبار أثناء فترة انعقاده الرسمية. يتاح التدريب وإعادة المحاولة فقط بعد انتهاء موعد الاختبار وانتقاله لقسم الريبورتات.", "danger");
+    if (!isPractice) {
+        showToast("غير مسموح", "لا يمكن إعادة الاختبار كتدريب إلا بعد نقله من قِبل المشرف إلى قسم الريبورتات.", "danger");
         return;
     }
 
@@ -10354,10 +10365,9 @@ function renderCourseQuizzesStudentView() {
     
     const now = new Date().getTime();
     
-    // Filter quizzes that have not expired or been moved to reports yet
+    // Filter quizzes: keep in Course Quizzes tab until the admin MANUALLY moves them to reports
     const quizzes = state.courseQuizzes.filter(qz => {
-        const end = new Date(qz.endTime).getTime();
-        return qz.status !== 'moved_to_reports' && now <= end;
+        return qz.status !== 'moved_to_reports';
     });
 
     if (quizzes.length === 0) {
@@ -10418,6 +10428,15 @@ function renderCourseQuizzesStudentView() {
             buttonHtml = `
                 <button class="btn btn-secondary btn-block" disabled style="cursor: not-allowed; opacity: 0.6;">
                     <i class="fa-solid fa-lock"></i> Not Active Yet (Opens: ${new Date(qz.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})})
+                </button>
+            `;
+        } else if (now > end) {
+            // Expired without student submission
+            statusHtml = `<div class="rt-status-indicator rt-status-unsolved" style="background-color: var(--border-color); color: var(--text-muted);"><i class="fa-solid fa-clock-rotate-left"></i> Closed</div>`;
+            scoreHtml = `<div style="font-size:0.9rem; color:var(--text-muted); margin: 15px 0;">انتهى موعد الاختبار (${new Date(qz.endTime).toLocaleString()})</div>`;
+            buttonHtml = `
+                <button class="btn btn-secondary btn-block" disabled style="cursor: not-allowed; opacity: 0.6;">
+                    <i class="fa-solid fa-lock"></i> انتهت فترة الاختبار
                 </button>
             `;
         } else {
@@ -10657,8 +10676,13 @@ window.startCourseQuizStudent = function(quizId) {
 
     const userEmail = state.currentUser ? state.currentUser.email : "";
     const result = state.quizResults.find(r => r.quiz_id === quizId && r.email === userEmail);
-    const localSubmitted = userEmail ? localStorage.getItem(`hawari_quiz_submitted_${quizId}_${userEmail}`) : null;
-    const isPractice = qz.status === "moved_to_reports" || new Date().getTime() > new Date(qz.endTime).getTime();
+    const now = Date.now();
+    const isPractice = qz.status === "moved_to_reports";
+
+    if (!isPractice && now > new Date(qz.endTime).getTime()) {
+        showToast("انتهت فترة الاختبار", "انتهى الموعد الرسمي للاختبار، لا يمكن بدء الاختبار الآن إلا بعد قيام المشرف بنقله إلى قسم الريبورتات كتدريب.", "warning");
+        return;
+    }
 
     if (!isPractice && (result || localSubmitted)) {
         showToast("عفواً - غير مسموح", "لقد أتممت تسليم هذا الاختبار بالفعل! لا يمكن إعادة الدخول أثناء فترة انعقاده الرسمية. يرجى انتظار انتهاء موعد الاختبار بالكامل لرؤية النتيجة والمراجعة.", "warning");
@@ -10938,6 +10962,29 @@ function resolveQuizOptionIndex(val) {
     return null;
 }
 
+function resolveQuizOptionLetter(val) {
+    if (val === undefined || val === null || val === "") return "";
+    const idx = resolveQuizOptionIndex(val);
+    if (idx !== null && idx >= 0 && idx < 26) {
+        return String.fromCharCode(65 + idx);
+    }
+    if (typeof val === "string" && val.trim().length === 1) {
+        const u = val.trim().toUpperCase();
+        if (u >= "A" && u <= "Z") return u;
+    }
+    return "";
+}
+
+function isOptionMatch(opt1, opt2) {
+    const l1 = resolveQuizOptionLetter(opt1);
+    const l2 = resolveQuizOptionLetter(opt2);
+    if (l1 && l2 && l1 === l2) return true;
+    const i1 = resolveQuizOptionIndex(opt1);
+    const i2 = resolveQuizOptionIndex(opt2);
+    if (i1 !== null && i2 !== null && i1 === i2) return true;
+    return false;
+}
+
 async function submitActiveQuiz() {
     if (!state.activeQuiz) return;
     if (isQuizSubmitting) {
@@ -10967,7 +11014,9 @@ async function submitActiveQuiz() {
 
     // SECURITY: Match against true quiz source questions (which contain correctOption)
     const qz = (state.courseQuizzes || []).find(q => q.id === qzId);
-    const sourceQuestions = (qz && qz.questions && qz.questions.length > 0) ? qz.questions : questions;
+    const sourceQuestions = (_quizGradingTemplates[qzId] && _quizGradingTemplates[qzId].length > 0)
+        ? _quizGradingTemplates[qzId]
+        : ((qz && qz.questions && qz.questions.length > 0) ? qz.questions : questions);
 
     let correctCount = 0;
     const reviewData = {};
@@ -10976,18 +11025,16 @@ async function submitActiveQuiz() {
         const userAns = answers[idx];
         const qKey = q.id || `q_${idx}`;
         const rawCorrect = q.correctOption;
-        const correctIdx = resolveQuizOptionIndex(rawCorrect);
-        const userIdx = resolveQuizOptionIndex(userAns);
-        const isCorr = (userIdx !== null && correctIdx !== null && userIdx === correctIdx);
+        const isCorr = isOptionMatch(userAns, rawCorrect);
         if (isCorr) {
             correctCount++;
         }
         const entry = {
             questionId: qKey,
-            correctOption: rawCorrect !== undefined ? rawCorrect : null,
+            correctOption: resolveQuizOptionLetter(rawCorrect) || rawCorrect || null,
             explanation: q.explanation || "",
             isCorrect: isCorr,
-            userAns: userAns !== undefined ? userAns : null
+            userAns: resolveQuizOptionLetter(userAns) || userAns || null
         };
         reviewData[qKey] = entry;
         reviewData[idx] = entry;
@@ -11000,7 +11047,7 @@ async function submitActiveQuiz() {
         const answersPayload = {};
         sourceQuestions.forEach((q, idx) => {
             if (answers[idx] !== undefined) {
-                const optLetter = String.fromCharCode(65 + answers[idx]);
+                const optLetter = resolveQuizOptionLetter(answers[idx]);
                 answersPayload[q.id || `q_${idx}`] = optLetter;
             }
         });
@@ -11013,23 +11060,19 @@ async function submitActiveQuiz() {
                 p_email: state.currentUser ? state.currentUser.email : ""
             })
         });
-        if (rpcRes && rpcRes.success) {
-            if (typeof rpcRes.correctCount === "number" && sourceQuestions.length > 0) {
-                correctCount = rpcRes.correctCount;
-                score = Math.round((correctCount / sourceQuestions.length) * 100);
-            } else if (typeof rpcRes.score === "number") {
-                score = rpcRes.score;
-            }
+        if (rpcRes && rpcRes.success && typeof rpcRes.correctCount === "number" && rpcRes.totalQuestions === sourceQuestions.length) {
+            correctCount = rpcRes.correctCount;
+            score = Math.round((correctCount / sourceQuestions.length) * 100);
             if (Array.isArray(rpcRes.results) && rpcRes.results.length > 0) {
                 rpcRes.results.forEach((res, idx) => {
                     if (res) {
                         const qKey = res.questionId || (sourceQuestions[idx] ? sourceQuestions[idx].id : `q_${idx}`);
                         const rEntry = {
                             questionId: qKey,
-                            correctOption: res.correctOption,
+                            correctOption: resolveQuizOptionLetter(res.correctOption) || res.correctOption,
                             explanation: res.explanation,
                             isCorrect: res.isCorrect,
-                            userAns: res.userAns
+                            userAns: resolveQuizOptionLetter(res.userAns) || res.userAns
                         };
                         reviewData[qKey] = rEntry;
                         reviewData[idx] = rEntry;
@@ -11441,9 +11484,12 @@ function renderAdminQuizzesTab() {
             let statusLabel = "";
             let actionBtn = "";
 
-            if (qz.status === "moved_to_reports" || now > endTimeMs) {
-                statusLabel = `<span class="badge badge-secondary" style="background-color: var(--text-muted); color: #fff; padding: 2px 6px; border-radius: 4px;">Expired / Archived</span>`;
-                actionBtn = `<button class="btn btn-secondary btn-sm" disabled style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-circle-check"></i> Already in Reports</button>`;
+            if (qz.status === "moved_to_reports") {
+                statusLabel = `<span class="badge badge-secondary" style="background-color: var(--text-muted); color: #fff; padding: 2px 6px; border-radius: 4px;">In Reports (Practice)</span>`;
+                actionBtn = `<button class="btn btn-secondary btn-sm" disabled style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-circle-check"></i> In Reports</button>`;
+            } else if (now > endTimeMs) {
+                statusLabel = `<span class="badge badge-warning" style="background-color: var(--color-warning, #f59e0b); color: #fff; padding: 2px 6px; border-radius: 4px;">Ended (In Quizzes)</span>`;
+                actionBtn = `<button class="btn btn-warning btn-sm" onclick="moveQuizToReports('${qz.id}')" style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-file-export"></i> Move to Reports</button>`;
             } else {
                 statusLabel = `<span class="badge badge-success" style="background-color: var(--color-success); color: #fff; padding: 2px 6px; border-radius: 4px;">Active</span>`;
                 actionBtn = `<button class="btn btn-warning btn-sm" onclick="moveQuizToReports('${qz.id}')" style="padding: 4px 8px; font-size: 0.8rem;"><i class="fa-solid fa-file-export"></i> Move to Reports</button>`;
@@ -11534,11 +11580,15 @@ window.deleteCourseQuiz = async function(quizId) {
     }
 };
 
-window.viewQuizLeaderboard = function(quizId) {
+window.viewQuizLeaderboard = async function(quizId) {
     const select = document.getElementById("admin-quiz-select-dropdown");
     if (select) {
         select.value = quizId;
         renderQuizLeaderboard();
+        try {
+            await fetchQuizResults(state.activeGroup, true);
+            renderQuizLeaderboard();
+        } catch (e) {}
     }
 };
 
@@ -11630,7 +11680,7 @@ window.addTempQuestionToQuiz = function() {
         id: `qz_q_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
         text: textVal,
         options: [optA, optB, optC, optD],
-        correctOption: parseInt(correct),
+        correctOption: resolveQuizOptionLetter(correct) || "A",
         explanation: explanation
     };
 
@@ -11713,6 +11763,7 @@ window.publishCourseQuiz = async function() {
     };
 
     state.courseQuizzes.push(quizObj);
+    _quizGradingTemplates[quizObj.id] = tempQuizQuestions;
     await saveCourseQuizToCloud(quizObj);
 
     showToast("Quiz Published", `Course quiz "${title}" has been successfully published.`, "success");

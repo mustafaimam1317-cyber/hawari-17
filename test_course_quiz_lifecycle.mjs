@@ -66,6 +66,10 @@ assert(
     appCode.includes('reviewCourseQuizStudent = function(quizId)'),
     'reviewCourseQuizStudent verifies quiz end time before rendering review'
 );
+assert(
+    appCode.includes("qz.status !== 'moved_to_reports'"),
+    'Course Quizzes student view keeps quizzes visible after end time until manually moved to reports'
+);
 
 // 4. Retake Restrictions & Report Tasks Archive
 console.log('\n--- TEST GROUP 4: Retake Restrictions & Reports Track ---');
@@ -74,12 +78,17 @@ assert(
     'retakeCourseQuizStudent function is defined'
 );
 assert(
-    appCode.includes('if (qz && !isPractice)') && appCode.includes('لا يمكن إعادة الاختبار أثناء فترة انعقاده الرسمية'),
-    'retakeCourseQuizStudent strictly forbids retake while official quiz is still active'
+    appCode.includes("const isPractice = qz && qz.status === 'moved_to_reports';") &&
+    appCode.includes('لا يمكن إعادة الاختبار كتدريب إلا بعد نقله من قِبل المشرف إلى قسم الريبورتات'),
+    'retakeCourseQuizStudent strictly requires admin to have moved quiz to reports before allowing retake'
 );
 assert(
     appCode.includes('localStorage.removeItem(`hawari_quiz_submitted_${quizId}_${userEmail}`)'),
     'retakeCourseQuizStudent safely clears local submission lock when retaking in practice mode'
+);
+assert(
+    appCode.includes("qz.status === 'moved_to_reports'") && !appCode.includes("return qz.status === 'moved_to_reports' || now > end;"),
+    'Report Tasks student view strictly excludes automatic time-based migration'
 );
 
 // 5. Admin Panel & Cloud Leaderboard
@@ -96,9 +105,28 @@ assert(
     appCode.includes('b.score - a.score'),
     'Leaderboard ranks student submissions in descending score order'
 );
+assert(
+    appCode.includes("Ended (In Quizzes)") && appCode.includes("moveQuizToReports"),
+    'Admin panel keeps Move to Reports button enabled after quiz end time'
+);
+assert(
+    appCode.includes('fetchQuizResults(state.activeGroup, true)'),
+    'Admin panel forces fresh fetch of quiz results bypassing 3-minute cache'
+);
 
-// 6. Strict Mode Anti-Cheat & DRM Protections
-console.log('\n--- TEST GROUP 6: Strict Mode Anti-Cheat & DRM Protections ---');
+// 6. Resilient Grading & Option Normalization
+console.log('\n--- TEST GROUP 6: Resilient Grading & Option Normalization ---');
+assert(
+    appCode.includes('function isOptionMatch(') && appCode.includes('resolveQuizOptionLetter('),
+    'Bi-directional option matching resolves letters (A-D) and indices (0-3)'
+);
+assert(
+    appCode.includes('_quizGradingTemplates'),
+    'Server question templates with correct options are secured in closure scope'
+);
+
+// 7. Strict Mode Anti-Cheat & DRM Protections
+console.log('\n--- TEST GROUP 7: Strict Mode Anti-Cheat & DRM Protections ---');
 assert(
     appCode.includes('active-quiz-overlay') && appCode.includes('overlay.oncopy = (e) => e.preventDefault()'),
     'Copy, cut, and right-click context menu are disabled on active quiz overlay'

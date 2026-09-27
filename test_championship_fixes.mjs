@@ -6,6 +6,7 @@
  */
 
 import assert from 'assert';
+import fs from 'fs';
 import {
     champState,
     loadActiveChampionship,
@@ -13,6 +14,8 @@ import {
     formatRemainingTime,
     startStudentMatchCountdownTicker,
     saveChampionshipToLocalCache,
+    deleteChampionshipFromCloud,
+    resetTournamentPrompt,
     STORAGE_CHAMP_KEY
 } from './championshipLeague.js';
 
@@ -107,11 +110,9 @@ await itAsync('loadActiveChampionship retrieves active tournament from cloud bri
         { id: 'p1', email: 'ahmed@hawari.edu', student_name: 'أحمد' },
         { id: 'p2', email: 'mohamed@hawari.edu', student_name: 'محمد' }
     ];
-
+    const queriedPaths = [];
     const mockSupabaseRequest = async (path) => {
-        if (path.includes('championships?')) {
-            return []; // Native table empty
-        }
+        queriedPaths.push(path);
         if (path.includes('hawari_course_quizzes?')) {
             return [{
                 id: 'championship_active_infection',
@@ -127,6 +128,7 @@ await itAsync('loadActiveChampionship retrieves active tournament from cloud bri
 
     const loaded = await loadActiveChampionship(mockSupabaseRequest, { activeGroup: 'infection' });
     assert.strictEqual(loaded, true, 'loadActiveChampionship should return true when tournament is found in cloud');
+    assert.ok(!queriedPaths.some(p => p.startsWith('championships?')), 'Must NEVER query non-existent championships table (avoids 404)');
     assert.strictEqual(champState.activeChampionship?.id, 'champ_test_123');
     assert.strictEqual(champState.activeChampionship?.status, 'active');
     assert.strictEqual(champState.matches.length, 1);
@@ -305,6 +307,58 @@ await itAsync('startStudentMatchCountdownTicker ticks down smoothly past 30s to 
     assert.strictEqual(textElem.style.color, '#10b981');
     assert.strictEqual(btnElem.disabled, false);
     assert.ok(btnElem.innerHTML.includes('ادخل غرفة المباراة الآن ⚡'));
+});
+
+// ==========================================
+// TEST SUITE 4: ZERO-LOOP, CLOUD RESET DELETION & UI STABILITY
+// ==========================================
+console.log('\n[Suite 4] Zero-Loop, Cloud Reset Deletion & UI Stability:');
+
+await itAsync('loadActiveChampionship does NOT broadcast and avoids infinite loops', async () => {
+    let broadcastCount = 0;
+    global.window._broadcastChampionshipUpdate = () => { broadcastCount++; };
+
+    const mockSupabaseRequest = async () => [{
+        id: 'championship_active_infection',
+        questions: {
+            championship: { id: 'champ_loop_test', status: 'active', title: 'T1' },
+            participants: [],
+            matches: []
+        }
+    }];
+    await loadActiveChampionship(mockSupabaseRequest, { activeGroup: 'infection' });
+    assert.strictEqual(broadcastCount, 0, 'loadActiveChampionship must NOT trigger broadcast');
+});
+
+await itAsync('resetTournamentPrompt physically calls DELETE on cloud bridge and clears storage', async () => {
+    let deletedPath = null;
+    let deletedMethod = null;
+    global.window.supabaseRequest = async (path, options = {}) => {
+        deletedPath = path;
+        deletedMethod = options.method;
+        return { success: true };
+    };
+    global.confirm = () => true;
+
+    champState.activeChampionship = { id: 'champ_to_delete', title: 'Delete Me' };
+    champState.participants = [{ id: 'p1' }];
+    champState.matches = [{ id: 'm1' }];
+    localStorage.setItem(`${STORAGE_CHAMP_KEY}_infection`, JSON.stringify({ championship: champState.activeChampionship }));
+
+    await resetTournamentPrompt();
+
+    assert.strictEqual(champState.activeChampionship, null, 'In-memory championship must be null');
+    assert.strictEqual(champState.participants.length, 0, 'Participants must be empty');
+    assert.strictEqual(champState.matches.length, 0, 'Matches must be empty');
+    assert.strictEqual(localStorage.getItem(`${STORAGE_CHAMP_KEY}_infection`), null, 'localStorage item must be removed');
+    assert.ok(deletedPath && deletedPath.includes('hawari_course_quizzes?id=eq.championship_active_infection'), 'Must send DELETE to cloud bridge');
+    assert.strictEqual(deletedMethod, 'DELETE', 'Method must be DELETE');
+});
+
+it('Admin Panel buttons have zero transform on hover to prevent mouse jitter', () => {
+    const cssContent = fs.readFileSync('style.css', 'utf8');
+    assert.ok(cssContent.includes('.admin-championship-manager-wrapper .btn'), 'Admin button stabilization class must exist');
+    assert.ok(cssContent.includes('transform: none !important'), 'Hover transform must be none !important');
 });
 
 // ==========================================

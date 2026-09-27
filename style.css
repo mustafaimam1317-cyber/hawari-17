@@ -131,7 +131,7 @@ h1, h2, h3, h4, h5, h6 {
     border-radius: 8px;
     border: 1px solid transparent;
     cursor: pointer;
-    transition: all 0.2s ease-in-out;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .btn-primary {
     background-color: var(--primary-color);
@@ -139,7 +139,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 .btn-primary:hover {
     background-color: var(--primary-color-hover);
-    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.25);
 }
 .btn-secondary {
     background-color: var(--bg-accent);
@@ -149,6 +149,7 @@ h1, h2, h3, h4, h5, h6 {
 .btn-secondary:hover {
     background-color: var(--border-color);
     color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 .btn-danger {
     background-color: var(--color-danger);
@@ -156,6 +157,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 .btn-danger:hover {
     background-color: #dc2626;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
 }
 .btn-link {
     background: none;
@@ -3767,6 +3769,25 @@ html.instant-boot-active #app-layout:not(.hidden) {
     background: var(--border-color);
     border-radius: 4px;
 }
+
+/* ================= ADMIN PANEL BUTTONS HOVER STABILIZATION ================= */
+.admin-championship-manager-wrapper .btn,
+.admin-tabs-bar .admin-tab-btn,
+.admin-tab-btn,
+.admin-questions-layout .btn,
+.admin-table .btn {
+    transform: none !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;
+}
+.admin-championship-manager-wrapper .btn:hover,
+.admin-tabs-bar .admin-tab-btn:hover,
+.admin-tab-btn:hover,
+.admin-questions-layout .btn:hover,
+.admin-table .btn:hover {
+    transform: none !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12) !important;
+}
+
 
 
 

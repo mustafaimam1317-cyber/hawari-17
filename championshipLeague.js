@@ -76,73 +76,100 @@ export async function initChampionshipLeague(supabaseRequest, state, showToast) 
 }
 
 /**
- * Load Active Championship with Dual-Storage & Cloud Bridge Fallback
+ * Delete active championship from Supabase cloud bridge
+ */
+export async function deleteChampionshipFromCloud(group = 'infection') {
+    const req = typeof window !== 'undefined' ? window.supabaseRequest : null;
+    if (!req) return false;
+    try {
+        await req(`hawari_course_quizzes?id=eq.championship_active_${group}`, {
+            method: 'DELETE'
+        });
+        console.log('[Championship] Deleted tournament record from cloud bridge successfully');
+        return true;
+    } catch (e) {
+        console.warn('[Championship] Cloud bridge delete error:', e);
+        return false;
+    }
+}
+
+let _activeLoadChampionshipPromise = null;
+
+/**
+ * Load Active Championship with Resilient Cloud Bridge & Concurrency Deduplication
  */
 export async function loadActiveChampionship(supabaseRequest, state) {
     const group = (state && state.activeGroup) ? state.activeGroup.toLowerCase() : (getActiveGroupName ? getActiveGroupName() : 'infection');
     const req = supabaseRequest || (typeof window !== 'undefined' ? window.supabaseRequest : null);
     
-    if (req) {
-        // 1. Try native championships table first
-        try {
-            const records = await req(`championships?group_name=eq.${group}&status=eq.active&order=created_at.desc&limit=1`);
-            if (records && Array.isArray(records) && records.length > 0) {
-                champState.activeChampionship = records[0];
-                await loadChampionshipMatches(req, champState.activeChampionship.id);
-                saveChampionshipToLocalCache(group, false);
-                if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('championship_updated'));
+    // Deduplication: return running promise if a fetch is already in flight
+    if (_activeLoadChampionshipPromise) {
+        return _activeLoadChampionshipPromise;
+    }
+
+    _activeLoadChampionshipPromise = (async () => {
+        if (req) {
+            // Resilient Cloud Bridge: Load directly from hawari_course_quizzes
+            // (Eliminates 404 table errors and ensures 100% cloud sync across all devices)
+            try {
+                const bridgeRecords = await req(`hawari_course_quizzes?id=eq.championship_active_${group}`);
+                if (bridgeRecords && Array.isArray(bridgeRecords) && bridgeRecords.length > 0 && bridgeRecords[0].questions) {
+                    const data = bridgeRecords[0].questions;
+                    if (data.championship && (data.championship.status === 'active' || data.championship.status === 'draft')) {
+                        champState.activeChampionship = data.championship;
+                        champState.participants = data.participants || [];
+                        champState.matches = data.matches || [];
+                        console.log('[Championship] Loaded tournament from cloud bridge successfully');
+                        // Cache locally WITHOUT broadcasting or cloud syncing to prevent infinite loops
+                        saveChampionshipToLocalCache(group, false, false);
+                        if (typeof window !== 'undefined') {
+                            window.dispatchEvent(new CustomEvent('championship_updated'));
+                        }
+                        return true;
+                    }
                 }
-                return true;
+            } catch (e) {
+                console.warn('[Championship] Cloud bridge fetch error:', e);
             }
-        } catch (e) {
-            console.warn('[Championship] Cloud query fallback:', e.message);
         }
 
-        // 2. Resilient Cloud Bridge: Load from hawari_course_quizzes so all 50 student devices see the tournament
+        // Fallback: Check local persistent storage
         try {
-            const bridgeRecords = await req(`hawari_course_quizzes?id=eq.championship_active_${group}`);
-            if (bridgeRecords && Array.isArray(bridgeRecords) && bridgeRecords.length > 0 && bridgeRecords[0].questions) {
-                const data = bridgeRecords[0].questions;
-                if (data.championship && (data.championship.status === 'active' || data.championship.status === 'draft')) {
-                    champState.activeChampionship = data.championship;
-                    champState.participants = data.participants || [];
-                    champState.matches = data.matches || [];
-                    console.log('[Championship] Loaded tournament from cloud bridge successfully');
-                    saveChampionshipToLocalCache(group, false);
-                    if (typeof window !== 'undefined') {
-                        window.dispatchEvent(new CustomEvent('championship_updated'));
-                    }
+            const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                if (parsed && parsed.championship) {
+                    champState.activeChampionship = parsed.championship || null;
+                    champState.participants = parsed.participants || [];
+                    champState.matches = parsed.matches || [];
+                    console.log('[Championship] Loaded tournament from cache');
                     return true;
                 }
             }
         } catch (e) {}
-    }
 
-    // 3. Fallback: Check local persistent storage
-    try {
-        const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
-        if (cached) {
-            const parsed = JSON.parse(cached);
-            champState.activeChampionship = parsed.championship || null;
-            champState.participants = parsed.participants || [];
-            champState.matches = parsed.matches || [];
-            console.log('[Championship] Loaded tournament from cache');
-            return true;
-        }
-    } catch (e) {}
-    return false;
+        return false;
+    })().finally(() => {
+        _activeLoadChampionshipPromise = null;
+    });
+
+    return _activeLoadChampionshipPromise;
 }
 
 /**
- * Sync championship state to Supabase cloud (Dual: native table + resilient bridge)
+ * Sync championship state to Supabase cloud (Resilient cloud bridge)
  */
 export async function syncChampionshipToCloud(group = 'infection') {
     if (typeof window === 'undefined') return;
     const req = window.supabaseRequest;
     if (!req) return;
     const champ = champState.activeChampionship;
-    if (!champ) return;
+
+    // If tournament was cleared or reset, physically delete it from the cloud bridge
+    if (!champ) {
+        await deleteChampionshipFromCloud(group);
+        return;
+    }
 
     const payloadData = {
         championship: champ,
@@ -151,29 +178,7 @@ export async function syncChampionshipToCloud(group = 'infection') {
         updated_at: new Date().toISOString()
     };
 
-    // 1. Native table attempt (if user ran schema SQL)
-    try {
-        const nativeRes = await req('championships', {
-            method: 'POST',
-            headers: { 'Prefer': 'resolution=merge-duplicates' },
-            body: JSON.stringify({
-                id: champ.id,
-                group_name: group,
-                title: champ.title,
-                status: champ.status,
-                total_slots: champ.total_slots || 50,
-                bracket_type: champ.bracket_type || 'auto',
-                settings: champ.settings || {},
-                updated_at: new Date().toISOString()
-            })
-        });
-        if (nativeRes && nativeRes.success !== false && !nativeRes.error) {
-            console.log('[Championship] Synced to native Supabase championships table');
-            return;
-        }
-    } catch (e) {}
-
-    // 2. Resilient Cloud Bridge: Save to hawari_course_quizzes so all 50 student devices get it instantly
+    // Resilient Cloud Bridge: Save to hawari_course_quizzes so all student devices get it instantly
     try {
         await req('hawari_course_quizzes', {
             method: 'POST',
@@ -196,9 +201,9 @@ export async function syncChampionshipToCloud(group = 'infection') {
 }
 
 /**
- * Save current state to local cache with optional background cloud sync
+ * Save current state to local cache with optional background cloud sync & broadcast control
  */
-export function saveChampionshipToLocalCache(group = 'infection', triggerCloud = true) {
+export function saveChampionshipToLocalCache(group = 'infection', triggerCloud = true, triggerBroadcast = true) {
     try {
         localStorage.setItem(`${STORAGE_CHAMP_KEY}_${group}`, JSON.stringify({
             championship: champState.activeChampionship,
@@ -207,8 +212,8 @@ export function saveChampionshipToLocalCache(group = 'infection', triggerCloud =
         }));
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('championship_updated'));
-            if (typeof window._broadcastChampionshipUpdate === 'function') {
-                window._broadcastChampionshipUpdate();
+            if (triggerBroadcast && typeof window._broadcastChampionshipUpdate === 'function') {
+                window._broadcastChampionshipUpdate('UPDATE');
             }
         }
     } catch (e) {}
@@ -405,12 +410,17 @@ export function renderChampionshipHub(containerId = 'battle-championship-contain
             champState.activeChampionship = parsed.championship || null;
             champState.participants = parsed.participants || [];
             champState.matches = parsed.matches || [];
+        } else {
+            champState.activeChampionship = null;
+            champState.participants = [];
+            champState.matches = [];
         }
     } catch (e) {}
 
     // Proactive background cloud fetch if activeChampionship is not yet in cache (e.g. fresh student device)
-    if (!champState.activeChampionship && !champState._loadingCloud) {
+    if (!champState.activeChampionship && !champState._loadingCloud && !champState._cloudChecked) {
         champState._loadingCloud = true;
+        champState._cloudChecked = true;
         loadActiveChampionship().then((loaded) => {
             champState._loadingCloud = false;
             if (loaded && champState.activeChampionship) {
@@ -1644,19 +1654,33 @@ export function toggleTournamentPublishStatus() {
 }
 
 /**
- * Reset Entire Tournament
+ * Reset Entire Tournament (Physical Cloud & Local Deletion)
  */
-export function resetTournamentPrompt() {
+export async function resetTournamentPrompt() {
     if (!confirm('Are you sure you want to completely reset and delete the active championship? This will clear all matches and participants.')) return;
 
     const group = getActiveGroupName();
     champState.activeChampionship = null;
     champState.participants = [];
     champState.matches = [];
+    champState.currentStudentMatch = null;
+    champState._cloudChecked = true;
 
-    saveChampionshipToLocalCache(group);
+    try {
+        localStorage.removeItem(`${STORAGE_CHAMP_KEY}_${group}`);
+    } catch (e) {}
+
+    await deleteChampionshipFromCloud(group);
+
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('championship_updated'));
+        if (typeof window._broadcastChampionshipUpdate === 'function') {
+            window._broadcastChampionshipUpdate('RESET');
+        }
+    }
+
     renderChampionshipHub(champState.lastContainerId || 'admin-championship-tab-container', getActiveCurrentUser());
-    window.showToast?.('Tournament Reset', 'Tournament data has been completely cleared.', 'info');
+    window.showToast?.('Tournament Reset', 'Tournament data has been completely cleared from cloud and local storage.', 'info');
 }
 
 /**
@@ -2513,6 +2537,7 @@ if (typeof window !== 'undefined') {
     window.startStudentMatchCountdownTicker = startStudentMatchCountdownTicker;
     window.filterRosterSearch = filterRosterSearch;
     window.checkExpiredUnplayedMatches = checkExpiredUnplayedMatches;
+    window.deleteChampionshipFromCloud = deleteChampionshipFromCloud;
 
     window.editTournamentTitlePrompt = () => {
         if (!champState.activeChampionship) return;
@@ -2531,9 +2556,13 @@ if (typeof window !== 'undefined') {
             const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
             if (cached) {
                 const parsed = JSON.parse(cached);
-                champState.activeChampionship = parsed.championship || champState.activeChampionship;
-                champState.participants = parsed.participants || champState.participants;
-                champState.matches = parsed.matches || champState.matches;
+                champState.activeChampionship = (parsed && parsed.championship) ? parsed.championship : null;
+                champState.participants = (parsed && parsed.participants) || [];
+                champState.matches = (parsed && parsed.matches) || [];
+            } else {
+                champState.activeChampionship = null;
+                champState.participants = [];
+                champState.matches = [];
             }
         } catch(e) {}
 

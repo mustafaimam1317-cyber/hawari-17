@@ -39,6 +39,7 @@ export const battleState = {
     supabaseClient: null,
     lobbyChannel: null,
     roomChannel: null,
+    clientId: 'client_' + Math.random().toString(36).substring(2, 9),
 
     // Server Capacity (Strict 50 Rooms Limit)
     MAX_CONCURRENT_ROOMS: 50,
@@ -166,8 +167,28 @@ export function connectToBattleLobby() {
             battleState.activeRoomsCount = count;
             updateServerCapacityBadge();
         })
-        .on("broadcast", { event: "CHAMPIONSHIP_UPDATE" }, async () => {
-            console.log("[BattleRoom] Championship Realtime broadcast received. Refreshing active tournament...");
+        .on("broadcast", { event: "CHAMPIONSHIP_UPDATE" }, async ({ payload }) => {
+            if (payload && payload.senderId === battleState.clientId) {
+                // Ignore self-broadcast to prevent infinite feedback loops
+                return;
+            }
+            console.log("[BattleRoom] Championship Realtime broadcast received from peer. Action:", payload?.action || 'UPDATE');
+
+            if (payload?.action === 'RESET') {
+                const group = getActiveGroupName ? getActiveGroupName() : 'infection';
+                champState.activeChampionship = null;
+                champState.participants = [];
+                champState.matches = [];
+                champState.currentStudentMatch = null;
+                champState._cloudChecked = true;
+                try {
+                    localStorage.removeItem(`${STORAGE_CHAMP_KEY}_${group}`);
+                } catch (e) {}
+                renderChampionshipHub('battle-championship-container', getActiveUser());
+                return;
+            }
+
+            champState._cloudChecked = false;
             const loaded = await loadActiveChampionship();
             if (loaded) {
                 const subscreen = document.getElementById("battle-subscreen-championship");
@@ -185,12 +206,12 @@ export function connectToBattleLobby() {
             }
         });
 
-    window._broadcastChampionshipUpdate = () => {
+    window._broadcastChampionshipUpdate = (action = 'UPDATE') => {
         if (battleState.lobbyChannel) {
             battleState.lobbyChannel.send({
                 type: "broadcast",
                 event: "CHAMPIONSHIP_UPDATE",
-                payload: { timestamp: Date.now() }
+                payload: { timestamp: Date.now(), senderId: battleState.clientId, action }
             }).catch(() => {});
         }
     };

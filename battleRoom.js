@@ -19,6 +19,17 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import {
+    initChampionshipLeague,
+    renderChampionshipHub,
+    enterChampionshipMatch,
+    champState,
+    saveChampionshipToLocalCache,
+    getActiveGroupName,
+    STORAGE_CHAMP_KEY,
+    checkExpiredUnplayedMatches
+} from './championshipLeague.js';
+import { evaluateMatchResult, advanceWinnerToNextRound, ROUND_LABELS } from './championshipBracketEngine.js';
 
 // Global Engine State
 export const battleState = {
@@ -608,6 +619,11 @@ function joinRoomChannel(code, isHost) {
         .on("broadcast", { event: "REMATCH_DECLINED" }, () => {
             handleRematchDeclinedByOpponent();
         })
+        .on("broadcast", { event: "CHAMP_PING" }, () => {
+            if (typeof window.onChampOpponentPing === "function") {
+                window.onChampOpponentPing();
+            }
+        })
         // Presence Events
         .on("presence", { event: "sync" }, () => {
             handleRoomPresenceSync(isHost);
@@ -861,7 +877,24 @@ function triggerRoomCountdown() {
 /**
  * Handle Countdown and launch Arena
  */
-function handleStartCountdown({ startsAt }) {
+function handleStartCountdown(payload = {}) {
+    // 1. Remove championship waiting modal for guest as well
+    const waitingOverlay = document.getElementById("champ-match-waiting-modal");
+    if (waitingOverlay) waitingOverlay.remove();
+
+    if (battleState.prepTimerInterval) {
+        clearInterval(battleState.prepTimerInterval);
+        battleState.prepTimerInterval = null;
+    }
+
+    // 2. Synchronize questions if guest didn't have them
+    if (payload?.fullQuestions && Array.isArray(payload.fullQuestions) && payload.fullQuestions.length > 0) {
+        battleState.questions = payload.fullQuestions;
+        if (battleState.activeRoom) {
+            battleState.activeRoom.questionIds = payload.fullQuestions.map(q => q.id);
+        }
+    }
+
     const box = document.getElementById("battle-countdown-box");
     const secondsEl = document.getElementById("battle-countdown-seconds");
     if (box) box.classList.remove("hidden");
@@ -874,9 +907,70 @@ function handleStartCountdown({ startsAt }) {
         if (secondsEl) secondsEl.innerText = count;
         if (count <= 0) {
             clearInterval(interval);
+            if (box) box.classList.add("hidden");
             startLiveBattleMatch();
         }
     }, 1000);
+}
+
+/**
+ * Anti-Cheat Focus Guard: Warns or locks questions if student switches tabs during match
+ */
+function setupAntiCheatFocusGuard() {
+    if (typeof document === 'undefined') return;
+    if (window._champVisibilityHandler) {
+        document.removeEventListener("visibilitychange", window._champVisibilityHandler);
+    }
+    battleState.tabBlurCount = 0;
+
+    window._champVisibilityHandler = () => {
+        if (document.visibilityState === "hidden" && battleState.gameStatus === "arena") {
+            battleState.tabBlurCount = (battleState.tabBlurCount || 0) + 1;
+            if (battleState.tabBlurCount === 1) {
+                window.showToast?.("⚠️ تنبيه نزاهة الاختبار", "ممنوع مغادرة شاشة البطولة أو التبديل بين التبويبات! تكرار ذلك سيؤدي لقفل السؤال تلقائياً.", "warning");
+            } else {
+                window.showToast?.("🚨 مخالفة نزاهة الاختبار", "تم رصد مغادرة شاشة الاختبار مجدداً. تم حسم السؤال الحالي.", "danger");
+                const currentQ = battleState.questions[battleState.currentQuestionIndex];
+                if (currentQ && !battleState.myAnswerLocked) {
+                    lockAndSubmitCurrentAnswer(currentQ, true);
+                }
+            }
+        }
+    };
+    document.addEventListener("visibilitychange", window._champVisibilityHandler);
+}
+
+function removeAntiCheatFocusGuard() {
+    if (typeof document !== 'undefined' && window._champVisibilityHandler) {
+        document.removeEventListener("visibilitychange", window._champVisibilityHandler);
+        window._champVisibilityHandler = null;
+    }
+}
+
+/**
+ * BeforeUnload Guard: Prevents accidental tab close, back swipe or page reload during matches
+ */
+function setupBeforeUnloadGuard() {
+    if (typeof window === 'undefined') return;
+    if (window._battleBeforeUnloadHandler) {
+        window.removeEventListener("beforeunload", window._battleBeforeUnloadHandler);
+    }
+    window._battleBeforeUnloadHandler = (e) => {
+        if (battleState.gameStatus === "arena" || battleState.gameStatus === "waiting") {
+            e.preventDefault();
+            e.returnValue = "هل أنت متأكد من مغادرة شاشة المباراة؟ سيؤدي ذلك لانسحابك وخسارتك تلقائياً!";
+            return e.returnValue;
+        }
+    };
+    window.addEventListener("beforeunload", window._battleBeforeUnloadHandler);
+}
+
+function removeBeforeUnloadGuard() {
+    if (typeof window === 'undefined') return;
+    if (window._battleBeforeUnloadHandler) {
+        window.removeEventListener("beforeunload", window._battleBeforeUnloadHandler);
+        window._battleBeforeUnloadHandler = null;
+    }
 }
 
 /**
@@ -888,6 +982,9 @@ function startLiveBattleMatch() {
     battleState.opponentScore = 0;
     battleState.myAnswers = {};
     battleState.opponentAnswers = {};
+
+    setupAntiCheatFocusGuard();
+    setupBeforeUnloadGuard();
 
     switchBattleSubscreen("arena");
     setupArenaHUD();
@@ -1201,13 +1298,23 @@ export function forfeitBattleMatch() {
 
     const currentUser = getActiveUser();
     const myName = formatUserDisplay(currentUser);
+    const myId = currentUser?.id || currentUser?.email;
+
+    // Record forfeit in championship match metadata if applicable
+    if (battleState.activeRoom?.isChampionship && battleState.activeRoom?.championshipMatch) {
+        const cMatch = battleState.activeRoom.championshipMatch;
+        cMatch.status = "forfeit";
+        cMatch.match_meta = cMatch.match_meta || {};
+        cMatch.match_meta.forfeit_by = myId;
+        cMatch.score_text = `انسحاب المتسابق (${myName})`;
+    }
 
     // Notify opponent
     if (battleState.roomChannel) {
         battleState.roomChannel.send({
             type: "broadcast",
             event: "PLAYER_FORFEIT",
-            payload: { forfeitedBy: myName }
+            payload: { forfeitedBy: myName, forfeitedId: myId }
         });
     }
 
@@ -1220,6 +1327,15 @@ export function forfeitBattleMatch() {
 function handleOpponentForfeit(payload) {
     clearInterval(battleState.timerInterval);
     window.showToast?.("🏆 Opponent Surrendered!", `أعلن الخصم (${payload.forfeitedBy}) انسحابه! تم احتساب الفوز لك!`, "success");
+    
+    if (battleState.activeRoom?.isChampionship && battleState.activeRoom?.championshipMatch) {
+        const cMatch = battleState.activeRoom.championshipMatch;
+        cMatch.status = "forfeit";
+        cMatch.match_meta = cMatch.match_meta || {};
+        cMatch.match_meta.forfeit_by = payload.forfeitedId || payload.forfeitedBy;
+        cMatch.score_text = `فوز بانسحاب الخصم (${payload.forfeitedBy})`;
+    }
+
     battleState.opponentScore = 0;
     battleState.myScore = Math.max(battleState.myScore, 30);
     finishBattleMatch();
@@ -1262,6 +1378,8 @@ function advanceToNextQuestionClean() {
  */
 function finishBattleMatch() {
     clearInterval(battleState.timerInterval);
+    removeAntiCheatFocusGuard();
+    removeBeforeUnloadGuard();
 
     // Free server room capacity slot immediately
     if (battleState.activeRoom?.isHost && battleState.lobbyChannel) {
@@ -1272,6 +1390,46 @@ function finishBattleMatch() {
 
     const myScore = battleState.myScore;
     const opScore = battleState.opponentScore;
+    const isChampionship = !!(battleState.activeRoom?.isChampionship && battleState.activeRoom?.championshipMatch);
+    let evalRes = null;
+
+    // Championship Match Recording & Winner Advancement
+    if (isChampionship) {
+        const cMatch = battleState.activeRoom.championshipMatch;
+        if (cMatch.status !== "forfeit") {
+            cMatch.status = "completed";
+        }
+        if (battleState.activeRoom.role === "p1") {
+            cMatch.p1_score = myScore;
+            cMatch.p2_score = opScore;
+        } else {
+            cMatch.p1_score = opScore;
+            cMatch.p2_score = myScore;
+        }
+        
+        evalRes = evaluateMatchResult(cMatch);
+        cMatch.winner_id = evalRes.winner_id;
+        
+        // Eliminate the loser from subsequent matches
+        const loserId = evalRes.loser_id;
+        if (loserId) {
+            const loserPart = (champState.participants || []).find(p => p.id === loserId);
+            if (loserPart) {
+                loserPart.eliminated = true;
+            }
+        }
+
+        // Advance winner to the next round slot
+        if (evalRes.winner_id && cMatch.next_match_id) {
+            advanceWinnerToNextRound(champState.matches, cMatch.id, evalRes.winner_id);
+        }
+
+        try {
+            const group = getActiveGroupName();
+            saveChampionshipToLocalCache(group);
+            renderChampionshipHub("battle-championship-container", getActiveUser());
+        } catch(e) {}
+    }
 
     const currentUser = getActiveUser();
     const opponent = battleState.activeRoom?.opponent;
@@ -1297,12 +1455,37 @@ function finishBattleMatch() {
         }
         if (subEl) subEl.innerText = "A close battle! Review the clinical explanations below to master these concepts.";
     } else {
-        if (iconEl) iconEl.innerText = "🤝";
-        if (titleEl) {
-            titleEl.innerText = "IT'S A DRAW!";
-            titleEl.style.color = "#3b82f6";
+        if (isChampionship && evalRes?.winner_id) {
+            const isWinner = (evalRes.winner_id === currentUser?.id || evalRes.winner_id === currentUser?.email);
+            if (isWinner) {
+                if (iconEl) iconEl.innerText = "🏆";
+                if (titleEl) {
+                    titleEl.innerText = "VICTORY BY TIE-BREAKER!";
+                    titleEl.style.color = "#10b981";
+                }
+                const reasonText = evalRes.reason === 'speed_tiebreaker' 
+                    ? `مبارك د. ${myName}! تم كسر التعادل واحتساب الفوز لك بأفضلية سرعة الإجابة بالميلي ثانية! ⚡`
+                    : `مبارك د. ${myName}! تم كسر التعادل المطلق لصالحك وفقاً للأفضلية التصنيفية في قرعة البطولة (Seed) 🎯`;
+                if (subEl) subEl.innerText = reasonText;
+            } else {
+                if (iconEl) iconEl.innerText = "⚔️";
+                if (titleEl) {
+                    titleEl.innerText = "DEFEAT BY TIE-BREAKER";
+                    titleEl.style.color = "#ef4444";
+                }
+                const reasonText = evalRes.reason === 'speed_tiebreaker'
+                    ? "تعادل في النقاط، ولكن الخصم تفوق بفارق سرعة الإجابة بالميلي ثانية. ⚡"
+                    : "تعادل تام في النقاط والسرعة! رجحت كفة الخصم وفقاً للأفضلية التصنيفية في القرعة (Seed).";
+                if (subEl) subEl.innerText = reasonText;
+            }
+        } else {
+            if (iconEl) iconEl.innerText = "🤝";
+            if (titleEl) {
+                titleEl.innerText = "IT'S A DRAW!";
+                titleEl.style.color = "#3b82f6";
+            }
+            if (subEl) subEl.innerText = "Perfect parity! Both competitors matched each other's score and timing.";
         }
-        if (subEl) subEl.innerText = "Perfect parity! Both competitors matched each other's score and timing.";
     }
 
     // Populate comparison table with 5-character display names
@@ -1325,11 +1508,19 @@ function finishBattleMatch() {
     if (p2ScoreEl) p2ScoreEl.innerText = `${opScore} pts`;
     if (p2StatsEl) p2StatsEl.innerText = `Final Score: ${opScore}/${totalQ * 10} pts`;
 
-    // Reset Rematch button text
+    // Action Buttons: Hide Rematch in Championship and show Tournament Bracket button
     const btnRematch = document.getElementById("btn-battle-rematch");
-    if (btnRematch) {
-        btnRematch.disabled = false;
-        btnRematch.innerHTML = `<i class="fa-solid fa-rotate-right"></i> Rematch`;
+    const btnChampBracket = document.getElementById("btn-battle-champ-bracket");
+    if (isChampionship) {
+        if (btnRematch) btnRematch.classList.add("hidden");
+        if (btnChampBracket) btnChampBracket.classList.remove("hidden");
+    } else {
+        if (btnRematch) {
+            btnRematch.classList.remove("hidden");
+            btnRematch.disabled = false;
+            btnRematch.innerHTML = `<i class="fa-solid fa-rotate-right"></i> Rematch`;
+        }
+        if (btnChampBracket) btnChampBracket.classList.add("hidden");
     }
 
     // Render clinical explanations review accordion
@@ -1398,6 +1589,11 @@ export function toggleBattleReviewSection() {
  * Rematch Protocol: Checks opponent presence and sends REMATCH_REQUESTED
  */
 export function requestBattleRematch() {
+    if (battleState.activeRoom?.isChampionship) {
+        window.showToast?.("Rematch Disabled", "جولة الإعادة غير متاحة في مباريات البطولة الرسمية. يرجى متابعة جدول المباريات وشجرة التصفيات.", "info");
+        return;
+    }
+
     // 1. Verify opponent is still connected
     const presence = battleState.roomChannel?.presenceState() || {};
     const myEmail = getActiveUser().email;
@@ -1551,6 +1747,8 @@ export function returnToBattleLobby() {
 
 export function leaveBattleRoom() {
     clearInterval(battleState.timerInterval);
+    removeAntiCheatFocusGuard();
+    removeBeforeUnloadGuard();
     clearInterval(battleState.guestHandshakeInterval);
     battleState.guestHandshakeInterval = null;
     clearTimeout(battleState.rematchTimeout);
@@ -1578,9 +1776,14 @@ export function leaveBattleRoom() {
         try { battleState.lobbyChannel.untrack(); } catch(e) {}
     }
 
+    const wasChamp = battleState.activeRoom?.isChampionship;
     battleState.activeRoom = null;
     battleState.questions = [];
-    switchBattleSubscreen("lobby");
+    if (wasChamp) {
+        switchBattleArenaMode("championship");
+    } else {
+        switchBattleSubscreen("lobby");
+    }
 }
 
 /**
@@ -1748,12 +1951,589 @@ function shuffleArray(arr) {
 /**
  * Main View Renderer called by router (switchView('battle-room'))
  */
+
+/**
+ * Switch between Instant 1v1 and Championship Leagues Sub-Tabs
+ */
+export function switchBattleArenaMode(mode) {
+    const btnQuick = document.getElementById("btn-battle-subtab-quick");
+    const btnChamp = document.getElementById("btn-battle-subtab-champ");
+    const champContainer = document.getElementById("battle-championship-container");
+    const quickLobby = document.getElementById("battle-screen-lobby");
+
+    if (mode === "championship") {
+        if (btnQuick) {
+            btnQuick.classList.remove("btn-primary");
+            btnQuick.classList.add("btn-secondary");
+        }
+        if (btnChamp) {
+            btnChamp.classList.remove("btn-secondary");
+            btnChamp.classList.add("btn-primary");
+        }
+        if (quickLobby) quickLobby.classList.add("hidden");
+        if (champContainer) {
+            champContainer.classList.remove("hidden");
+            renderChampionshipHub("battle-championship-container", getActiveUser());
+        }
+    } else {
+        if (btnQuick) {
+            btnQuick.classList.remove("btn-secondary");
+            btnQuick.classList.add("btn-primary");
+        }
+        if (btnChamp) {
+            btnChamp.classList.remove("btn-primary");
+            btnChamp.classList.add("btn-secondary");
+        }
+        if (champContainer) champContainer.classList.add("hidden");
+        if (quickLobby) quickLobby.classList.remove("hidden");
+    }
+}
+
+/**
+ * Launch Championship Match in Arena
+ */
+export function launchChampionshipArena(match) {
+    const currentUser = getActiveUser();
+    const userEmail = (currentUser && currentUser.email) ? currentUser.email.toLowerCase().trim() : "";
+    
+    const isP1 = (match.player1_info && match.player1_info.email.toLowerCase() === userEmail);
+    const opponent = isP1 ? match.player2_info : match.player1_info;
+    const opponentName = opponent ? opponent.student_name : "Competitor";
+
+    battleState.activeRoom = {
+        id: match.id,
+        code: match.id,
+        source: "Championship",
+        topicMode: "mixed",
+        count: 5,
+        timeLimit: 20,
+        isHost: isP1,
+        role: isP1 ? "p1" : "p2",
+        isChampionship: true,
+        championshipMatch: match,
+        opponent: {
+            email: opponent ? opponent.email : "opponent@hawari.edu",
+            displayName: opponentName,
+            name: opponentName,
+            avatar: opponentName.slice(0, 2).toUpperCase()
+        }
+    };
+
+    const roundName = match.round_name || 'round_32';
+    let matchQuestions = [];
+    if (champState.activeChampionship?.round_questions?.[roundName]?.length > 0) {
+        matchQuestions = champState.activeChampionship.round_questions[roundName];
+    } else {
+        const pool = getFilteredBattleQuestions();
+        matchQuestions = pool.slice(0, 5);
+    }
+    battleState.activeRoom.questionIds = matchQuestions.map(q => q.id);
+    battleState.questions = matchQuestions;
+    battleState.gameStatus = "waiting";
+
+    // Mark current player entered in match metadata
+    match.match_meta = match.match_meta || {};
+    if (isP1) {
+        match.match_meta.p1_entered = true;
+        match.match_meta.p1_entered_at = Date.now();
+    } else {
+        match.match_meta.p2_entered = true;
+        match.match_meta.p2_entered_at = Date.now();
+    }
+    const group = getActiveGroupName ? getActiveGroupName() : 'infection';
+    saveChampionshipToLocalCache(group);
+
+    // Connect to Supabase Realtime channel for presence and live coordination
+    joinRoomChannel(match.id, isP1);
+
+    // Launch Waiting & Preparation Room with 3-minute grace countdown protocol
+    showChampionshipWaitingRoom(match);
+}
+
+/**
+ * Render Championship Waiting Room with 3-Minute Grace Countdown & Mandatory Opponent Presence
+ */
+export function showChampionshipWaitingRoom(match) {
+    if (battleState.prepTimerInterval) {
+        clearInterval(battleState.prepTimerInterval);
+        battleState.prepTimerInterval = null;
+    }
+
+    let overlay = document.getElementById("champ-match-waiting-modal");
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "champ-match-waiting-modal";
+        document.body.appendChild(overlay);
+    }
+
+    overlay.style.cssText = "position: fixed; inset: 0; background: rgba(10, 15, 30, 0.90); backdrop-filter: blur(8px); z-index: 99999; display: flex; align-items: center; justify-content: center; padding: 20px; direction: rtl;";
+
+    const currentUser = getActiveUser();
+    const userEmail = (currentUser && currentUser.email) ? currentUser.email.toLowerCase().trim() : "";
+    const isP1 = (match.player1_info && match.player1_info.email.toLowerCase() === userEmail);
+    const roundLabel = ROUND_LABELS[match.round_name] || match.round_name;
+    const p1Name = match.player1_info?.student_name || "المتسابق الأول";
+    const p2Name = match.player2_info?.student_name || "المتسابق الثاني";
+    const qCount = battleState.questions.length;
+    const group = getActiveGroupName ? getActiveGroupName() : 'infection';
+
+    let phase = 'prep'; // 'prep' (60s prep) or 'grace' (180s = 3 min grace)
+    let secondsLeft = 60;
+    let graceSecondsLeft = 180;
+    let opponentPresent = false;
+
+    // Helper to check if opponent is in room
+    const isOpponentOnline = () => {
+        // 1. Check Realtime presence
+        if (battleState.roomChannel) {
+            const pres = battleState.roomChannel.presenceState();
+            let found = false;
+            Object.keys(pres).forEach(k => {
+                const arr = pres[k];
+                if (Array.isArray(arr)) {
+                    arr.forEach(u => {
+                        if (u.clientId && u.clientId !== battleState.clientSessionId) found = true;
+                        else if (u.email && u.email.toLowerCase() !== userEmail) found = true;
+                    });
+                }
+            });
+            if (found) return true;
+        }
+
+        // 2. Check match_meta in memory
+        const currentM = (champState.matches || []).find(m => m.id === match.id) || match;
+        if (isP1 && currentM.match_meta?.p2_entered) return true;
+        if (!isP1 && currentM.match_meta?.p1_entered) return true;
+
+        // 3. Check localStorage cache for cross-tab or concurrent sync
+        try {
+            const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                const mCached = (parsed.matches || []).find(m => m.id === match.id);
+                if (mCached && mCached.match_meta) {
+                    if (isP1 && mCached.match_meta.p2_entered) return true;
+                    if (!isP1 && mCached.match_meta.p1_entered) return true;
+                }
+            }
+        } catch (e) {}
+
+        return false;
+    };
+
+    // Ping callback from joinRoomChannel broadcast
+    window.onChampOpponentPing = () => {
+        opponentPresent = true;
+        updateUI();
+    };
+
+    const renderOverlayContent = () => {
+        const curSeconds = (phase === 'prep') ? secondsLeft : graceSecondsLeft;
+        const mins = Math.floor(curSeconds / 60);
+        const secs = curSeconds % 60;
+        const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+
+        overlay.innerHTML = `
+            <div style="background: var(--bg-primary, #1e293b); border: 2px solid ${phase === 'grace' ? '#ef4444' : 'rgba(245, 158, 11, 0.4)'}; border-radius: 20px; width: 100%; max-width: 620px; padding: 28px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: center; color: var(--text-primary, #ffffff); font-family: inherit;">
+                
+                <!-- TOP HEADER -->
+                <div style="display: flex; justify-content: center; align-items: center; gap: 10px; margin-bottom: 12px;">
+                    <div style="width: 44px; height: 44px; border-radius: 12px; background: ${phase === 'grace' ? 'linear-gradient(135deg, #ef4444, #b91c1c)' : 'linear-gradient(135deg, #f59e0b, #d97706)'}; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #ffffff; box-shadow: 0 4px 14px ${phase === 'grace' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)'};">
+                        <i class="fa-solid ${phase === 'grace' ? 'fa-clock' : 'fa-trophy'}"></i>
+                    </div>
+                    <div style="text-align: right;">
+                        <h2 style="margin: 0; font-size: 1.35rem; font-weight: 800; color: var(--text-primary);">
+                            ${phase === 'grace' ? '⏳ مهلة انتظار الخصم الرسمية (3 دقائق)' : 'غرفة الاستعداد للمباراة الرسمية'}
+                        </h2>
+                        <span style="font-size: 0.85rem; color: ${phase === 'grace' ? '#ef4444' : '#f59e0b'}; font-weight: 700;">${roundLabel} &bull; مباراة رقم #${match.match_order}</span>
+                    </div>
+                </div>
+
+                <!-- PLAYERS MATCHUP BADGE -->
+                <div style="background: var(--bg-secondary, #0f172a); border-radius: 14px; padding: 14px 18px; margin-bottom: 20px; border: 1px solid var(--border-color, rgba(255,255,255,0.1)); display: flex; justify-content: space-around; align-items: center;">
+                    <div style="font-weight: 700; color: ${isP1 ? '#3b82f6' : 'var(--text-primary)'}; font-size: 0.95rem;">
+                        <i class="fa-solid fa-circle" style="color: #10b981; font-size: 0.7rem; margin-left: 6px;"></i>
+                        د. ${p1Name} ${isP1 ? '<span class="badge" style="background: #3b82f6; color: white; font-size: 0.7rem; margin-right: 4px;">أنت</span>' : (opponentPresent ? '<span class="badge" style="background: #10b981; color: white; font-size: 0.7rem;">حاضر 🟢</span>' : '<span class="badge" style="background: #f59e0b; color: white; font-size: 0.7rem;">بانتظار الدخول ⏳</span>')}
+                    </div>
+                    <div style="font-weight: 900; color: #ef4444; font-size: 1.1rem; padding: 0 10px;">VS</div>
+                    <div style="font-weight: 700; color: ${!isP1 ? '#f59e0b' : 'var(--text-primary)'}; font-size: 0.95rem;">
+                        <i class="fa-solid fa-circle" style="color: ${(!isP1 || opponentPresent) ? '#10b981' : '#f59e0b'}; font-size: 0.7rem; margin-left: 6px;"></i>
+                        د. ${p2Name} ${!isP1 ? '<span class="badge" style="background: #3b82f6; color: white; font-size: 0.7rem; margin-right: 4px;">أنت</span>' : (opponentPresent ? '<span class="badge" style="background: #10b981; color: white; font-size: 0.7rem;">حاضر 🟢</span>' : '<span class="badge" style="background: #f59e0b; color: white; font-size: 0.7rem;">بانتظار الدخول ⏳</span>')}
+                    </div>
+                </div>
+
+                <!-- COUNTDOWN TIMER -->
+                <div style="margin-bottom: 22px; ${phase === 'grace' ? 'background: rgba(239, 68, 68, 0.08); border: 1.5px solid #ef4444; border-radius: 16px; padding: 18px;' : ''}">
+                    <span style="font-size: 0.88rem; color: ${phase === 'grace' ? '#ef4444' : 'var(--text-muted)'}; display: block; margin-bottom: 6px; font-weight: 700;">
+                        ${phase === 'grace' ? '⏳ العداد التنازلي لمهلة الـ 3 دقائق (فوز بالانسحاب عند الانتهاء):' : 'العد التنازلي للاستعداد لبدء الامتحان:'}
+                    </span>
+                    <div id="champ-prep-timer-display" style="font-size: 3rem; font-weight: 900; color: ${phase === 'grace' ? '#ef4444' : '#f59e0b'}; font-family: monospace; letter-spacing: 3px; line-height: 1;">
+                        ${timeStr}
+                    </div>
+                    ${phase === 'grace' ? `
+                        <p style="font-size: 0.85rem; color: #fca5a5; margin: 8px 0 0 0; line-height: 1.5;">
+                            الخصم لم ينضم بعد. في حال انتهاء العداد دون دخوله، <strong>سيتم احتسابك فائزاً بالانسحاب (Walkover) وصعودك للدور التالي مباشرة.</strong>
+                        </p>
+                    ` : `
+                        <span style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; display: block;">(${qCount} أسئلة موحدة &bull; 20 ثانية لكل سؤال)</span>
+                    `}
+                </div>
+
+                <!-- ARABIC INSTRUCTIONS CARD -->
+                <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 18px; text-align: right; margin-bottom: 22px;">
+                    <h4 style="margin: 0 0 12px 0; font-size: 0.95rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                        <i class="fa-solid fa-shield-halved" style="color: #3b82f6;"></i>
+                        تعليمات وقواعد النزاهة الإجبارية:
+                    </h4>
+                    <ul style="margin: 0; padding: 0 18px 0 0; list-style-type: none; display: flex; flex-direction: column; gap: 10px; font-size: 0.88rem; line-height: 1.6; color: var(--text-secondary);">
+                        <li style="display: flex; align-items: flex-start; gap: 8px;">
+                            <span style="color: #ef4444; font-size: 1rem;">⚠️</span>
+                            <div><strong style="color: #ef4444;">تنبيه هام:</strong> أي خروج أو إغلاق للمتصفح أثناء المباراة يُعتبر انسحاباً وهزيمة فورية.</div>
+                        </li>
+                        <li style="display: flex; align-items: flex-start; gap: 8px;">
+                            <span style="color: #ef4444; font-size: 1rem;">🔒</span>
+                            <div><strong style="color: #ef4444;">حظر بدء الأسئلة بمفردك:</strong> يُمنع تماماً بدء الامتحان حتى ينضم المنافس وتتأكد جاهزية الطرفين، مع منح الخصم مهلة 3 دقائق كحد أقصى للحضور.</div>
+                        </li>
+                        <li style="display: flex; align-items: flex-start; gap: 8px;">
+                            <span style="color: #f59e0b; font-size: 1rem;">⚡</span>
+                            <div><strong style="color: #f59e0b;">حسم التعادل:</strong> في حال التعادل بالنقاط، يتم احتساب الفائز بناءً على سرعة الإجابة بالمللي ثانية (للإجابات الصحيحة فقط).</div>
+                        </li>
+                        <li style="display: flex; align-items: flex-start; gap: 8px;">
+                            <span style="color: #3b82f6; font-size: 1rem;">⏱️</span>
+                            <div><strong style="color: #3b82f6;">وقت الأسئلة:</strong> لكل سؤال وقت محدد، احرص على اختيار الإجابة قبل انتهاء العداد.</div>
+                        </li>
+                        <li style="display: flex; align-items: flex-start; gap: 8px;">
+                            <span style="color: #10b981; font-size: 1rem;">🏆</span>
+                            <div><strong style="color: #10b981;">نظام خروج المغلوب:</strong> الفائز يصعد مباشرة للدور التالي، والخاسر يغادر البطولة.</div>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- ACTIONS -->
+                <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+                    <button id="btn-champ-start-now" class="btn btn-primary" onclick="window.startChampionshipMatchNow()" ${!opponentPresent ? 'disabled' : ''} style="padding: 12px 28px; font-size: 1rem; font-weight: 800; border-radius: 12px; ${opponentPresent ? 'background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4); cursor: pointer;' : 'background: #475569; opacity: 0.65; cursor: not-allowed;'} border: none;">
+                        ${opponentPresent ? '<i class="fa-solid fa-play"></i> كليكما حاضر - ابدأ المباراة الآن 🚀' : '<i class="fa-solid fa-lock"></i> بانتظار دخول المنافس... (ممنوع بدء الأسئلة)'}
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.returnToChampionshipHub()" style="padding: 12px 20px; font-size: 0.9rem; border-radius: 12px;">
+                        العودة لجدول المباريات
+                    </button>
+                </div>
+            </div>
+        `;
+    };
+
+    const updateUI = () => {
+        renderOverlayContent();
+    };
+
+    renderOverlayContent();
+
+    battleState.prepTimerInterval = setInterval(() => {
+        // Broadcast presence ping
+        if (battleState.roomChannel) {
+            battleState.roomChannel.send({
+                type: "broadcast",
+                event: "CHAMP_PING",
+                payload: { matchId: match.id, role: isP1 ? 'p1' : 'p2', email: userEmail }
+            }).catch(() => {});
+        }
+
+        const online = isOpponentOnline();
+        if (online && !opponentPresent) {
+            opponentPresent = true;
+            updateUI();
+        }
+
+        if (phase === 'prep') {
+            secondsLeft--;
+            const timerEl = document.getElementById("champ-prep-timer-display");
+            if (timerEl) {
+                const mins = Math.floor(secondsLeft / 60);
+                const secs = secondsLeft % 60;
+                timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            }
+
+            if (secondsLeft <= 0) {
+                if (opponentPresent) {
+                    // Both present! Start match immediately
+                    clearInterval(battleState.prepTimerInterval);
+                    battleState.prepTimerInterval = null;
+                    startChampionshipMatchNow();
+                } else {
+                    // Opponent NOT present! Switch to 3-minute grace countdown
+                    phase = 'grace';
+                    graceSecondsLeft = 180;
+                    updateUI();
+                    window.showToast?.("بدء مهلة الـ 3 دقائق", "الخصم لم ينضم بعد. بدأت مهلة الانتظار القانونية (3 دقائق).", "warning");
+                }
+            }
+        } else if (phase === 'grace') {
+            if (opponentPresent) {
+                // Opponent arrived during grace countdown!
+                clearInterval(battleState.prepTimerInterval);
+                battleState.prepTimerInterval = null;
+                const timerEl = document.getElementById("champ-prep-timer-display");
+                if (timerEl) timerEl.innerText = "00:00";
+                window.showToast?.("حضر الخصم!", "دخل المنافس الغرفة، جاري بدء المباراة الآن...", "success");
+                setTimeout(() => {
+                    startChampionshipMatchNow();
+                }, 2000);
+                return;
+            }
+
+            graceSecondsLeft--;
+            const timerEl = document.getElementById("champ-prep-timer-display");
+            if (timerEl) {
+                const mins = Math.floor(graceSecondsLeft / 60);
+                const secs = graceSecondsLeft % 60;
+                timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            }
+
+            if (graceSecondsLeft <= 0) {
+                // 3 MINUTES EXPIRED! Connected player wins by walkover!
+                clearInterval(battleState.prepTimerInterval);
+                battleState.prepTimerInterval = null;
+                declareChampionshipWalkover(match, currentUser);
+            }
+        }
+    }, 1000);
+}
+
+/**
+ * Declare Walkover Victory when Opponent fails to join within 3-minute grace period
+ */
+export function declareChampionshipWalkover(match, currentUser) {
+    if (battleState.prepTimerInterval) {
+        clearInterval(battleState.prepTimerInterval);
+        battleState.prepTimerInterval = null;
+    }
+    const overlay = document.getElementById("champ-match-waiting-modal");
+    if (overlay) overlay.remove();
+
+    const userEmail = (currentUser?.email || "").toLowerCase().trim();
+    const group = getActiveGroupName ? getActiveGroupName() : 'infection';
+
+    // Reload latest state from localStorage
+    try {
+        const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
+        if (cached) {
+            const parsed = JSON.parse(cached);
+            champState.activeChampionship = parsed.championship || champState.activeChampionship;
+            champState.participants = parsed.participants || champState.participants;
+            champState.matches = parsed.matches || champState.matches;
+        }
+    } catch (e) {}
+
+    const cMatch = (champState.matches || []).find(m => m.id === match.id) || match;
+    const isP1 = (cMatch.player1_info && cMatch.player1_info.email.toLowerCase().trim() === userEmail);
+
+    const winnerId = isP1 ? cMatch.player1_id : cMatch.player2_id;
+    const winnerInfo = isP1 ? cMatch.player1_info : cMatch.player2_info;
+    const loserId = isP1 ? cMatch.player2_id : cMatch.player1_id;
+    const loserInfo = isP1 ? cMatch.player2_info : cMatch.player1_info;
+
+    cMatch.status = "completed";
+    cMatch.winner_id = winnerId;
+    cMatch.winner_info = winnerInfo;
+    cMatch.p1_score = isP1 ? 1 : 0;
+    cMatch.p2_score = isP1 ? 0 : 1;
+    cMatch.score_text = "فوز بالانسحاب (عدم حضور الخصم)";
+    cMatch.completed_at = new Date().toISOString();
+
+    // Eliminate the absent opponent
+    if (loserId) {
+        const loserPart = (champState.participants || []).find(p => p.id === loserId);
+        if (loserPart) {
+            loserPart.eliminated = true;
+            loserPart.elimination_reason = "انسحاب لعدم الحضور خلال المهلة المقررة (3 دقائق)";
+        }
+    }
+
+    // Advance winner to the next round slot
+    if (winnerId && cMatch.next_match_id) {
+        advanceWinnerToNextRound(champState.matches, cMatch.id, winnerId);
+    }
+
+    // Save to local cache
+    saveChampionshipToLocalCache(group);
+
+    // Notify UI reactively
+    if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent('championship_updated', {
+            detail: { matchId: cMatch.id, winnerId: winnerId, type: 'walkover' }
+        }));
+    }
+
+    // Show celebratory Walkover Modal
+    showWalkoverVictoryModal(cMatch, winnerInfo, loserInfo);
+}
+
+/**
+ * Show Celebratory Modal for Walkover Victory
+ */
+export function showWalkoverVictoryModal(match, winnerInfo, loserInfo) {
+    let modal = document.getElementById("champ-walkover-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "champ-walkover-modal";
+        document.body.appendChild(modal);
+    }
+    modal.style.cssText = "position: fixed; inset: 0; background: rgba(10, 15, 30, 0.92); backdrop-filter: blur(10px); z-index: 100000; display: flex; align-items: center; justify-content: center; padding: 20px; direction: rtl;";
+
+    const roundLabel = ROUND_LABELS[match.round_name] || match.round_name;
+    const opponentName = loserInfo?.student_name || "المنافس";
+    const winnerName = winnerInfo?.student_name || "المتسابق";
+
+    modal.innerHTML = `
+        <div style="background: var(--bg-primary, #1e293b); border: 2px solid #10b981; border-radius: 24px; width: 100%; max-width: 580px; padding: 36px 28px; box-shadow: 0 25px 50px rgba(0,0,0,0.6); text-align: center; color: var(--text-primary, #ffffff); font-family: inherit;">
+            <div style="width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #10b981, #059669); color: white; font-size: 2.8rem; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px; box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);">
+                <i class="fa-solid fa-trophy"></i>
+            </div>
+            <h2 style="margin: 0 0 10px 0; font-size: 1.6rem; font-weight: 800; color: #10b981;">
+                مبارك د. ${winnerName}! فوز رسمي بالانسحاب 🏆
+            </h2>
+            <p style="font-size: 1rem; color: var(--text-secondary); line-height: 1.6; margin: 0 0 24px 0;">
+                نظراً لعدم حضور المنافس (<strong>د. ${opponentName}</strong>) خلال المهلة القانونية المقررة (3 دقائق)، تم احتسابك فائزاً بالمباراة وتأهلك رسمياً للدور التالي!
+            </p>
+            <div style="background: var(--bg-secondary, #0f172a); border-radius: 14px; padding: 18px; margin-bottom: 26px; border: 1px solid rgba(255,255,255,0.08); text-align: right; display: flex; flex-direction: column; gap: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                    <span style="color: var(--text-muted);">المباراة:</span>
+                    <strong style="color: var(--text-primary);">${roundLabel} &bull; مباراة رقم #${match.match_order}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                    <span style="color: var(--text-muted);">النتيجة المعتمدة:</span>
+                    <span class="badge" style="background: #10b981; color: white; font-weight: 700; padding: 3px 10px; border-radius: 6px;">فوز بالانسحاب (Walkover) 🏆</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                    <span style="color: var(--text-muted);">حالة المنافس:</span>
+                    <span class="badge" style="background: #ef4444; color: white; font-weight: 700; padding: 3px 10px; border-radius: 6px;">مستبعد لعدم الحضور</span>
+                </div>
+            </div>
+            <button class="btn btn-primary btn-lg" onclick="window.closeWalkoverVictoryModal()" style="width: 100%; padding: 14px 24px; font-size: 1.05rem; font-weight: 800; border-radius: 14px; background: linear-gradient(135deg, #10b981, #059669); border: none; box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4); cursor: pointer;">
+                العودة لجدول المباريات ومعرفة الخصم القادم <i class="fa-solid fa-arrow-left" style="margin-right: 6px;"></i>
+            </button>
+        </div>
+    `;
+}
+
+export function closeWalkoverVictoryModal() {
+    const modal = document.getElementById("champ-walkover-modal");
+    if (modal) modal.remove();
+    returnToChampionshipHub();
+}
+
+export function startChampionshipMatchNow() {
+    // Safety check: verify opponent presence before questions start
+    const currentUser = getActiveUser();
+    const userEmail = (currentUser?.email || "").toLowerCase().trim();
+    const match = battleState.activeRoom?.championshipMatch;
+    
+    if (match) {
+        const isP1 = (match.player1_info && match.player1_info.email.toLowerCase() === userEmail);
+        const group = getActiveGroupName ? getActiveGroupName() : 'infection';
+        let online = false;
+
+        // Check local storage or memory
+        if (match.match_meta?.[isP1 ? 'p2_entered' : 'p1_entered']) online = true;
+        try {
+            const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                const mCached = (parsed.matches || []).find(item => item.id === match.id);
+                if (mCached?.match_meta?.[isP1 ? 'p2_entered' : 'p1_entered']) online = true;
+            }
+        } catch (e) {}
+
+        // Check realtime presence
+        if (battleState.roomChannel) {
+            const pres = battleState.roomChannel.presenceState();
+            if (Object.keys(pres).length > 1) online = true;
+        }
+
+        if (!online) {
+            window.showToast?.("تنبيه هام", "ممنوع بدء الأسئلة قبل حضور ودخول المنافس للغرفة.", "warning");
+            return;
+        }
+    }
+
+    if (battleState.prepTimerInterval) {
+        clearInterval(battleState.prepTimerInterval);
+        battleState.prepTimerInterval = null;
+    }
+    const overlay = document.getElementById("champ-match-waiting-modal");
+    if (overlay) overlay.remove();
+
+    // Broadcast synchronized countdown start to opponent with questions
+    const startsAt = Date.now() + 3000;
+    if (battleState.roomChannel) {
+        battleState.roomChannel.send({
+            type: "broadcast",
+            event: "START_COUNTDOWN",
+            payload: { startsAt: startsAt, fullQuestions: battleState.questions }
+        }).catch(() => {});
+    }
+
+    // Trigger synchronized 3..2..1 countdown for Host as well (eliminating 3-second head start)
+    handleStartCountdown({ startsAt: startsAt });
+}
+
+export function returnToChampionshipHub() {
+    clearInterval(battleState.timerInterval);
+    removeAntiCheatFocusGuard();
+    removeBeforeUnloadGuard();
+    if (battleState.prepTimerInterval) {
+        clearInterval(battleState.prepTimerInterval);
+        battleState.prepTimerInterval = null;
+    }
+    battleState.gameStatus = "idle";
+    battleState.activeRoom = null;
+    champState.inMatch = false;
+
+    const waitingOverlay = document.getElementById("champ-match-waiting-modal");
+    if (waitingOverlay) waitingOverlay.remove();
+    const walkoverModal = document.getElementById("champ-walkover-modal");
+    if (walkoverModal) walkoverModal.remove();
+
+    if (typeof window.switchBattleArenaMode === 'function') {
+        window.switchBattleArenaMode('championship');
+    }
+    champState.activeSubTab = 'bracket';
+    renderChampionshipHub('battle-championship-container', getActiveUser());
+}
+
 export function renderBattleRoomView() {
     connectToBattleLobby();
     populateBattleTopicsList();
     updateServerCapacityBadge();
+
+    // Always synchronize latest championship state from localStorage
+    const group = getActiveGroupName ? getActiveGroupName() : 'infection';
+    try {
+        const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
+        if (cached) {
+            const parsed = JSON.parse(cached);
+            champState.activeChampionship = parsed.championship || champState.activeChampionship;
+            champState.participants = parsed.participants || champState.participants;
+            champState.matches = parsed.matches || champState.matches;
+        }
+    } catch (e) {}
+
+    // Check for expired unplayed matches
+    if (typeof checkExpiredUnplayedMatches === 'function') {
+        checkExpiredUnplayedMatches();
+    }
+
+    const champ = champState.activeChampionship;
+    const isLive = champ && champ.status === 'active';
+
     if (battleState.gameStatus === "idle") {
-        switchBattleSubscreen("lobby");
+        if (isLive) {
+            // Auto switch to Championship mode so students immediately see the live tournament!
+            switchBattleArenaMode("championship");
+        } else {
+            switchBattleSubscreen("lobby");
+            switchBattleArenaMode("quick");
+        }
     }
 }
 
@@ -1776,4 +2556,29 @@ if (typeof window !== "undefined") {
     window.declineBattleRematch = declineBattleRematch;
     window.returnToBattleLobby = returnToBattleLobby;
     window.renderBattleRoomView = renderBattleRoomView;
+    window.switchBattleArenaMode = switchBattleArenaMode;
+    window.launchChampionshipArena = launchChampionshipArena;
+    window.showChampionshipWaitingRoom = showChampionshipWaitingRoom;
+    window.startChampionshipMatchNow = startChampionshipMatchNow;
+    window.returnToChampionshipHub = returnToChampionshipHub;
+    window.declareChampionshipWalkover = declareChampionshipWalkover;
+    window.showWalkoverVictoryModal = showWalkoverVictoryModal;
+    window.closeWalkoverVictoryModal = closeWalkoverVictoryModal;
+    window.switchChampSubTab = (tab) => {
+        champState.activeSubTab = tab;
+        renderChampionshipHub(champState.lastContainerId || "battle-championship-container", getActiveUser());
+    };
+    window.enterChampionshipMatch = (matchId) => {
+        enterChampionshipMatch(matchId, window.showToast);
+    };
+    window.regenerateChampBracket = (type) => {
+        if (typeof window.generateBracketFromAdmin === 'function') {
+            window.generateBracketFromAdmin();
+        }
+    };
+    window.rescheduleAllChampMatchesPrompt = () => {
+        const newTime = prompt("Enter new round start time (e.g. 20:30 or 09:00 PM):");
+        if (!newTime) return;
+        window.showToast?.("Schedule Updated", "Round start time successfully updated to: " + newTime, "success");
+    };
 }

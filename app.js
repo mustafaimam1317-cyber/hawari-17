@@ -2230,6 +2230,9 @@ async function supabaseRequest(path, options = {}) {
         return { success: false, status: 0, error: e.message };
     }
 }
+if (typeof window !== "undefined") {
+    window.supabaseRequest = supabaseRequest;
+}
 
 let globalQuestionsCache = [];
 
@@ -6818,6 +6821,8 @@ function renderAdminPanel() {
                     if (txt) txt.value = state.announcement || "";
                     renderAnnouncementWidget();
                 });
+            } else if (target === "admin-championship-tab") {
+                renderAdminChampionshipTab();
             }
         };
     });
@@ -7604,6 +7609,15 @@ function collectEditedGeminiQuestions() {
     });
 
     return result;
+}
+
+function renderAdminChampionshipTab() {
+    import('./championshipLeague.js').then(mod => {
+        mod.champState.activeSubTab = 'admin';
+        mod.renderChampionshipHub('admin-championship-tab-container', state.currentUser);
+    }).catch(err => {
+        console.error('[Championship] Error rendering admin championship tab:', err);
+    });
 }
 
 function renderAdminQuestionsTab() {

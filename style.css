@@ -3732,4 +3732,41 @@ html.instant-boot-active #app-layout:not(.hidden) {
     }
 }
 
+/* ================= 🏆 CHAMPIONSHIP LEAGUES & BRACKET TREE STYLES ================= */
+@keyframes pulseGlow {
+    0%, 100% {
+        box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 25px rgba(16, 185, 129, 0.8);
+        transform: scale(1.02);
+    }
+}
+
+.match-fixture-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.match-fixture-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+.bracket-match-box {
+    transition: all 0.2s ease;
+}
+.bracket-match-box:hover {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 4px 14px rgba(59, 130, 246, 0.15);
+}
+
+.bracket-tree-container::-webkit-scrollbar {
+    height: 8px;
+}
+.bracket-tree-container::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+
 

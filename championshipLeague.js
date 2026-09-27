@@ -171,6 +171,8 @@ export async function syncChampionshipToCloud(group = 'infection') {
                 title: champ.title,
                 questions: payloadData,
                 time_limit: 20,
+                start_time: new Date().toISOString(),
+                end_time: new Date(Date.now() + 14 * 86400000).toISOString(),
                 status: champ.status
             })
         });

@@ -21,6 +21,8 @@
 import { createClient } from '@supabase/supabase-js';
 import {
     initChampionshipLeague,
+    loadActiveChampionship,
+    syncChampionshipToCloud,
     renderChampionshipHub,
     enterChampionshipMatch,
     champState,
@@ -164,11 +166,34 @@ export function connectToBattleLobby() {
             battleState.activeRoomsCount = count;
             updateServerCapacityBadge();
         })
+        .on("broadcast", { event: "CHAMPIONSHIP_UPDATE" }, async () => {
+            console.log("[BattleRoom] Championship Realtime broadcast received. Refreshing active tournament...");
+            const loaded = await loadActiveChampionship();
+            if (loaded) {
+                const subscreen = document.getElementById("battle-subscreen-championship");
+                const isSubscreenHidden = subscreen && subscreen.classList.contains("hidden");
+                if (battleState.arenaMode === "championship" || !isSubscreenHidden) {
+                    renderChampionshipHub('battle-championship-container', getActiveUser());
+                } else if (battleState.gameStatus === "idle" && champState.activeChampionship?.status === 'active') {
+                    switchBattleArenaMode("championship");
+                }
+            }
+        })
         .subscribe((status) => {
             if (status === "SUBSCRIBED") {
                 console.log("[BattleRoom] Connected to Global Battle Lobby.");
             }
         });
+
+    window._broadcastChampionshipUpdate = () => {
+        if (battleState.lobbyChannel) {
+            battleState.lobbyChannel.send({
+                type: "broadcast",
+                event: "CHAMPIONSHIP_UPDATE",
+                payload: { timestamp: Date.now() }
+            }).catch(() => {});
+        }
+    };
 }
 
 /**
@@ -2077,6 +2102,14 @@ export function showChampionshipWaitingRoom(match) {
     const qCount = battleState.questions.length;
     const group = getActiveGroupName ? getActiveGroupName() : 'infection';
 
+    const schedTime = match.scheduled_start ? new Date(match.scheduled_start).getTime() : 0;
+    let schedTimeFormatted = '';
+    try {
+        schedTimeFormatted = match.scheduled_start ? new Date(match.scheduled_start).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }) : '';
+    } catch(e) {
+        schedTimeFormatted = match.scheduled_start ? new Date(match.scheduled_start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    }
+
     let phase = 'prep'; // 'prep' (60s prep) or 'grace' (180s = 3 min grace)
     let secondsLeft = 60;
     let graceSecondsLeft = 180;
@@ -2211,9 +2244,28 @@ export function showChampionshipWaitingRoom(match) {
 
                 <!-- ACTIONS -->
                 <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-                    <button id="btn-champ-start-now" class="btn btn-primary" onclick="window.startChampionshipMatchNow()" ${!opponentPresent ? 'disabled' : ''} style="padding: 12px 28px; font-size: 1rem; font-weight: 800; border-radius: 12px; ${opponentPresent ? 'background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4); cursor: pointer;' : 'background: #475569; opacity: 0.65; cursor: not-allowed;'} border: none;">
-                        ${opponentPresent ? '<i class="fa-solid fa-play"></i> كليكما حاضر - ابدأ المباراة الآن 🚀' : '<i class="fa-solid fa-lock"></i> بانتظار دخول المنافس... (ممنوع بدء الأسئلة)'}
-                    </button>
+                    ${(() => {
+                        const isOfficialTimeReached = !schedTime || Date.now() >= schedTime;
+                        if (!opponentPresent) {
+                            return `
+                                <button id="btn-champ-start-now" class="btn btn-primary" disabled style="padding: 12px 28px; font-size: 1rem; font-weight: 800; border-radius: 12px; background: #475569; opacity: 0.65; cursor: not-allowed; border: none;">
+                                    <i class="fa-solid fa-lock"></i> بانتظار دخول المنافس... (ممنوع بدء الأسئلة)
+                                </button>
+                            `;
+                        } else if (!isOfficialTimeReached) {
+                            return `
+                                <button id="btn-champ-start-now" class="btn btn-primary" disabled style="padding: 12px 28px; font-size: 1rem; font-weight: 800; border-radius: 12px; background: #475569; opacity: 0.65; cursor: not-allowed; border: none;">
+                                    <i class="fa-solid fa-lock"></i> بانتظار حلول الموعد الرسمي (${schedTimeFormatted})
+                                </button>
+                            `;
+                        } else {
+                            return `
+                                <button id="btn-champ-start-now" class="btn btn-primary" onclick="window.startChampionshipMatchNow()" style="padding: 12px 28px; font-size: 1rem; font-weight: 800; border-radius: 12px; background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4); cursor: pointer; border: none;">
+                                    <i class="fa-solid fa-play"></i> كليكما حاضر وحان الموعد - ابدأ المباراة الآن 🚀
+                                </button>
+                            `;
+                        }
+                    })()}
                     <button class="btn btn-secondary" onclick="window.returnToChampionshipHub()" style="padding: 12px 20px; font-size: 0.9rem; border-radius: 12px;">
                         العودة لجدول المباريات
                     </button>
@@ -2244,21 +2296,53 @@ export function showChampionshipWaitingRoom(match) {
             updateUI();
         }
 
+        const nowMs = Date.now();
+        const schedMs = match.scheduled_start ? new Date(match.scheduled_start).getTime() : 0;
+        const officialReached = !schedMs || nowMs >= schedMs;
+
+        // Reactive update of the start button as soon as official scheduled time is reached
+        const btnStart = document.getElementById("btn-champ-start-now");
+        if (btnStart) {
+            if (opponentPresent && officialReached && btnStart.disabled) {
+                btnStart.disabled = false;
+                btnStart.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+                btnStart.style.boxShadow = '0 4px 15px rgba(16, 185, 129, 0.4)';
+                btnStart.style.cursor = 'pointer';
+                btnStart.style.opacity = '1';
+                btnStart.innerHTML = '<i class="fa-solid fa-play"></i> كليكما حاضر وحان الموعد - ابدأ المباراة الآن 🚀';
+                btnStart.onclick = () => window.startChampionshipMatchNow();
+            }
+        }
+
         if (phase === 'prep') {
-            secondsLeft--;
-            const timerEl = document.getElementById("champ-prep-timer-display");
-            if (timerEl) {
-                const mins = Math.floor(secondsLeft / 60);
-                const secs = secondsLeft % 60;
-                timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            if (secondsLeft > 0) {
+                secondsLeft--;
+                const timerEl = document.getElementById("champ-prep-timer-display");
+                if (timerEl) {
+                    const mins = Math.floor(secondsLeft / 60);
+                    const secs = secondsLeft % 60;
+                    timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
             }
 
             if (secondsLeft <= 0) {
                 if (opponentPresent) {
-                    // Both present! Start match immediately
-                    clearInterval(battleState.prepTimerInterval);
-                    battleState.prepTimerInterval = null;
-                    startChampionshipMatchNow();
+                    if (officialReached) {
+                        // Both present AND scheduled time reached! Start match immediately
+                        clearInterval(battleState.prepTimerInterval);
+                        battleState.prepTimerInterval = null;
+                        startChampionshipMatchNow();
+                    } else {
+                        // Both present, but scheduled start not reached yet!
+                        // Keep counting down seconds until official start
+                        const timerEl = document.getElementById("champ-prep-timer-display");
+                        if (timerEl) {
+                            const diffToStart = Math.max(0, Math.floor((schedMs - nowMs) / 1000));
+                            const dm = Math.floor(diffToStart / 60);
+                            const ds = diffToStart % 60;
+                            timerEl.innerText = `${dm.toString().padStart(2, '0')}:${ds.toString().padStart(2, '0')}`;
+                        }
+                    }
                 } else {
                     // Opponent NOT present! Switch to 3-minute grace countdown
                     phase = 'grace';
@@ -2270,15 +2354,22 @@ export function showChampionshipWaitingRoom(match) {
         } else if (phase === 'grace') {
             if (opponentPresent) {
                 // Opponent arrived during grace countdown!
-                clearInterval(battleState.prepTimerInterval);
-                battleState.prepTimerInterval = null;
-                const timerEl = document.getElementById("champ-prep-timer-display");
-                if (timerEl) timerEl.innerText = "00:00";
-                window.showToast?.("حضر الخصم!", "دخل المنافس الغرفة، جاري بدء المباراة الآن...", "success");
-                setTimeout(() => {
-                    startChampionshipMatchNow();
-                }, 2000);
-                return;
+                if (officialReached) {
+                    clearInterval(battleState.prepTimerInterval);
+                    battleState.prepTimerInterval = null;
+                    const timerEl = document.getElementById("champ-prep-timer-display");
+                    if (timerEl) timerEl.innerText = "00:00";
+                    window.showToast?.("حضر الخصم!", "دخل المنافس الغرفة، جاري بدء المباراة الآن...", "success");
+                    setTimeout(() => {
+                        startChampionshipMatchNow();
+                    }, 2000);
+                    return;
+                } else {
+                    phase = 'prep';
+                    secondsLeft = Math.max(1, Math.floor((schedMs - nowMs) / 1000));
+                    updateUI();
+                    return;
+                }
             }
 
             graceSecondsLeft--;
@@ -2429,6 +2520,19 @@ export function startChampionshipMatchNow() {
     const match = battleState.activeRoom?.championshipMatch;
     
     if (match) {
+        // STRICT SCHEDULE GATEKEEPER: Zero tolerance for early match start
+        const schedTime = match.scheduled_start ? new Date(match.scheduled_start).getTime() : 0;
+        if (schedTime && Date.now() < schedTime) {
+            let timeStr = '';
+            try {
+                timeStr = new Date(match.scheduled_start).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
+            } catch(e) {
+                timeStr = new Date(match.scheduled_start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            window.showToast?.("الموعد الرسمي لم يحن بعد", `لا يمكن بدء الأسئلة قبل حلول موعد المباراة الرسمي المجدول (${timeStr}).`, "warning");
+            return;
+        }
+
         const isP1 = (match.player1_info && match.player1_info.email.toLowerCase() === userEmail);
         const group = getActiveGroupName ? getActiveGroupName() : 'infection';
         let online = false;
@@ -2485,6 +2589,10 @@ export function returnToChampionshipHub() {
         clearInterval(battleState.prepTimerInterval);
         battleState.prepTimerInterval = null;
     }
+    if (battleState.roomChannel) {
+        battleState.roomChannel.unsubscribe();
+        battleState.roomChannel = null;
+    }
     battleState.gameStatus = "idle";
     battleState.activeRoom = null;
     champState.inMatch = false;
@@ -2506,7 +2614,12 @@ export function renderBattleRoomView() {
     populateBattleTopicsList();
     updateServerCapacityBadge();
 
-    // Always synchronize latest championship state from localStorage
+    // Ensure Championship League subsystem timers are running
+    if (typeof initChampionshipLeague === 'function') {
+        initChampionshipLeague();
+    }
+
+    // 1. Immediately synchronize latest championship state from localStorage if present
     const group = getActiveGroupName ? getActiveGroupName() : 'infection';
     try {
         const cached = localStorage.getItem(`${STORAGE_CHAMP_KEY}_${group}`);
@@ -2535,6 +2648,21 @@ export function renderBattleRoomView() {
             switchBattleArenaMode("quick");
         }
     }
+
+    // 2. Proactive Cloud Discovery: Always fetch active tournament from cloud for student devices
+    loadActiveChampionship().then((loaded) => {
+        if (loaded && champState.activeChampionship?.status === 'active') {
+            const subscreen = document.getElementById("battle-subscreen-championship");
+            const isSubscreenHidden = subscreen && subscreen.classList.contains("hidden");
+            if (battleState.gameStatus === "idle" && isSubscreenHidden) {
+                switchBattleArenaMode("championship");
+            } else if (battleState.arenaMode === "championship" || !isSubscreenHidden) {
+                renderChampionshipHub('battle-championship-container', getActiveUser());
+            }
+        }
+    }).catch(err => {
+        console.warn('[BattleRoom] Cloud tournament discovery fallback:', err);
+    });
 }
 
 // Global Bindings for all UI onclick handlers

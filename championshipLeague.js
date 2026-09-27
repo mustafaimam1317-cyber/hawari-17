@@ -59,7 +59,11 @@ export const ALL_ROUNDS = [
 /**
  * Initialize Championship Leagues Subsystem
  */
+let _champLeagueInitialized = false;
+
 export async function initChampionshipLeague(supabaseRequest, state, showToast) {
+    if (_champLeagueInitialized) return;
+    _champLeagueInitialized = true;
     console.log('[Championship] Initializing Championship League Subsystem...');
     await loadActiveChampionship(supabaseRequest, state);
 
@@ -75,7 +79,7 @@ export async function initChampionshipLeague(supabaseRequest, state, showToast) 
  * Load Active Championship with Dual-Storage & Cloud Bridge Fallback
  */
 export async function loadActiveChampionship(supabaseRequest, state) {
-    const group = (state && state.activeGroup) ? state.activeGroup.toLowerCase() : 'infection';
+    const group = (state && state.activeGroup) ? state.activeGroup.toLowerCase() : (getActiveGroupName ? getActiveGroupName() : 'infection');
     const req = supabaseRequest || (typeof window !== 'undefined' ? window.supabaseRequest : null);
     
     if (req) {
@@ -85,7 +89,11 @@ export async function loadActiveChampionship(supabaseRequest, state) {
             if (records && Array.isArray(records) && records.length > 0) {
                 champState.activeChampionship = records[0];
                 await loadChampionshipMatches(req, champState.activeChampionship.id);
-                return;
+                saveChampionshipToLocalCache(group, false);
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('championship_updated'));
+                }
+                return true;
             }
         } catch (e) {
             console.warn('[Championship] Cloud query fallback:', e.message);
@@ -96,13 +104,16 @@ export async function loadActiveChampionship(supabaseRequest, state) {
             const bridgeRecords = await req(`hawari_course_quizzes?id=eq.championship_active_${group}`);
             if (bridgeRecords && Array.isArray(bridgeRecords) && bridgeRecords.length > 0 && bridgeRecords[0].questions) {
                 const data = bridgeRecords[0].questions;
-                if (data.championship && data.championship.status === 'active') {
+                if (data.championship && (data.championship.status === 'active' || data.championship.status === 'draft')) {
                     champState.activeChampionship = data.championship;
                     champState.participants = data.participants || [];
                     champState.matches = data.matches || [];
                     console.log('[Championship] Loaded tournament from cloud bridge successfully');
                     saveChampionshipToLocalCache(group, false);
-                    return;
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('championship_updated'));
+                    }
+                    return true;
                 }
             }
         } catch (e) {}
@@ -117,8 +128,10 @@ export async function loadActiveChampionship(supabaseRequest, state) {
             champState.participants = parsed.participants || [];
             champState.matches = parsed.matches || [];
             console.log('[Championship] Loaded tournament from cache');
+            return true;
         }
     } catch (e) {}
+    return false;
 }
 
 /**
@@ -194,6 +207,9 @@ export function saveChampionshipToLocalCache(group = 'infection', triggerCloud =
         }));
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('championship_updated'));
+            if (typeof window._broadcastChampionshipUpdate === 'function') {
+                window._broadcastChampionshipUpdate();
+            }
         }
     } catch (e) {}
 
@@ -392,6 +408,19 @@ export function renderChampionshipHub(containerId = 'battle-championship-contain
         }
     } catch (e) {}
 
+    // Proactive background cloud fetch if activeChampionship is not yet in cache (e.g. fresh student device)
+    if (!champState.activeChampionship && !champState._loadingCloud) {
+        champState._loadingCloud = true;
+        loadActiveChampionship().then((loaded) => {
+            champState._loadingCloud = false;
+            if (loaded && champState.activeChampionship) {
+                renderChampionshipHub(containerId, currentUser);
+            }
+        }).catch(() => {
+            champState._loadingCloud = false;
+        });
+    }
+
     // Check and resolve any expired unplayed matches (double forfeit & walkovers)
     checkExpiredUnplayedMatches();
 
@@ -415,15 +444,28 @@ function renderBattleRoomStudentHub(container, userEmail) {
     const isLive = champ && champ.status === 'active';
 
     if (!isLive) {
+        if (champState._loadingCloud) {
+            container.innerHTML = `
+                <div class="empty-state" style="padding: 70px 20px; text-align: center;">
+                    <div style="font-size: 2.8rem; color: #f59e0b; margin-bottom: 18px;">
+                        <i class="fa-solid fa-spinner fa-spin"></i>
+                    </div>
+                    <h3 style="color: var(--text-primary); font-size: 1.3rem; font-weight: 800; margin-bottom: 8px;">جاري فحص وتحديث بطولات الدوري العام...</h3>
+                    <p style="color: var(--text-muted); font-size: 0.9rem; max-width: 460px; margin: 0 auto; line-height: 1.6;">يتم الآن الاتصال بالسيرفر السحابي للتحقق من المواعيد الرسمية وجدول المواجهات.</p>
+                </div>
+            `;
+            return;
+        }
+
         container.innerHTML = `
             <div class="empty-state" style="padding: 70px 20px; text-align: center;">
                 <div style="width: 86px; height: 86px; border-radius: 50%; background: rgba(245, 158, 11, 0.12); color: #f59e0b; display: inline-flex; align-items: center; justify-content: center; font-size: 3.2rem; margin-bottom: 22px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.15);">
                     <i class="fa-solid fa-trophy"></i>
                 </div>
-                <h3 style="color: var(--text-primary); font-size: 1.5rem; font-weight: 800; margin-bottom: 10px;">No Active Championships</h3>
-                <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 480px; margin: 0 auto 24px auto; line-height: 1.6;">There is no championship tournament running right now. Upcoming championships will be scheduled and announced here.</p>
+                <h3 style="color: var(--text-primary); font-size: 1.5rem; font-weight: 800; margin-bottom: 10px;">لا توجد بطولة نشطة حالياً</h3>
+                <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 480px; margin: 0 auto 24px auto; line-height: 1.6;">سيتم إعلان مواعيد وجدول مباريات بطولة Hawari Championship League هنا فور نشرها من قبل إدارة المنصة.</p>
                 <button class="btn btn-primary" onclick="window.switchBattleArenaMode('quick')">
-                    <i class="fa-solid fa-bolt"></i> Play 1v1 Battle Arena
+                    <i class="fa-solid fa-bolt"></i> خوض مواجهة سريعة 1v1
                 </button>
             </div>
         `;
@@ -488,6 +530,11 @@ function renderBattleRoomStudentHub(container, userEmail) {
     `;
 
     container.innerHTML = html;
+
+    // Start autonomous countdown ticker for student's next match immediately upon DOM mount
+    if (champState.currentStudentMatch) {
+        startStudentMatchCountdownTicker(champState.currentStudentMatch);
+    }
 }
 
 /**
@@ -1084,7 +1131,10 @@ function renderStudentMatchBanner(userEmail) {
     const scheduledDate = new Date(match.scheduled_start);
     const now = new Date();
     const diffMs = scheduledDate.getTime() - now.getTime();
-    const isLive = diffMs <= 0 && match.status !== 'completed' && match.status !== 'double_forfeit';
+    const PREP_WINDOW_MS = 5 * 60 * 1000;
+    const isPrepOpen = diffMs <= PREP_WINDOW_MS;
+    const isPastStart = diffMs <= 0;
+    const isLive = isPastStart && match.status !== 'completed' && match.status !== 'double_forfeit';
 
     // Detailed Date & Time formatting (Arabic + English)
     const optionsDateAr = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
@@ -1098,6 +1148,27 @@ function renderStudentMatchBanner(userEmail) {
         timeFormattedAr = scheduledDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
     const fullTimeEn = scheduledDate.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+
+    let bannerBtnHtml = '';
+    if (isLive) {
+        bannerBtnHtml = `
+            <button id="btn-enter-champ-match" class="btn btn-primary btn-lg" onclick="window.enterChampionshipMatch('${match.id}')" style="animation: pulseGlow 1.5s infinite; background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 800;">
+                <i class="fa-solid fa-bolt"></i> ادخل غرفة المباراة الآن ⚡
+            </button>
+        `;
+    } else if (isPrepOpen) {
+        bannerBtnHtml = `
+            <button id="btn-enter-champ-match" class="btn btn-primary btn-lg" onclick="window.enterChampionshipMatch('${match.id}')" style="background: linear-gradient(135deg, #f59e0b, #d97706); border: none; font-weight: 800;">
+                <i class="fa-solid fa-clock"></i> ادخل للاستعداد للمباراة ⏳
+            </button>
+        `;
+    } else {
+        bannerBtnHtml = `
+            <button id="btn-enter-champ-match" class="btn btn-secondary btn-lg" disabled style="opacity: 0.65; cursor: not-allowed; background: #475569; border: none; font-weight: 700;">
+                <i class="fa-solid fa-lock"></i> تفتح قبل الموعد بـ 5 دقائق
+            </button>
+        `;
+    }
 
     return `
         <div class="card" style="padding: 24px; border-radius: 16px; background: linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(245, 158, 11, 0.08)); border: 1.5px solid #ef4444; position: relative;">
@@ -1124,14 +1195,12 @@ function renderStudentMatchBanner(userEmail) {
                 <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
                     <div style="text-align: right;">
                         <span style="font-size: 0.8rem; color: var(--text-muted); display: block;">حالة العداد التنازلي</span>
-                        <strong id="champ-match-countdown-text" style="font-size: 1.15rem; color: #ef4444; font-weight: 800;">
+                        <strong id="champ-match-countdown-text" style="font-size: 1.15rem; color: ${isLive ? '#10b981' : (isPrepOpen ? '#f59e0b' : '#ef4444')}; font-weight: 800;">
                             ${isLive ? '⚡ المباراة بدأت الآن!' : `تبدأ خلال: ${formatRemainingTime(diffMs)}`}
                         </strong>
                     </div>
 
-                    <button id="btn-enter-champ-match" class="btn btn-primary btn-lg" onclick="window.enterChampionshipMatch('${match.id}')" ${!isLive ? 'disabled' : ''} style="${isLive ? 'animation: pulseGlow 1.5s infinite; background: linear-gradient(135deg, #10b981, #059669); border: none;' : ''}">
-                        <i class="fa-solid fa-bolt"></i> ${isLive ? 'ادخل غرفة المباراة الآن ⚡' : 'غرفة المباراة مغلقة'}
-                    </button>
+                    ${bannerBtnHtml}
                 </div>
             </div>
         </div>
@@ -1190,6 +1259,13 @@ function renderSingleMatchCardHtml(m, userEmail) {
     const isCompleted = m.status === 'completed';
     const isDoubleForfeit = m.status === 'double_forfeit';
 
+    const schedTime = m.scheduled_start ? new Date(m.scheduled_start).getTime() : 0;
+    const now = Date.now();
+    const diffToSched = schedTime - now;
+    const PREP_WINDOW_MS = 5 * 60 * 1000;
+    const isPrepOpen = diffToSched <= PREP_WINDOW_MS;
+    const isPastStart = diffToSched <= 0;
+
     const userParticipant = (champState.participants || []).find(p => p.email.toLowerCase().trim() === userEmail);
     const userIsEliminated = !!userParticipant?.eliminated;
     const canEnter = isUserMatch && !isCompleted && !isDoubleForfeit && !userIsEliminated;
@@ -1237,9 +1313,15 @@ function renderSingleMatchCardHtml(m, userEmail) {
 
             ${canEnter ? `
                 <div style="margin-top: 12px; text-align: center;">
-                    <button class="btn btn-primary btn-sm btn-block" onclick="window.enterChampionshipMatch('${m.id}')" style="font-size: 0.8rem; padding: 6px 12px;">
-                        <i class="fa-solid fa-bolt"></i> Enter Your Match
-                    </button>
+                    ${!isPrepOpen ? `
+                        <button class="btn btn-secondary btn-sm btn-block" disabled style="font-size: 0.8rem; padding: 6px 12px; opacity: 0.65; cursor: not-allowed; background: #475569; border: none;">
+                            <i class="fa-solid fa-lock"></i> تفتح قبل الموعد بـ 5 دقائق
+                        </button>
+                    ` : `
+                        <button class="btn btn-primary btn-sm btn-block" onclick="window.enterChampionshipMatch('${m.id}')" style="font-size: 0.8rem; padding: 6px 12px; ${isPastStart ? 'background: linear-gradient(135deg, #10b981, #059669);' : 'background: linear-gradient(135deg, #f59e0b, #d97706);'}; border: none;">
+                            <i class="fa-solid ${isPastStart ? 'fa-bolt' : 'fa-clock'}"></i> ${isPastStart ? 'ادخل مباراتك الآن ⚡' : 'ادخل للاستعداد ⏳'}
+                        </button>
+                    `}
                 </div>
             ` : (isUserMatch && userIsEliminated ? `
                 <div style="margin-top: 8px; text-align: center; font-size: 0.78rem; color: #ef4444; font-weight: 700;">
@@ -1390,41 +1472,117 @@ export function initDefaultDemoChampionship(group = 'infection') {
 }
 
 /**
- * Format Milliseconds to Remaining String
+ * Format Milliseconds to Remaining String (HH:MM:SS or MM:SS)
  */
-function formatRemainingTime(ms) {
+export function formatRemainingTime(ms) {
     if (ms <= 0) return '00:00';
     const totalSecs = Math.floor(ms / 1000);
     const hours = Math.floor(totalSecs / 3600);
     const mins = Math.floor((totalSecs % 3600) / 60);
     const secs = totalSecs % 60;
     if (hours > 0) {
-        return `${hours}h ${mins}m`;
+        return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     }
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+let _champMatchTickerInterval = null;
+
 /**
- * Update Student Match Countdown in Real Time
+ * Autonomous Dedicated 1-Second Student Match Countdown Ticker
+ * Resolves countdown freeze under 30s and enforces 5-min prep + live gatekeeper
+ */
+export function startStudentMatchCountdownTicker(match) {
+    if (typeof window === 'undefined') return;
+    if (_champMatchTickerInterval) {
+        clearInterval(_champMatchTickerInterval);
+        _champMatchTickerInterval = null;
+    }
+
+    if (!match || !match.scheduled_start) return;
+
+    const schedMs = new Date(match.scheduled_start).getTime();
+    if (isNaN(schedMs)) return;
+
+    const updateTick = () => {
+        const textEl = document.getElementById('champ-match-countdown-text');
+        const btnEl = document.getElementById('btn-enter-champ-match');
+        if (!textEl) {
+            // Container or banner element unmounted
+            if (_champMatchTickerInterval) {
+                clearInterval(_champMatchTickerInterval);
+                _champMatchTickerInterval = null;
+            }
+            return;
+        }
+
+        const now = Date.now();
+        const diffMs = schedMs - now;
+        const PREP_WINDOW_MS = 5 * 60 * 1000;
+
+        if (diffMs > 0) {
+            textEl.innerText = `تبدأ خلال: ${formatRemainingTime(diffMs)}`;
+            textEl.style.color = (diffMs <= PREP_WINDOW_MS) ? '#f59e0b' : '#ef4444';
+
+            if (btnEl) {
+                if (diffMs <= PREP_WINDOW_MS) {
+                    btnEl.disabled = false;
+                    btnEl.style.opacity = '1';
+                    btnEl.style.cursor = 'pointer';
+                    btnEl.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+                    btnEl.style.border = 'none';
+                    btnEl.style.fontWeight = '800';
+                    btnEl.innerHTML = `<i class="fa-solid fa-clock"></i> ادخل للاستعداد للمباراة ⏳`;
+                } else {
+                    btnEl.disabled = true;
+                    btnEl.style.opacity = '0.65';
+                    btnEl.style.cursor = 'not-allowed';
+                    btnEl.style.background = '#475569';
+                    btnEl.style.border = 'none';
+                    btnEl.style.fontWeight = '700';
+                    btnEl.innerHTML = `<i class="fa-solid fa-lock"></i> تفتح قبل الموعد بـ 5 دقائق`;
+                }
+            }
+        } else {
+            // Official live match time arrived!
+            if (_champMatchTickerInterval) {
+                clearInterval(_champMatchTickerInterval);
+                _champMatchTickerInterval = null;
+            }
+            textEl.innerText = '⚡ المباراة بدأت الآن!';
+            textEl.style.color = '#10b981';
+
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.style.opacity = '1';
+                btnEl.style.cursor = 'pointer';
+                btnEl.style.animation = 'pulseGlow 1.5s infinite';
+                btnEl.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+                btnEl.style.border = 'none';
+                btnEl.style.fontWeight = '800';
+                btnEl.innerHTML = `<i class="fa-solid fa-bolt"></i> ادخل غرفة المباراة الآن ⚡`;
+            }
+
+            // Also update any matching fixture card in the today fixtures list
+            const fixCardBtn = document.querySelector(`button[onclick*="enterChampionshipMatch('${match.id}')"]`);
+            if (fixCardBtn && fixCardBtn.id !== 'btn-enter-champ-match') {
+                fixCardBtn.disabled = false;
+                fixCardBtn.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+                fixCardBtn.innerHTML = `<i class="fa-solid fa-bolt"></i> ادخل مباراتك الآن ⚡`;
+            }
+        }
+    };
+
+    updateTick();
+    _champMatchTickerInterval = setInterval(updateTick, 1000);
+}
+
+/**
+ * Update Student Match Countdown in Real Time (Legacy compatibility)
  */
 function updateStudentMatchCountdown() {
-    const el = document.getElementById('champ-match-countdown-text');
-    if (!el || !champState.currentStudentMatch) return;
-
-    const scheduledDate = new Date(champState.currentStudentMatch.scheduled_start);
-    const now = new Date();
-    const diffMs = scheduledDate.getTime() - now.getTime();
-
-    if (diffMs > 0) {
-        el.innerText = `Starts In: ${formatRemainingTime(diffMs)}`;
-    } else {
-        el.innerText = 'Match Live Now!';
-        const btn = document.getElementById('btn-enter-champ-match');
-        if (btn) {
-            btn.disabled = false;
-            btn.style.animation = 'pulseGlow 1.5s infinite';
-            btn.innerHTML = `<i class="fa-solid fa-bolt"></i> Enter Match Room ⚡`;
-        }
+    if (champState.currentStudentMatch) {
+        startStudentMatchCountdownTicker(champState.currentStudentMatch);
     }
 }
 
@@ -2270,6 +2428,28 @@ export function enterChampionshipMatch(matchId, showToast = (typeof window !== '
         return;
     }
 
+    if (match.status === 'double_forfeit') {
+        if (showToast) showToast('مباراة ملغاة', 'تم استبعاد طرفي هذه المباراة لعدم الحضور في الموعد الرسمي.', 'info');
+        return;
+    }
+
+    // Schedule Gatekeeper: Do not allow entrance more than 5 minutes before scheduled start!
+    const schedTime = match.scheduled_start ? new Date(match.scheduled_start).getTime() : 0;
+    const now = Date.now();
+    const PREP_WINDOW_MS = 5 * 60 * 1000;
+    if (schedTime && (now < schedTime - PREP_WINDOW_MS)) {
+        let timeStr = '';
+        try {
+            timeStr = new Date(match.scheduled_start).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
+        } catch(e) {
+            timeStr = new Date(match.scheduled_start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        if (showToast) {
+            showToast('الموعد الرسمي لم يحن بعد', `المباراة مجدولة في تمام الساعة (${timeStr}). تفتح غرفة الاستعداد قبل الموعد بـ 5 دقائق فقط.`, 'warning');
+        }
+        return;
+    }
+
     console.log('[Championship] Entering match room:', matchId);
     champState.inMatch = true;
     champState.activeMatchRoom = match;
@@ -2330,6 +2510,7 @@ if (typeof window !== 'undefined') {
     window.replayMatchPrompt = replayMatchPrompt;
     window.rescheduleSingleMatchPrompt = rescheduleSingleMatchPrompt;
     window.enterChampionshipMatch = enterChampionshipMatch;
+    window.startStudentMatchCountdownTicker = startStudentMatchCountdownTicker;
     window.filterRosterSearch = filterRosterSearch;
     window.checkExpiredUnplayedMatches = checkExpiredUnplayedMatches;
 

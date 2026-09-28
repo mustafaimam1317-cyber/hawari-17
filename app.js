@@ -606,11 +606,22 @@ async function loadRealBookPdfDocument(bookFile) {
         const cleanUrl = supabaseUrl.replace(/\/$/, "");
 
         const accessInfo = getBookAccessLevel(state.currentUser);
-        const rawUrl = (!accessInfo.isFullGrant && bookFile.preview_url) ? bookFile.preview_url : (bookFile.storage_url || "");
-        let cleanPath = rawUrl.replace(/.*\/hawari_books\//, "").replace(/^public\//, "");
-        if (!cleanPath || cleanPath.startsWith("http")) {
-            cleanPath = rawUrl.split("/").pop();
+        let rawUrl = (!accessInfo.isFullGrant && bookFile.preview_url) ? bookFile.preview_url : (bookFile.storage_url || "");
+        if (!rawUrl && bookFile.storage_url) rawUrl = bookFile.storage_url;
+        if (!rawUrl && bookFile.preview_url) rawUrl = bookFile.preview_url;
+
+        let cleanPath = "";
+        try {
+            const parsedUrl = new URL(rawUrl, window.location.origin);
+            const pathname = parsedUrl.pathname;
+            cleanPath = pathname.replace(/.*\/hawari_books\//, "").replace(/^public\//, "");
+            if (!cleanPath || cleanPath.startsWith("http")) {
+                cleanPath = pathname.split("/").filter(Boolean).pop() || "";
+            }
+        } catch (e) {
+            cleanPath = (rawUrl.split("?")[0] || "").split("/").filter(Boolean).pop() || "";
         }
+        if (cleanPath.includes("?")) cleanPath = cleanPath.split("?")[0];
 
         console.log("[PDFViewer] Extracted cleanPath:", cleanPath, "isFullGrant:", accessInfo.isFullGrant);
 
@@ -626,68 +637,83 @@ async function loadRealBookPdfDocument(bookFile) {
             console.log(`[PDFViewer] 🌐 CACHE MISS for book "${bookFile.title}". Downloading from cloud storage...`);
             showToast("جاري تحميل الكتاب", "جاري تثبيت وتشفير الكتاب على جهازك لأول مرة...", "info");
 
-            // Strategy A: Authenticated storage endpoint
-            try {
-                const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
-                const resAuth = await fetch(authEndpoint, {
-                    headers: {
-                        "apikey": anonKey,
-                        "Authorization": `Bearer ${jwtToken || anonKey}`
-                    }
-                });
-                if (resAuth.ok) {
-                    pdfArrayBuffer = await resAuth.arrayBuffer();
-                    console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-                } else {
-                    console.warn("[PDFViewer] Strategy A returned status:", resAuth.status);
+            // Resilient fetch with Exponential Backoff (up to 3 attempts)
+            const maxDownloadAttempts = 3;
+            for (let attempt = 1; attempt <= maxDownloadAttempts && (!pdfArrayBuffer || pdfArrayBuffer.byteLength === 0); attempt++) {
+                if (attempt > 1) {
+                    const delayMs = attempt === 2 ? 800 : 2000;
+                    console.log(`[PDFViewer] Connection retry attempt ${attempt}/${maxDownloadAttempts} after ${delayMs}ms...`);
+                    await new Promise(r => setTimeout(r, delayMs));
                 }
-            } catch (errA) {
-                console.warn("[PDFViewer] Strategy A failed:", errA.message);
-            }
 
-            // Strategy B: Public storage endpoint
-            if (!pdfArrayBuffer && rawUrl && rawUrl.startsWith("http")) {
-                try {
-                    const resPub = await fetch(rawUrl, {
-                        headers: { "apikey": anonKey }
-                    });
-                    if (resPub.ok) {
-                        pdfArrayBuffer = await resPub.arrayBuffer();
-                        console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-                    } else {
-                        console.warn("[PDFViewer] Strategy B returned status:", resPub.status);
+                // Strategy A: Authenticated storage endpoint
+                if (cleanPath) {
+                    try {
+                        const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
+                        const resAuth = await fetch(authEndpoint, {
+                            headers: {
+                                "apikey": anonKey,
+                                "Authorization": `Bearer ${jwtToken || anonKey}`
+                            }
+                        });
+                        if (resAuth.ok) {
+                            pdfArrayBuffer = await resAuth.arrayBuffer();
+                            console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                            break;
+                        } else {
+                            console.warn(`[PDFViewer] Strategy A returned status ${resAuth.status} on attempt ${attempt}`);
+                        }
+                    } catch (errA) {
+                        console.warn(`[PDFViewer] Strategy A attempt ${attempt} failed:`, errA.message);
                     }
-                } catch (errB) {
-                    console.warn("[PDFViewer] Strategy B failed:", errB.message);
                 }
-            }
 
-            // Strategy C: Signed temporary URL from Supabase
-            if (!pdfArrayBuffer && cleanPath) {
-                try {
-                    const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
-                        method: "POST",
-                        headers: {
-                            "apikey": anonKey,
-                            "Authorization": `Bearer ${jwtToken || anonKey}`,
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify({ expiresIn: 3600 })
-                    });
-                    if (signRes.ok) {
-                        const signJson = await signRes.json();
-                        const signedPath = signJson.signedURL || signJson.signedUrl;
-                        if (signedPath) {
-                            const signedFullUrl = signedPath.startsWith("http") ? signedPath : `${cleanUrl}/storage/v1${signedPath}`;
-                            const resSigned = await fetch(signedFullUrl);
-                            if (resSigned.ok) {
-                                pdfArrayBuffer = await resSigned.arrayBuffer();
-                                console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                // Strategy B: Public storage endpoint
+                if (!pdfArrayBuffer && rawUrl && rawUrl.startsWith("http")) {
+                    try {
+                        const resPub = await fetch(rawUrl, {
+                            headers: { "apikey": anonKey }
+                        });
+                        if (resPub.ok) {
+                            pdfArrayBuffer = await resPub.arrayBuffer();
+                            console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                            break;
+                        } else {
+                            console.warn(`[PDFViewer] Strategy B returned status ${resPub.status} on attempt ${attempt}`);
+                        }
+                    } catch (errB) {
+                        console.warn(`[PDFViewer] Strategy B attempt ${attempt} failed:`, errB.message);
+                    }
+                }
+
+                // Strategy C: Signed temporary URL from Supabase
+                if (!pdfArrayBuffer && cleanPath) {
+                    try {
+                        const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                            method: "POST",
+                            headers: {
+                                "apikey": anonKey,
+                                "Authorization": `Bearer ${jwtToken || anonKey}`,
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({ expiresIn: 3600 })
+                        });
+                        if (signRes.ok) {
+                            const signJson = await signRes.json();
+                            const signedPath = signJson.signedURL || signJson.signedUrl;
+                            if (signedPath) {
+                                const signedFullUrl = signedPath.startsWith("http") ? signedPath : `${cleanUrl}/storage/v1${signedPath}`;
+                                const resSigned = await fetch(signedFullUrl);
+                                if (resSigned.ok) {
+                                    pdfArrayBuffer = await resSigned.arrayBuffer();
+                                    console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                                    break;
+                                }
                             }
                         }
+                    } catch (errC) {
+                        console.warn(`[PDFViewer] Strategy C attempt ${attempt} failed:`, errC.message);
                     }
-                } catch (errC) {
-                    console.warn("[PDFViewer] Strategy C failed:", errC.message);
                 }
             }
 
@@ -2475,18 +2501,26 @@ async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
         // 1. If Admin, fetch master bank with answers/explanations for questions management
         if (isAdmin) {
             try {
+                let bearerToken = await getValidSupabaseAccessToken();
+                if (!bearerToken && state.currentUser.email) {
+                    try {
+                        const sess = await getValidSupabaseSession();
+                        if (sess?.access_token) bearerToken = sess.access_token;
+                    } catch(e) {}
+                }
                 const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
-                if (records && records.length > 0 && Array.isArray(records[0].questions) && records[0].questions.length > 0) {
+                if (records && Array.isArray(records) && records.length > 0 && Array.isArray(records[0].questions) && records[0].questions.length > 0) {
                     version = records[0].last_updated || version;
                     loadedQuestions = records[0].questions;
+                    console.log(`[QuestionCache] Admin master fetch SUCCESS: ${loadedQuestions.length} questions loaded with full answers.`);
                 }
             } catch (adminFetchErr) {
                 console.warn("[QuestionCache] Admin master fetch fallback:", adminFetchErr.message);
             }
         }
 
-        // 2. If student or admin fetch didn't return, fetch sanitized questions
-        if (loadedQuestions.length === 0) {
+        // 2. If student (NEVER FOR ADMIN!), fetch sanitized questions
+        if (!isAdmin && loadedQuestions.length === 0) {
             try {
                 const rpcRes = await supabaseRequest(`rpc/get_sanitized_questions`, {
                     method: "POST",
@@ -2502,17 +2536,37 @@ async function downloadFullQuestionBankFromCloud(group, targetVersion = null) {
 
         // 3. Fallback to direct table query with client-side sanitization
         if (loadedQuestions.length === 0) {
-            const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
-            if (records && records.length > 0 && Array.isArray(records[0].questions) && records[0].questions.length > 0) {
-                version = records[0].last_updated || version;
-                loadedQuestions = records[0].questions.map(q => ({
-                    id: q.id,
-                    source: q.source,
-                    topic: q.topic,
-                    text: q.text,
-                    options: q.options,
-                    ...(isAdmin ? { correctOption: q.correctOption, explanation: q.explanation } : {})
-                }));
+            try {
+                const records = await supabaseRequest(`hawari_global_questions?group_name=eq.${group}`);
+                if (records && Array.isArray(records) && records.length > 0 && Array.isArray(records[0].questions) && records[0].questions.length > 0) {
+                    version = records[0].last_updated || version;
+                    loadedQuestions = records[0].questions.map(q => ({
+                        id: q.id,
+                        source: q.source,
+                        topic: q.topic,
+                        text: q.text,
+                        options: q.options,
+                        ...(isAdmin ? { correctOption: q.correctOption, explanation: q.explanation } : {})
+                    }));
+                }
+            } catch (fallbackErr) {
+                console.warn("[QuestionCache] Direct fallback query error:", fallbackErr.message);
+            }
+        }
+
+        // 4. Admin Safety Guard: If Admin and cloud query didn't return answers, preserve existing in-memory / IndexedDB master questions
+        if (isAdmin && (loadedQuestions.length === 0 || loadedQuestions.every(q => q.correctOption === undefined))) {
+            const memQuestions = window.HawariQuestionCacheMemory[group]?.questions || [];
+            if (memQuestions.some(q => q.correctOption !== undefined)) {
+                console.log("[QuestionCache] Admin Guard: Preserving in-memory master questions with answers.");
+                loadedQuestions = memQuestions;
+            } else {
+                const idbRecord = await getCachedQuestionBank(group);
+                if (idbRecord?.questions?.some(q => q.correctOption !== undefined)) {
+                    console.log("[QuestionCache] Admin Guard: Restoring master questions with answers from IndexedDB.");
+                    loadedQuestions = idbRecord.questions;
+                    version = idbRecord.version || version;
+                }
             }
         }
 
@@ -2887,6 +2941,14 @@ async function saveGlobalQuestionsToCloud() {
         };
     });
 
+    // Safety Guard: NEVER overwrite cloud questions if cleanQuestions are missing correctOption
+    const hasAnyAnswers = cleanQuestions.some(q => q.correctOption !== undefined && q.correctOption !== null && String(q.correctOption).trim() !== "");
+    if (!hasAnyAnswers) {
+        console.error("[Sync] ABORTED saveGlobalQuestionsToCloud: Refusing to overwrite cloud bank because questions have undefined/empty correctOption!");
+        showToast("تنبيه أمان", "تعذر حفظ بنك الأسئلة لأن الإجابات غير محملة. يرجى إعادة تسجيل الدخول كمسؤول.", "warning");
+        return;
+    }
+
     const newVersion = Date.now();
     const payload = {
         group_name: group,
@@ -2895,13 +2957,19 @@ async function saveGlobalQuestionsToCloud() {
     };
 
     try {
-        await supabaseRequest("hawari_global_questions", {
+        const saveRes = await supabaseRequest("hawari_global_questions", {
             method: "POST",
             headers: {
                 "Prefer": "resolution=merge-duplicates"
             },
             body: JSON.stringify(payload)
         });
+
+        if (saveRes && saveRes.success === false) {
+            console.error("[Sync] Failed to save questions to Supabase:", saveRes.error || saveRes.status);
+            showToast("فشل الحفظ في السحابة", "تعذر حفظ بنك الأسئلة في السيرفر. تحقق من صلاحيات المشرف.", "danger");
+            return;
+        }
         
         // Update local memory and IndexedDB caches immediately
         window.HawariQuestionCacheMemory[group] = {
@@ -2928,8 +2996,10 @@ async function saveGlobalQuestionsToCloud() {
         } catch (e) {}
 
         console.log(`[Sync] Saved global questions template to cloud for course ${group} (version ${newVersion})`);
+        showToast("تم الحفظ بنجاح", `تم حفظ وتحديث بنك الأسئلة بنجاح (${cleanQuestions.length} سؤال).`, "success");
     } catch (e) {
         console.error("[Sync] Failed to save global questions to cloud:", e);
+        showToast("خطأ غير متوقع", "حدث خطأ أثناء حفظ بنك الأسئلة.", "danger");
     }
 }
 
@@ -7624,6 +7694,17 @@ function renderAdminQuestionsTab() {
     const listContainer = document.getElementById("admin-questions-list-container");
     if (!listContainer) return;
 
+    // Self-healing check: If questions appear sanitized (answers undefined), trigger immediate master re-fetch
+    if (state.questions && state.questions.length > 0 && state.questions.every(q => q.correctOption === undefined)) {
+        console.warn("[AdminQuestions] Questions appear sanitized. Fetching master question bank with answers...");
+        downloadFullQuestionBankFromCloud(state.activeGroup).then(masterQs => {
+            if (masterQs && masterQs.length > 0 && masterQs.some(q => q.correctOption !== undefined)) {
+                state.questions = masterQs;
+                renderAdminQuestionsTab();
+            }
+        }).catch(() => {});
+    }
+
     initGeminiQuizGenerator();
 
     // Populate topic dropdown for create mode
@@ -7677,7 +7758,7 @@ function renderAdminQuestionsTab() {
                 <div class="admin-q-meta">
                     <span class="badge">${q.source}</span>
                     <span class="badge" style="background-color:var(--primary-color-soft);color:var(--primary-color)">${q.topic}</span>
-                    <span class="badge badge-success">Ans: ${q.correctOption}</span>
+                    <span class="badge badge-success">Ans: ${q.correctOption || 'N/A'}</span>
                 </div>
             </div>
             <div class="admin-q-actions">
@@ -8607,38 +8688,50 @@ function calculateSm2Interval(card, grade) {
         nextReviewDate = Date.now() + 10 * 60 * 1000; // 10 minutes
         easeFactor = Math.max(1.3, easeFactor - 0.2);
         state = "learning";
-    } else if (grade === 2) { // HARD (1d or interval * 1.2)
+    } else if (grade === 2) { // HARD (2h for initial learning step, then 1d -> interval * 1.2)
         if (repetitions === 0) {
-            interval = 1;
+            interval = 0.083; // 2 hours in days (2 / 24)
+            nextReviewDate = Date.now() + 2 * 3600 * 1000; // 2 hours
+            state = "learning";
+        } else if (repetitions === 1) {
+            interval = 1; // 1 day
+            nextReviewDate = Date.now() + 1 * 86400000;
+            state = "learning";
         } else {
-            interval = Math.max(1, Math.round(interval * 1.2));
+            interval = Math.max(2, Math.round(Math.max(interval, 1) * 1.2));
+            nextReviewDate = Date.now() + interval * 86400000;
+            state = repetitions >= 3 ? "mastered" : "learning";
         }
         repetitions += 1;
-        nextReviewDate = Date.now() + interval * 86400000;
         easeFactor = Math.max(1.3, easeFactor - 0.15);
-        state = repetitions >= 3 ? "mastered" : "learning";
     } else if (grade === 3) { // GOOD (1d -> 3d -> interval * EF)
         if (repetitions === 0) {
-            interval = 1;
+            interval = 1; // 1 day
+            nextReviewDate = Date.now() + 1 * 86400000;
+            state = "learning";
         } else if (repetitions === 1) {
-            interval = 3;
+            interval = 3; // 3 days
+            nextReviewDate = Date.now() + 3 * 86400000;
+            state = "learning";
         } else {
-            interval = Math.max(1, Math.round(interval * easeFactor));
+            interval = Math.max(4, Math.round(Math.max(interval, 3) * easeFactor));
+            nextReviewDate = Date.now() + interval * 86400000;
+            state = repetitions >= 3 ? "mastered" : "learning";
         }
         repetitions += 1;
-        nextReviewDate = Date.now() + interval * 86400000;
-        state = repetitions >= 3 ? "mastered" : "learning";
     } else if (grade === 4) { // EASY (4d -> 7d -> interval * EF * 1.3)
         if (repetitions === 0) {
-            interval = 4;
+            interval = 4; // 4 days
+            nextReviewDate = Date.now() + 4 * 86400000;
         } else if (repetitions === 1) {
-            interval = 7;
+            interval = 7; // 7 days
+            nextReviewDate = Date.now() + 7 * 86400000;
         } else {
-            interval = Math.max(1, Math.round(interval * easeFactor * 1.3));
+            interval = Math.max(8, Math.round(Math.max(interval, 7) * easeFactor * 1.3));
+            nextReviewDate = Date.now() + interval * 86400000;
         }
         repetitions += 1;
         easeFactor = Math.min(3.5, easeFactor + 0.15);
-        nextReviewDate = Date.now() + interval * 86400000;
         state = "mastered";
     }
 
@@ -8660,15 +8753,32 @@ function getSm2ButtonLabels(card) {
     const curInt = card.interval || 0;
 
     const againLabel = "< 10m";
-    const hardDays = rep === 0 ? 1 : Math.max(1, Math.round(curInt * 1.2));
-    const goodDays = rep === 0 ? 1 : (rep === 1 ? 3 : Math.max(1, Math.round(curInt * ef)));
-    const easyDays = rep === 0 ? 4 : (rep === 1 ? 7 : Math.max(1, Math.round(curInt * ef * 1.3)));
+    let hardLabel = "2h";
+    let goodLabel = "1d";
+    let easyLabel = "4d";
+
+    if (rep === 0) {
+        hardLabel = "2h";
+        goodLabel = "1d";
+        easyLabel = "4d";
+    } else if (rep === 1) {
+        hardLabel = "1d";
+        goodLabel = "3d";
+        easyLabel = "7d";
+    } else {
+        const hardDays = Math.max(2, Math.round(Math.max(curInt, 1) * 1.2));
+        const goodDays = Math.max(hardDays + 1, Math.round(Math.max(curInt, 3) * ef));
+        const easyDays = Math.max(goodDays + 2, Math.round(Math.max(curInt, 7) * ef * 1.3));
+        hardLabel = `${hardDays}d`;
+        goodLabel = `${goodDays}d`;
+        easyLabel = `${easyDays}d`;
+    }
 
     return {
         againLabel,
-        hardLabel: `${hardDays}d`,
-        goodLabel: `${goodDays}d`,
-        easyLabel: `${easyDays}d`
+        hardLabel,
+        goodLabel,
+        easyLabel
     };
 }
 
@@ -13993,15 +14103,17 @@ window.redoBookPageAction = redoBookPageAction;
 
 // Check if a user email is authorized for Hawari Book access
 
-// Centralized Access Level Calculator
+// Centralized Access Level Calculator (Resilient with Zero False-Negatives)
 function getBookAccessLevel(user) {
     if (!user || !user.email) return { isFullGrant: false, maxPage: 10 };
     
     const cleanEmail = user.email.trim().toLowerCase();
     const isAdmin = (user && (user.role === "admin" || user.role === "instructor" || user.is_admin === true)) || isUserAdmin(user);
     
-    let isGranted = false;
-    if (Array.isArray(state.grantedBookUsers)) {
+    // Check direct flags on user object if available
+    let isGranted = Boolean(user.is_book_authorized || user.book_access || user.has_full_book);
+    
+    if (!isGranted && Array.isArray(state.grantedBookUsers) && state.grantedBookUsers.length > 0) {
         isGranted = state.grantedBookUsers.some(e => String(e).trim().toLowerCase() === cleanEmail);
     }
     if (!isGranted) {
@@ -14009,7 +14121,7 @@ function getBookAccessLevel(user) {
             const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
             if (cached) {
                 const list = JSON.parse(cached);
-                if (Array.isArray(list)) {
+                if (Array.isArray(list) && list.length > 0) {
                     isGranted = list.some(e => String(e).trim().toLowerCase() === cleanEmail);
                 }
             }
@@ -14047,13 +14159,28 @@ async function fetchGrantedUsersList() {
             state.grantedBookUsers = filtered;
             localStorage.setItem(getGroupKey("hawari_granted_book_users"), JSON.stringify(state.grantedBookUsers));
         } else {
+            // Anti-flicker: Never wipe existing authorized users if network returns non-array
             const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
-            state.grantedBookUsers = cached ? JSON.parse(cached) : [];
+            if (cached) {
+                try {
+                    const parsed = JSON.parse(cached);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        state.grantedBookUsers = parsed;
+                    }
+                } catch (parseErr) {}
+            }
         }
     } catch (e) {
         console.warn("[FullGrant] Could not fetch hawari_book_access table:", e.message);
         const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
-        state.grantedBookUsers = cached ? JSON.parse(cached) : [];
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    state.grantedBookUsers = parsed;
+                }
+            } catch (err) {}
+        }
     }
     renderGrantedUsersList();
 }

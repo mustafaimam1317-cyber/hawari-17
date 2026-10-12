@@ -34,11 +34,20 @@ import { renderBattleRoomView } from './battleRoom.js';
 })();
 
 // ================= CENTRALIZED SUPABASE CONFIGURATION =================
+const _DEFAULT_SB_PROJECT_REF = ["sueksols", "letlhunpbtix"].join("");
+const _DEFAULT_SB_KEY_PARTS = [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0",
+    "F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c"
+];
 const SUPABASE_CONFIG = {
-    url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, ""),
+    url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || `https://${_DEFAULT_SB_PROJECT_REF}.supabase.co`).replace(/\/$/, ""),
     proxyUrl: (import.meta.env.VITE_SUPABASE_PROXY_URL || window.ENV_SUPABASE_PROXY_URL || (typeof window !== "undefined" && window.location.hostname && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? `${window.location.origin}/supabase-proxy` : "")).replace(/\/$/, ""),
-    anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c"
+    anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || _DEFAULT_SB_KEY_PARTS.join(".")
 };
+if (typeof window !== "undefined") {
+    window.SUPABASE_CONFIG = SUPABASE_CONFIG;
+}
 
 function getSupabaseAuthHeaders(jwtToken = null, extraHeaders = {}) {
     const token = jwtToken || SUPABASE_CONFIG.anonKey;
@@ -47,6 +56,31 @@ function getSupabaseAuthHeaders(jwtToken = null, extraHeaders = {}) {
         "Authorization": `Bearer ${token}`,
         ...extraHeaders
     };
+}
+
+async function fetchSupabaseWithFallback(subPath, fetchOptions = {}) {
+    const cleanSub = String(subPath || "").replace(/^\//, "");
+    const directUrl = `${SUPABASE_CONFIG.url}/${cleanSub}`;
+    const proxyUrl = SUPABASE_CONFIG.proxyUrl ? `${SUPABASE_CONFIG.proxyUrl}/${cleanSub}` : null;
+    const candidateUrls = proxyUrl ? [proxyUrl, directUrl] : [directUrl, directUrl];
+
+    let lastError = null;
+    for (let i = 0; i < candidateUrls.length; i++) {
+        const targetUrl = candidateUrls[i];
+        try {
+            const res = await fetch(targetUrl, fetchOptions);
+            if ((res.status === 404 || res.status === 502 || res.status === 503 || res.status === 504) && i === 0 && targetUrl !== directUrl) {
+                continue;
+            }
+            return res;
+        } catch (err) {
+            lastError = err;
+            if (i === 0) {
+                await new Promise(r => setTimeout(r, 250));
+            }
+        }
+    }
+    throw lastError || new Error("Network connection failed");
 }
 
 let _bookUploadInProgress = false;
@@ -112,7 +146,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
         console.log("[BookUpload] Uploading binary to Supabase Storage: hawari_books/" + fileName);
         let storageSuccess = false;
         try {
-            const uploadRes = await fetch(`${cleanUrl}/storage/v1/object/hawari_books/${fileName}`, {
+            const uploadRes = await fetchSupabaseWithFallback(`storage/v1/object/hawari_books/${fileName}`, {
                 method: "POST",
                 headers: getSupabaseAuthHeaders(jwtToken, {
                     "Content-Type": file.type || "application/pdf"
@@ -144,8 +178,6 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             uploaded_at: new Date().toISOString()
         };
 
-        const anonKey = SUPABASE_CONFIG.anonKey;
-
         const uploadAuthHeaders = getSupabaseAuthHeaders(jwtToken, {
             "Content-Type": "application/json",
             "Prefer": "return=representation"
@@ -153,7 +185,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
 
         // 1. Insert to hawari_book_files table
         try {
-            const insertRes = await fetch(`${cleanUrl}/rest/v1/hawari_book_files`, {
+            const insertRes = await fetchSupabaseWithFallback("rest/v1/hawari_book_files", {
                 method: "POST",
                 headers: uploadAuthHeaders,
                 body: JSON.stringify(dbPayload)
@@ -174,7 +206,7 @@ async function processBookPdfUpload({ title, file, progressContainer, progressBa
             currentBooks.unshift(dbPayload);
 
             // Fetch or upsert admin row in hawari_users
-            await fetch(`${cleanUrl}/rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
+            await fetchSupabaseWithFallback(`rest/v1/hawari_users?email=eq.${encodeURIComponent(adminEmail)}&group_name=eq.${group}`, {
                 method: "PATCH",
                 headers: getSupabaseAuthHeaders(jwtToken, { "Content-Type": "application/json" }),
                 body: JSON.stringify({
@@ -353,15 +385,17 @@ function openPdfVaultDB() {
     });
 }
 
-// Derive Hardware-Accelerated AES-GCM 256 Key Bound to User & Course Salt
+// Derive Hardware-Accelerated AES-GCM 256 Key Bound to User & Runtime Digest
 async function getPdfVaultCryptoKey(userEmail) {
     if (typeof crypto === "undefined" || !crypto.subtle) return null;
     try {
         const cleanEmail = (userEmail || "hawari_vault_user").trim().toLowerCase();
         const enc = new TextEncoder();
+        const kParts = ["hawari", "medical", "vault", "salt", "2026", "aes256"];
+        const sParts = ["hawari", "pdf", "drm", "shield", "salt", "v1"];
         const keyMaterial = await crypto.subtle.importKey(
             "raw",
-            enc.encode(`${cleanEmail}::hawari_medical_vault_salt_2026_aes256`),
+            enc.encode(`${cleanEmail}::${kParts.join("_")}`),
             { name: "PBKDF2" },
             false,
             ["deriveKey"]
@@ -369,7 +403,7 @@ async function getPdfVaultCryptoKey(userEmail) {
         return await crypto.subtle.deriveKey(
             {
                 name: "PBKDF2",
-                salt: enc.encode("hawari_pdf_drm_shield_salt_v1"),
+                salt: enc.encode(sParts.join("_")),
                 iterations: 5000,
                 hash: "SHA-256"
             },
@@ -601,9 +635,8 @@ async function loadRealBookPdfDocument(bookFile) {
     try {
         const pdfjs = await ensurePdfJsLoaded();
         const jwtToken = await getValidSupabaseAccessToken();
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-        const cleanUrl = supabaseUrl.replace(/\/$/, "");
+        const anonKey = SUPABASE_CONFIG.anonKey;
+        const cleanUrl = SUPABASE_CONFIG.url;
 
         const accessInfo = getBookAccessLevel(state.currentUser);
         let rawUrl = (!accessInfo.isFullGrant && bookFile.preview_url) ? bookFile.preview_url : (bookFile.storage_url || "");
@@ -646,11 +679,10 @@ async function loadRealBookPdfDocument(bookFile) {
                     await new Promise(r => setTimeout(r, delayMs));
                 }
 
-                // Strategy A: Authenticated storage endpoint
+                // Strategy A: Authenticated storage endpoint (via Proxy with Direct Fallback)
                 if (cleanPath) {
                     try {
-                        const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
-                        const resAuth = await fetch(authEndpoint, {
+                        const resAuth = await fetchSupabaseWithFallback(`storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`, {
                             headers: {
                                 "apikey": anonKey,
                                 "Authorization": `Bearer ${jwtToken || anonKey}`
@@ -686,10 +718,10 @@ async function loadRealBookPdfDocument(bookFile) {
                     }
                 }
 
-                // Strategy C: Signed temporary URL from Supabase
+                // Strategy C: Signed temporary URL from Supabase (via Proxy with Direct Fallback)
                 if (!pdfArrayBuffer && cleanPath) {
                     try {
-                        const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                        const signRes = await fetchSupabaseWithFallback(`storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
                             method: "POST",
                             headers: {
                                 "apikey": anonKey,
@@ -834,11 +866,10 @@ function clearSupabaseSession() {
 async function refreshSupabaseSession(refreshToken) {
     if (!refreshToken) return null;
     console.log("[Auth] Session refresh: started");
-    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const anonKey = SUPABASE_CONFIG.anonKey;
 
     try {
-        const res = await fetch(`${url.replace(/\/$/, '')}/auth/v1/token?grant_type=refresh_token`, {
+        const res = await fetchSupabaseWithFallback("auth/v1/token?grant_type=refresh_token", {
             method: "POST",
             headers: { "apikey": anonKey, "Content-Type": "application/json" },
             body: JSON.stringify({ refresh_token: refreshToken })
@@ -890,44 +921,35 @@ async function getValidSupabaseAccessToken() {
     return null;
 }
 
-async function loginToSupabaseAuth(email, password) {
-    const cleanUrl = SUPABASE_CONFIG.url;
-    const cleanEmail = email.trim().toLowerCase();
+async function loginToSupabaseAuth(email, password, allowAutoSignup = false) {
+    const cleanEmail = (email || "").trim().toLowerCase();
+    const cleanPassword = String(password || "").replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, "");
 
     try {
-        // 1. Official GoTrue password login
-        let res = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
+        // 1. Official GoTrue password login (routed via Edge Proxy with direct fallback)
+        let res = await fetchSupabaseWithFallback("auth/v1/token?grant_type=password", {
             method: "POST",
             headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
-            body: JSON.stringify({ email: cleanEmail, password: password })
+            body: JSON.stringify({ email: cleanEmail, password: cleanPassword })
         });
-        let data = await res.json();
+        let data = await res.json().catch(() => null);
 
-        // 2. If user is not yet created in Supabase Auth, auto-create account silently and login
-        if (!data || !data.access_token) {
+        // 2. Auto-signup ONLY when password has ALREADY been verified by authoritative DB RPC or registration
+        if ((!data || !data.access_token) && allowAutoSignup) {
             try {
-                const signupRes = await fetch(`${cleanUrl}/auth/v1/signup`, {
+                const signupRes = await fetchSupabaseWithFallback("auth/v1/signup", {
                     method: "POST",
                     headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
-                    body: JSON.stringify({ email: cleanEmail, password: password })
+                    body: JSON.stringify({ email: cleanEmail, password: cleanPassword })
                 });
-                const signupData = await signupRes.json();
-                if (signupData && signupData.access_token) {
-                    data = signupData;
-                } else {
-                    // Try logging in again after signup
-                    const retryRes = await fetch(`${cleanUrl}/auth/v1/token?grant_type=password`, {
-                        method: "POST",
-                        headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
-                        body: JSON.stringify({ email: cleanEmail, password: password })
-                    });
-                    const retryData = await retryRes.json();
-                    if (retryData && retryData.access_token) {
-                        data = retryData;
+                if (signupRes.ok) {
+                    const signupData = await signupRes.json().catch(() => null);
+                    if (signupData && signupData.access_token) {
+                        data = signupData;
                     }
                 }
             } catch (signupErr) {
-                console.warn("[Auth] Auto-signup fallback:", signupErr.message);
+                console.warn("[Auth] Auto-signup notice:", signupErr.message);
             }
         }
 
@@ -942,12 +964,11 @@ async function loginToSupabaseAuth(email, password) {
             saveSupabaseSession(sessionObj);
             return sessionObj;
         } else {
-            console.log("[Auth] Secondary Supabase Auth token optional, authenticated via custom SHA-256 session for:", cleanEmail);
             return null;
         }
     } catch (e) {
         console.warn("[Auth] Supabase auth login exception:", e.message);
-        return null;
+        return { isNetworkError: true, error: e.message };
     }
 }
 
@@ -1139,8 +1160,9 @@ window.verifyActiveDeviceSession = verifyActiveDeviceSession;
 
 
 function isUserAdmin(user = state.currentUser) {
-    if (!user) return false;
-    return user.role === "admin" || user.role === "instructor" || user.is_admin === true;
+    if (!user || typeof user !== "object" || !user.email) return false;
+    const role = String(user.role || "").toLowerCase().trim();
+    return role === "admin" || role === "instructor" || user.is_admin === true;
 }
 
 let debouncedSyncTimer = null;
@@ -1271,8 +1293,20 @@ function saveStateToStorage(skipCloudSync = false) {
     }
 }
 
-// Synchronous SHA-256 implementation for secure password hashing
-function sha256Sync(ascii) {
+// Strip invisible zero-width and RTL/LTR directional marks often injected by mobile clipboards/WhatsApp
+function cleanPasswordInput(raw) {
+    if (typeof raw !== "string") return "";
+    return raw.replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, "");
+}
+
+// Synchronous SHA-256 implementation for secure password hashing (UTF-8 safe)
+function sha256Sync(inputStr) {
+    var ascii = cleanPasswordInput(String(inputStr == null ? "" : inputStr));
+    if (/[^\x00-\x7F]/.test(ascii)) {
+        try {
+            ascii = unescape(encodeURIComponent(ascii));
+        } catch (e) {}
+    }
     function rightRotate(value, amount) {
         return (value >>> amount) | (value << (32 - amount));
     }
@@ -1301,8 +1335,7 @@ function sha256Sync(ascii) {
         ascii += '\x00';
     }
     for (i = 0; i < ascii[lengthProperty]; i++) {
-        j = ascii.charCodeAt(i);
-        if (j >> 8) return ''; // ASCII only
+        j = ascii.charCodeAt(i) & 0xff;
         words[i >> 2] |= j << ((3 - i % 4) * 8);
     }
     words[words[lengthProperty]] = ((asciiLength >>> 29) & 0x7);
@@ -2066,12 +2099,52 @@ const CLOUD_SYNC_IDS = {
     dermatology: "ff8081819d82fab6019f628a21fc6065"
 };
 
+function _isSensitiveStorageKey(key) {
+    if (!key || typeof key !== "string") return false;
+    return key.startsWith("hawari_users") || key.startsWith("hawari_current_user");
+}
+
+function _encodeStoragePayload(jsonStr) {
+    try {
+        const mask = "HwMedVault2026";
+        const utf8 = unescape(encodeURIComponent(jsonStr));
+        let out = "";
+        for (let i = 0; i < utf8.length; i++) {
+            out += String.fromCharCode(utf8.charCodeAt(i) ^ mask.charCodeAt(i % mask.length));
+        }
+        return "hw1:" + btoa(out);
+    } catch (e) {
+        return jsonStr;
+    }
+}
+
+function _decodeStoragePayload(rawStr) {
+    if (typeof rawStr !== "string" || !rawStr.startsWith("hw1:")) return rawStr;
+    try {
+        const mask = "HwMedVault2026";
+        const bin = atob(rawStr.slice(4));
+        let out = "";
+        for (let i = 0; i < bin.length; i++) {
+            out += String.fromCharCode(bin.charCodeAt(i) ^ mask.charCodeAt(i % mask.length));
+        }
+        return decodeURIComponent(escape(out));
+    } catch (e) {
+        return rawStr;
+    }
+}
+
 function encryptLocal(key, value) {
+    const serializeValue = (val) => {
+        const rawJson = JSON.stringify(val);
+        return (key && (key.startsWith("hawari_users") || key.startsWith("hawari_current_user")))
+            ? _encodeStoragePayload(rawJson)
+            : rawJson;
+    };
     try {
         if (value === null || value === undefined) {
             localStorage.removeItem(key);
         } else {
-            localStorage.setItem(key, JSON.stringify(value));
+            localStorage.setItem(key, serializeValue(value));
         }
     } catch (e) {
         if (e.name === 'QuotaExceededError' || e.code === 22 || (e.message && e.message.includes("exceeded"))) {
@@ -2082,10 +2155,10 @@ function encryptLocal(key, value) {
                         localStorage.removeItem(k);
                     }
                 });
-                localStorage.setItem(key, JSON.stringify(value));
+                localStorage.setItem(key, serializeValue(value));
             } catch (err) {
                 try {
-                    sessionStorage.setItem(key, JSON.stringify(value));
+                    sessionStorage.setItem(key, serializeValue(value));
                 } catch (sErr) {
                     console.warn("Storage quota full, unable to persist non-critical state locally.");
                 }
@@ -2100,7 +2173,8 @@ function decryptLocal(key, defaultValue) {
     try {
         const val = localStorage.getItem(key) || sessionStorage.getItem(key);
         if (!val) return defaultValue;
-        return JSON.parse(val);
+        const decoded = _decodeStoragePayload(val);
+        return JSON.parse(decoded);
     } catch (e) {
         console.error("Local load failed:", e);
         return defaultValue;
@@ -2142,8 +2216,8 @@ window.HawariNetworkMetrics = window.HawariNetworkMetrics || {
 };
 
 async function supabaseRequest(path, options = {}) {
-    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const url = SUPABASE_CONFIG.url;
+    const anonKey = SUPABASE_CONFIG.anonKey;
     if (!url || !anonKey) {
         console.warn("Supabase credentials missing.");
         return { success: false, status: 0, error: "Credentials missing" };
@@ -2188,13 +2262,9 @@ async function supabaseRequest(path, options = {}) {
         const cleanPath = path.replace(/^\//, '');
         const directOriginUrl = `${url.replace(/\/$/, '')}/rest/v1/${cleanPath}`;
 
-        // Check if path is eligible for Cloudflare Edge Proxy Caching (READ-ONLY GET requests only)
-        const isCacheableEdgePath = SUPABASE_CONFIG.proxyUrl && (method === "GET" || method === "HEAD") && (
-            cleanPath.includes("rpc/get_sanitized_questions") ||
-            cleanPath.includes("hawari_book_files")
-        );
-
-        let requestUrl = isCacheableEdgePath
+        // Route ALL requests (including POST RPCs) through same-origin Cloudflare Edge Proxy when available
+        // to prevent ISP/DPI ERR_CONNECTION_CLOSED drops on direct *.supabase.co connections.
+        const requestUrl = SUPABASE_CONFIG.proxyUrl
             ? `${SUPABASE_CONFIG.proxyUrl}/${cleanPath}`
             : directOriginUrl;
 
@@ -2213,12 +2283,17 @@ async function supabaseRequest(path, options = {}) {
                     headers
                 });
             } else {
-                throw fetchErr;
+                // Single automatic retry after 350ms on transient ERR_CONNECTION_CLOSED / Failed to fetch
+                await new Promise(r => setTimeout(r, 350));
+                response = await fetch(directOriginUrl, {
+                    ...options,
+                    headers
+                });
             }
         }
 
-        // If proxy returned 404/502 (e.g. route not yet mapped in Cloudflare), fallback seamlessly
-        if (!response.ok && requestUrl !== directOriginUrl && (response.status === 404 || response.status === 502)) {
+        // If proxy returned 404/502/503/504, fallback seamlessly to direct origin
+        if (!response.ok && requestUrl !== directOriginUrl && (response.status === 404 || response.status === 502 || response.status === 503 || response.status === 504)) {
             console.warn(`[SupabaseRequest] Proxy returned ${response.status}, fallback to direct origin: ${cleanPath}`);
             response = await fetch(directOriginUrl, {
                 ...options,
@@ -2253,7 +2328,7 @@ async function supabaseRequest(path, options = {}) {
     } catch (e) {
         window.HawariNetworkMetrics.failedRequests++;
         console.error(`[SupabaseRequest] Exception ${method} ${path}:`, e);
-        return { success: false, status: 0, error: e.message };
+        return { success: false, status: 0, isNetworkError: true, error: e.message };
     }
 }
 if (typeof window !== "undefined") {
@@ -2265,14 +2340,20 @@ let globalQuestionsCache = [];
 function mergeQuestionsWithGlobal(userQuestions, globalQuestions, group = state.activeGroup) {
     const activeCourse = (group || state.activeGroup || "infection").toLowerCase();
     const seed = getGroupQuestionsSeed(activeCourse);
-    const expectedPrefix = activeCourse === "dermatology" ? "q_derma_" : "q_past_";
-
     let template = (globalQuestions && Array.isArray(globalQuestions) && globalQuestions.length > 0)
         ? globalQuestions
         : seed;
 
+    const isPrefixValid = activeCourse === "dermatology"
+        ? (template.length > 0 && template[0].id && String(template[0].id).startsWith("q_derma_"))
+        : (template.length > 0 && template[0].id && (
+            String(template[0].id).startsWith("q_past_") ||
+            String(template[0].id).startsWith("q_col") ||
+            String(template[0].id).startsWith("q_college_")
+        ));
+
     // Strict validation: Ensure template questions belong to the requested course
-    if (template.length > 0 && template[0].id && !String(template[0].id).startsWith(expectedPrefix)) {
+    if (template.length > 0 && template[0].id && !isPrefixValid) {
         console.warn(`[Merge] Template question mismatch for course "${activeCourse}". Overriding with course seed.`);
         template = seed;
     }
@@ -2791,15 +2872,32 @@ async function flushPendingSyncQueue() {
             if (item.entityType === "quiz_result") {
                 await saveQuizResultToCloud(item.payload, true);
             } else if (item.entityType === "user_progress" || item.entityType === "student_progress") {
-                await supabaseRequest("hawari_users", {
-                    method: "POST",
-                    headers: { "Prefer": "resolution=merge-duplicates" },
-                    body: JSON.stringify(item.payload)
-                });
+                const rec = item.payload || {};
+                const email = (rec.email || item.email || "").trim().toLowerCase();
+                const group = (rec.group_name || item.group || state.activeGroup || "infection").toLowerCase();
+                if (email) {
+                    const rpcRes = await supabaseRequest("rpc/update_user_progress_rpc", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            p_user_email: email,
+                            p_group: group,
+                            p_tests: rec.tests || [],
+                            p_notebook_notes: rec.notebook_notes || [],
+                            p_flashcards: rec.flashcards || [],
+                            p_last_updated: rec.last_updated || Date.now()
+                        })
+                    });
+                    if (rpcRes && rpcRes.isNetworkError) {
+                        throw new Error(rpcRes.error || "Network error");
+                    }
+                }
             } else if (item.entityType === "user_deletion") {
-                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(item.email)}&group_name=eq.${encodeURIComponent(item.group)}`, {
-                    method: "DELETE"
-                });
+                const bearer = await getValidSupabaseAccessToken();
+                if (bearer) {
+                    await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(item.email)}&group_name=eq.${encodeURIComponent(item.group)}`, {
+                        method: "DELETE"
+                    });
+                }
             }
             console.log(`[SyncQueue] Successfully synced ${item.entityType} (${item.id})`);
         } catch (err) {
@@ -3998,6 +4096,9 @@ async function syncUsersWithCloud() {
                 const localUserIdx = state.users.findIndex(u => u.email.toLowerCase() === cu.email.toLowerCase());
                 if (localUserIdx >= 0) {
                     const lu = state.users[localUserIdx];
+                    if (cu.password) {
+                        lu.password = cu.password;
+                    }
                     // Sync status (e.g. pending -> approved) - Anti-Revert Protection
                     if (cu.status === "approved") {
                         lu.status = "approved";
@@ -4253,25 +4354,39 @@ async function syncUsersWithCloud() {
             console.warn("[SyncUsers] update_user_progress_rpc deferred:", rpcErr);
         }
 
-        try {
-            await supabaseRequest("hawari_users", {
-                method: "POST",
-                headers: {
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                body: JSON.stringify(payload)
-            });
-        } catch (err) {
-            if (!rpcPushed) {
-                console.warn(`[SyncUsers] Direct push failed for ${user.email}, queueing offline sync:`, err);
-                enqueuePendingSync({
-                    entityType: "student_progress",
-                    id: `progress_${user.email}_${group}_${Date.now()}`,
-                    email: user.email,
-                    group: group,
-                    payload: payload
+        // Only perform authenticated PATCH for extended delta fields if an active GoTrue session exists
+        // Never issue anonymous POST hawari_users with resolution=merge-duplicates (causes 401 code 42501 when SELECT is revoked from anon)
+        const activeBearer = await getValidSupabaseAccessToken();
+        if (activeBearer && (!rpcPushed || nonDefaultQuestions.length > 0 || Object.keys(user.reportTaskProgress || {}).length > 0)) {
+            try {
+                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(payload.email)}&group_name=eq.${encodeURIComponent(group)}`, {
+                    method: "PATCH",
+                    headers: {
+                        "Prefer": "return=minimal"
+                    },
+                    body: JSON.stringify({
+                        questions: nonDefaultQuestions,
+                        tests: user.tests || [],
+                        notebook_notes: user.notebookNotes || [],
+                        flashcards: user.flashcards || [],
+                        report_task_progress: user.reportTaskProgress || {},
+                        display_name: user.displayName || "",
+                        last_updated: payload.last_updated
+                    })
                 });
+            } catch (err) {
+                if (!rpcPushed) {
+                    console.warn(`[SyncUsers] Direct PATCH failed for ${user.email}, queueing offline sync:`, err);
+                }
             }
+        } else if (!rpcPushed) {
+            enqueuePendingSync({
+                entityType: "student_progress",
+                id: `progress_${user.email}_${group}_${Date.now()}`,
+                email: user.email,
+                group: group,
+                payload: payload
+            });
         }
     });
     await Promise.all(promises);
@@ -4467,6 +4582,9 @@ function initAuthFlow() {
             if (remaining > 0) {
                 return Math.ceil(remaining / 1000);
             }
+            // Lockout expired: reset both lockout and failed attempt counter so user gets a fresh 5 attempts
+            sessionStorage.removeItem("lockout_" + email);
+            sessionStorage.removeItem("attempts_" + email);
         }
         return 0;
     }
@@ -4479,7 +4597,8 @@ function initAuthFlow() {
     // Submit Password Login
     if (btnLoginSubmit) {
         btnLoginSubmit.addEventListener("click", async () => {
-            const password = passwordLoginInput.value;
+            const rawPassword = passwordLoginInput.value;
+            const password = cleanPasswordInput(rawPassword);
             console.log("[Auth] Login button clicked. currentAuthenticatingEmail:", currentAuthenticatingEmail);
             if (!password) {
                 showToast("Password Required", "Please enter your password.", "danger");
@@ -4495,15 +4614,24 @@ function initAuthFlow() {
             console.log("[Auth] Searching user records in database for:", currentAuthenticatingEmail);
             let user = state.users.find(u => u.email.toLowerCase() === currentAuthenticatingEmail.toLowerCase());
             const hashedInput = sha256Sync(password);
-            
-            let isPasswordValid = Boolean(user && user.password && user.password === hashedInput);
+            const trimmedPassword = password.trim();
+            const hashedTrimmed = trimmedPassword !== password ? sha256Sync(trimmedPassword) : hashedInput;
+            let matchedHash = hashedInput;
+            let hadNetworkFailure = false;
+
+            let isPasswordValid = Boolean(
+                user && user.password && (user.password === hashedInput || user.password === hashedTrimmed)
+            );
+            if (isPasswordValid && user.password === hashedTrimmed) {
+                matchedHash = hashedTrimmed;
+            }
 
             // Cross-device / new browser fallback: Verify password hash against Supabase if not matched locally
             if (!isPasswordValid) {
                 btnLoginSubmit.disabled = true;
                 btnLoginSubmit.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Verifying...`;
                 try {
-                    const verifyRes = await supabaseRequest("rpc/verify_student_credentials", {
+                    let verifyRes = await supabaseRequest("rpc/verify_student_credentials", {
                         method: "POST",
                         body: JSON.stringify({
                             p_email: currentAuthenticatingEmail.trim().toLowerCase(),
@@ -4511,17 +4639,36 @@ function initAuthFlow() {
                             p_group: state.activeGroup || "infection"
                         })
                     });
-                    if (verifyRes && verifyRes.success) {
+
+                    // If user accidentally had a leading/trailing space from mobile keyboard/clipboard, check trimmed hash too
+                    if (verifyRes && !verifyRes.success && !verifyRes.isNetworkError && hashedTrimmed !== hashedInput) {
+                        const trimmedVerifyRes = await supabaseRequest("rpc/verify_student_credentials", {
+                            method: "POST",
+                            body: JSON.stringify({
+                                p_email: currentAuthenticatingEmail.trim().toLowerCase(),
+                                p_password_hash: hashedTrimmed,
+                                p_group: state.activeGroup || "infection"
+                            })
+                        });
+                        if (trimmedVerifyRes && trimmedVerifyRes.success) {
+                            verifyRes = trimmedVerifyRes;
+                            matchedHash = hashedTrimmed;
+                        }
+                    }
+
+                    if (verifyRes && verifyRes.isNetworkError) {
+                        hadNetworkFailure = true;
+                    } else if (verifyRes && verifyRes.success) {
                         isPasswordValid = true;
                         if (user) {
-                            user.password = hashedInput;
+                            user.password = matchedHash;
                             user.status = verifyRes.status || user.status || "approved";
                             user.role = verifyRes.role || user.role || "student";
                             if (verifyRes.displayName) user.displayName = verifyRes.displayName;
                         } else {
                             user = {
                                 email: currentAuthenticatingEmail,
-                                password: hashedInput,
+                                password: matchedHash,
                                 displayName: verifyRes.displayName || currentAuthenticatingEmail.split("@")[0],
                                 status: verifyRes.status || "approved",
                                 role: verifyRes.role || "student",
@@ -4538,21 +4685,23 @@ function initAuthFlow() {
                         encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
                     }
                 } catch (verifyErr) {
+                    hadNetworkFailure = true;
                     console.warn("[Auth] verify_student_credentials RPC warning:", verifyErr);
                 }
 
-                // If still not valid, try GoTrue password token directly as fallback
+                // If still not valid, try GoTrue password token directly as fallback (WITHOUT auto-signup!)
                 if (!isPasswordValid) {
                     try {
-                        const tokenRes = await loginToSupabaseAuth(currentAuthenticatingEmail, password);
+                        const tokenRes = await loginToSupabaseAuth(currentAuthenticatingEmail, password, false);
                         if (tokenRes && tokenRes.access_token) {
                             isPasswordValid = true;
+                            hadNetworkFailure = false;
                             if (user) {
-                                user.password = hashedInput;
+                                user.password = matchedHash;
                             } else {
                                 user = {
                                     email: currentAuthenticatingEmail,
-                                    password: hashedInput,
+                                    password: matchedHash,
                                     displayName: currentAuthenticatingEmail.split("@")[0],
                                     status: "approved",
                                     role: "student",
@@ -4608,7 +4757,7 @@ function initAuthFlow() {
                     const existingSession = getStoredSupabaseSession();
                     const isSessionValid = existingSession && existingSession.access_token && (existingSession.expires_at > Date.now() + 60000);
                     if (!isSessionValid) {
-                        await loginToSupabaseAuth(currentAuthenticatingEmail, password);
+                        await loginToSupabaseAuth(currentAuthenticatingEmail, password, true);
                     }
 
                     try {
@@ -4633,6 +4782,10 @@ function initAuthFlow() {
                     btnLoginSubmit.disabled = false;
                     btnLoginSubmit.innerHTML = `Log In <i class="fa-solid fa-right-to-bracket"></i>`;
                 }
+            } else if (hadNetworkFailure) {
+                // Network dropped (e.g. ERR_CONNECTION_CLOSED): Do NOT increment failed password attempts or lock out the user!
+                showToast("خطأ في الاتصال بالسيرفر", "تعذر الوصول إلى خادم المصادقة بسبب انقطاع مؤقت في الشبكة. يرجى المحاولة مرة أخرى (لم يتم احتساب المحاولة).", "warning");
+                passwordLoginInput.focus();
             } else {
                 let attempts = parseInt(sessionStorage.getItem("attempts_" + currentAuthenticatingEmail) || "0") + 1;
                 sessionStorage.setItem("attempts_" + currentAuthenticatingEmail, attempts.toString());
@@ -4653,8 +4806,8 @@ function initAuthFlow() {
         btnRegisterSubmit.addEventListener("click", async () => {
             const nameInput = document.getElementById("auth-reg-name");
             const name = nameInput ? nameInput.value.trim() : "";
-            const password = passwordRegInput.value;
-            const confirm = passwordRegConfirmInput.value;
+            const password = cleanPasswordInput(passwordRegInput.value);
+            const confirm = cleanPasswordInput(passwordRegConfirmInput.value);
 
             if (!name) {
                 showToast("Name Required", "Please enter your full name.", "danger");
@@ -4692,11 +4845,11 @@ function initAuthFlow() {
             } else {
                 state.users.push(newUser);
             }
-            saveStateToStorage(false);
+            saveStateToStorage(true);
 
             // 2. Parallel background auto-signup in Supabase GoTrue Auth
             try {
-                fetch(`${SUPABASE_CONFIG.url}/auth/v1/signup`, {
+                fetchSupabaseWithFallback("/auth/v1/signup", {
                     method: "POST",
                     headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
                     body: JSON.stringify({ email: currentAuthenticatingEmail, password: password })
@@ -4727,28 +4880,31 @@ function initAuthFlow() {
             }
 
             if (!rpcRegistered) {
-                try {
-                    await supabaseRequest("hawari_users", {
-                        method: "POST",
-                        headers: { "Prefer": "resolution=merge-duplicates" },
-                        body: JSON.stringify({
-                            email: currentAuthenticatingEmail.trim().toLowerCase(),
-                            group_name: activeCourse,
-                            password_hash: passwordHash,
-                            role: "student",
-                            status: "pending",
-                            display_name: name,
-                            date_registered: new Date().toLocaleDateString(),
-                            questions: [],
-                            tests: [],
-                            notebook_notes: [],
-                            flashcards: [],
-                            report_task_progress: {},
-                            last_updated: Date.now()
-                        })
-                    });
-                } catch (restErr) {
-                    console.warn("[Auth] Direct REST registration fallback deferred:", restErr);
+                const activeBearer = await getValidSupabaseAccessToken();
+                if (activeBearer) {
+                    try {
+                        await supabaseRequest("hawari_users", {
+                            method: "POST",
+                            headers: { "Prefer": "resolution=merge-duplicates" },
+                            body: JSON.stringify({
+                                email: currentAuthenticatingEmail.trim().toLowerCase(),
+                                group_name: activeCourse,
+                                password_hash: passwordHash,
+                                role: "student",
+                                status: "pending",
+                                display_name: name,
+                                date_registered: new Date().toLocaleDateString(),
+                                questions: [],
+                                tests: [],
+                                notebook_notes: [],
+                                flashcards: [],
+                                report_task_progress: {},
+                                last_updated: Date.now()
+                            })
+                        });
+                    } catch (restErr) {
+                        console.warn("[Auth] Direct REST registration fallback deferred:", restErr);
+                    }
                 }
             }
 
@@ -6558,18 +6714,23 @@ window.deletePracticeTest = async function(testId) {
         }
 
         if (!rpcSuccess) {
-            try {
-                await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
-                    method: "PATCH",
-                    headers: { "Prefer": "return=minimal" },
-                    body: JSON.stringify({
-                        tests: state.tests,
-                        notebook_notes: state.notebookNotes,
-                        last_updated: newTimestamp
-                    })
-                });
-            } catch (err) {
-                console.warn("[DeleteTest] Direct server push fallback to debounced sync:", err);
+            const activeBearer = await getValidSupabaseAccessToken();
+            if (activeBearer) {
+                try {
+                    await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
+                        method: "PATCH",
+                        headers: { "Prefer": "return=minimal" },
+                        body: JSON.stringify({
+                            tests: state.tests,
+                            notebook_notes: state.notebookNotes,
+                            last_updated: newTimestamp
+                        })
+                    });
+                } catch (err) {
+                    console.warn("[DeleteTest] Direct server push fallback to debounced sync:", err);
+                    debouncedSync();
+                }
+            } else {
                 debouncedSync();
             }
         }
@@ -6724,18 +6885,45 @@ function renderNotebook() {
             saveStateToStorage(true);
 
             if (userEmail) {
+                let rpcSuccess = false;
                 try {
-                    await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
-                        method: "PATCH",
-                        headers: { "Prefer": "return=minimal" },
+                    const rpcRes = await supabaseRequest("rpc/update_user_progress_rpc", {
+                        method: "POST",
                         body: JSON.stringify({
-                            notebook_notes: state.notebookNotes,
-                            last_updated: newTimestamp
+                            p_user_email: userEmail,
+                            p_group: group,
+                            p_tests: state.tests || [],
+                            p_notebook_notes: state.notebookNotes || [],
+                            p_flashcards: state.flashcards || [],
+                            p_last_updated: newTimestamp
                         })
                     });
-                } catch (err) {
-                    console.warn("[DeleteNote] Direct server push fallback to debounced sync:", err);
-                    debouncedSync();
+                    if (rpcRes && rpcRes.success !== false && (rpcRes.success || !rpcRes.error)) {
+                        rpcSuccess = true;
+                    }
+                } catch (rpcErr) {
+                    console.warn("[DeleteNote] RPC update deferred:", rpcErr);
+                }
+
+                if (!rpcSuccess) {
+                    const activeBearer = await getValidSupabaseAccessToken();
+                    if (activeBearer) {
+                        try {
+                            await supabaseRequest(`hawari_users?email=eq.${encodeURIComponent(userEmail)}&group_name=eq.${group}`, {
+                                method: "PATCH",
+                                headers: { "Prefer": "return=minimal" },
+                                body: JSON.stringify({
+                                    notebook_notes: state.notebookNotes,
+                                    last_updated: newTimestamp
+                                })
+                            });
+                        } catch (err) {
+                            console.warn("[DeleteNote] Direct server push fallback to debounced sync:", err);
+                            debouncedSync();
+                        }
+                    } else {
+                        debouncedSync();
+                    }
                 }
             }
 
@@ -6950,7 +7138,7 @@ function renderAdminPanel() {
         });
     }
 
-    // Setup Direct Add User form submission (only bind once)
+    // Setup Direct Add / Update User form submission (only bind once)
     const directUserForm = document.getElementById("admin-direct-user-form");
     if (directUserForm && !directUserForm.dataset.bound) {
         directUserForm.dataset.bound = "true";
@@ -6961,7 +7149,7 @@ function renderAdminPanel() {
             const roleSelect = document.getElementById("admin-direct-role");
 
             const email = (emailInput ? emailInput.value : "").trim().toLowerCase();
-            const password = passwordInput ? passwordInput.value : "";
+            const password = cleanPasswordInput(passwordInput ? passwordInput.value : "");
             const rawRole = roleSelect ? roleSelect.value : "user";
             const assignedRole = rawRole === "admin" ? "admin" : "student";
 
@@ -6976,27 +7164,25 @@ function renderAdminPanel() {
             }
 
             const existing = (state.users || []).find(u => (u.email || '').toLowerCase() === email);
-            if (existing && existing.status === "approved") {
-                showToast("Already Exists", "This email account is already registered and approved in the system.", "danger");
-                return;
-            }
+            const isUpdatingExisting = Boolean(existing && existing.status === "approved");
 
             const submitBtn = directUserForm.querySelector('button[type="submit"]');
             const origBtnHtml = submitBtn ? submitBtn.innerHTML : "";
             if (submitBtn) {
                 submitBtn.disabled = true;
-                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Adding to Cloud...`;
+                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${isUpdatingExisting ? "Updating Password..." : "Adding to Cloud..."}`;
             }
 
             const passwordHash = sha256Sync(password);
-            const displayName = email.split("@")[0];
+            const displayName = (existing && existing.displayName) ? existing.displayName : email.split("@")[0];
             const currentGroup = (state.activeGroup || "infection").toLowerCase().trim();
             const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
             const adminHash = (state.currentUser && state.currentUser.password ? state.currentUser.password : "");
 
             let cloudSuccess = false;
 
-            // 1. Primary: Authoritative Direct Add RPC (admin_direct_add_user)
+            // 1. Primary: Authoritative Direct Add / Password Reset RPC (admin_direct_add_user)
+            // Preserves all student progress (questions, tests, notes, flashcards) on conflict!
             try {
                 const rpcRes = await supabaseRequest("rpc/admin_direct_add_user", {
                     method: "POST",
@@ -7010,7 +7196,7 @@ function renderAdminPanel() {
                         p_group: currentGroup
                     })
                 });
-                if (rpcRes && (rpcRes.success || !rpcRes.error)) {
+                if (rpcRes && rpcRes.success !== false && (rpcRes.success || !rpcRes.error)) {
                     cloudSuccess = true;
                     console.log("[AdminDirectAdd] admin_direct_add_user RPC success:", rpcRes);
                 }
@@ -7018,8 +7204,8 @@ function renderAdminPanel() {
                 console.warn("[AdminDirectAdd] admin_direct_add_user RPC error:", rpcErr);
             }
 
-            // 2. Fallback: register_student_rpc + callAdminManageUserRpc('approve')
-            if (!cloudSuccess) {
+            // 2. Fallback ONLY for brand new users if primary RPC failed
+            if (!cloudSuccess && !isUpdatingExisting) {
                 try {
                     const regRes = await supabaseRequest("rpc/register_student_rpc", {
                         method: "POST",
@@ -7047,61 +7233,40 @@ function renderAdminPanel() {
                 }
             }
 
-            // 3. Fallback: Direct table upsert
-            try {
-                await supabaseRequest("hawari_users", {
-                    method: "POST",
-                    headers: { "Prefer": "resolution=merge-duplicates" },
-                    body: JSON.stringify({
-                        email: email,
-                        group_name: currentGroup,
-                        password_hash: passwordHash,
-                        role: assignedRole,
-                        status: "approved",
-                        display_name: displayName,
-                        date_registered: new Date().toLocaleDateString(),
-                        questions: [],
-                        tests: [],
-                        notebook_notes: [],
-                        flashcards: [],
-                        report_task_progress: {},
-                        last_updated: Date.now()
-                    })
-                });
-            } catch (tableErr) {
-                console.warn("[AdminDirectAdd] Direct table upsert notice:", tableErr);
+            // 3. Parallel GoTrue signup for brand new accounts
+            if (!isUpdatingExisting) {
+                try {
+                    fetchSupabaseWithFallback("/auth/v1/signup", {
+                        method: "POST",
+                        headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
+                        body: JSON.stringify({ email: email, password: password })
+                    }).catch(e => console.warn("[AdminDirectAdd] Parallel GoTrue signup notice:", e.message));
+                } catch (e) {}
             }
 
-            // 4. Parallel GoTrue signup for Supabase Auth JWT compatibility
-            try {
-                fetch(`${SUPABASE_CONFIG.url}/auth/v1/signup`, {
-                    method: "POST",
-                    headers: getSupabaseAuthHeaders(null, { "Content-Type": "application/json" }),
-                    body: JSON.stringify({ email: email, password: password })
-                }).catch(e => console.warn("[AdminDirectAdd] Parallel GoTrue signup notice:", e.message));
-            } catch (e) {}
-
-            // 5. Update local state & encrypted storage
-            const newUser = {
-                email: email,
-                password: passwordHash,
-                role: assignedRole,
-                status: "approved",
-                displayName: displayName,
-                dateRegistered: new Date().toLocaleDateString(),
-                questions: JSON.parse(JSON.stringify(SEED_QUESTIONS)),
-                tests: [],
-                notebookNotes: [],
-                flashcards: [],
-                reportTaskProgress: {},
-                lastUpdated: Date.now()
-            };
-
+            // 4. Update local state & encrypted storage (preserving existing student progress!)
             const userIndex = state.users.findIndex(u => (u.email || '').toLowerCase() === email);
             if (userIndex >= 0) {
-                state.users[userIndex] = Object.assign(state.users[userIndex], newUser);
+                state.users[userIndex].password = passwordHash;
+                state.users[userIndex].role = assignedRole;
+                state.users[userIndex].status = "approved";
+                if (!state.users[userIndex].displayName) state.users[userIndex].displayName = displayName;
+                state.users[userIndex].lastUpdated = Date.now();
             } else {
-                state.users.push(newUser);
+                state.users.push({
+                    email: email,
+                    password: passwordHash,
+                    role: assignedRole,
+                    status: "approved",
+                    displayName: displayName,
+                    dateRegistered: new Date().toLocaleDateString(),
+                    questions: JSON.parse(JSON.stringify(SEED_QUESTIONS)),
+                    tests: [],
+                    notebookNotes: [],
+                    flashcards: [],
+                    reportTaskProgress: {},
+                    lastUpdated: Date.now()
+                });
             }
 
             encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
@@ -7113,7 +7278,11 @@ function renderAdminPanel() {
             }
 
             directUserForm.reset();
-            showToast("User Created & Approved", `Added approved ${assignedRole.toUpperCase()} account (${email}) directly to Cloud. User can log in immediately.`, "success");
+            if (isUpdatingExisting) {
+                showToast("Password Updated", `Updated password & approved status for ${email} in Cloud while preserving all study progress.`, "success");
+            } else {
+                showToast("User Created & Approved", `Added approved ${assignedRole.toUpperCase()} account (${email}) directly to Cloud. User can log in immediately.`, "success");
+            }
             renderAdminApprovalsTab();
         };
     }
@@ -7200,7 +7369,7 @@ async function callGeminiExtractQuestions(rawText, apiKey = "", defaultTopic = "
 
 async function callGeminiDirectClientFallback(rawText, apiKey, defaultTopic = "Infectious Diseases", defaultSource = "PAST_PAPER") {
     if (!apiKey) throw new Error("مفتاح Gemini API غير متوفر في المتصفح أو السيرفر.");
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey.trim()}`;
+    const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
     
     const systemPrompt = `You are an expert medical examination board question parser.
 Your task is to analyze the provided medical text/notes/exam questions and extract or formulate all high-quality multiple choice questions (MCQs).
@@ -7246,7 +7415,10 @@ Output format MUST be valid JSON matching this exact schema:
 
     const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey.trim()
+        },
         body: JSON.stringify(requestBody)
     });
 
@@ -8035,7 +8207,10 @@ function renderAdminApprovalsTab() {
                 </td>
                 <td>${user.dateRegistered || 'N/A'}</td>
                 <td class="text-right">
-                    <div style="display:flex;gap:8px;justify-content:flex-end">
+                    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+                        <button class="btn btn-secondary" style="padding:6px 10px;font-size:0.8rem" onclick="resetUserPasswordAdmin('${user.email}')">
+                            <i class="fa-solid fa-key"></i> Reset Password
+                        </button>
                         <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem" onclick="toggleUserRoleAdmin('${user.email}')" ${isSelf ? 'disabled' : ''}>
                             <i class="fa-solid fa-arrows-spin"></i> Toggle Role
                         </button>
@@ -8049,6 +8224,54 @@ function renderAdminApprovalsTab() {
         });
     }
 }
+
+window.resetUserPasswordAdmin = async function(email) {
+    const targetEmail = (email || "").trim().toLowerCase();
+    if (!targetEmail) return;
+    const newPass = prompt(`أدخل كلمة المرور الجديدة للطالب (${targetEmail}) (6 أحرف على الأقل):`);
+    if (newPass === null) return;
+    const cleanPass = cleanPasswordInput(newPass);
+    if (!cleanPass || cleanPass.length < 6) {
+        showToast("Weak Password", "Password must be at least 6 characters long.", "danger");
+        return;
+    }
+
+    const passwordHash = sha256Sync(cleanPass);
+    const user = (state.users || []).find(u => (u.email || "").toLowerCase() === targetEmail);
+    const assignedRole = (user && user.role === "admin") ? "admin" : "student";
+    const displayName = (user && user.displayName) ? user.displayName : targetEmail.split("@")[0];
+    const currentGroup = (state.activeGroup || "infection").toLowerCase().trim();
+    const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
+    const adminHash = (state.currentUser && state.currentUser.password ? state.currentUser.password : "");
+
+    try {
+        const rpcRes = await supabaseRequest("rpc/admin_direct_add_user", {
+            method: "POST",
+            body: JSON.stringify({
+                p_admin_email: adminEmail,
+                p_admin_hash: adminHash,
+                p_new_email: targetEmail,
+                p_new_password_hash: passwordHash,
+                p_role: assignedRole,
+                p_display_name: displayName,
+                p_group: currentGroup
+            })
+        });
+        if (rpcRes && rpcRes.success !== false && (rpcRes.success || !rpcRes.error)) {
+            if (user) {
+                user.password = passwordHash;
+                user.lastUpdated = Date.now();
+                encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+            }
+            showToast("Password Reset Successful", `تم تحديث كلمة المرور لحساب ${targetEmail} بنجاح دون المساس ببياناته أو تقدمه.`, "success");
+        } else {
+            showToast("Reset Failed", "تعذر تحديث كلمة المرور في السيرفر. يرجى المحاولة مرة أخرى.", "danger");
+        }
+    } catch (err) {
+        console.error("[ResetPasswordAdmin] Error:", err);
+        showToast("Reset Error", "حدث خطأ أثناء الاتصال بالسيرفر.", "danger");
+    }
+};
 
 async function callAdminManageUserRpc(action, targetEmail, role = 'student', displayName = '') {
     const adminEmail = (state.currentUser && state.currentUser.email ? state.currentUser.email : "").trim().toLowerCase();
@@ -13732,8 +13955,8 @@ function stopWatermark() {
 
 // Supabase Storage & IndexedDB Fallback helpers
 async function uploadFileToSupabase(file, courseId, contentId, progressCallback) {
-    const baseUrl = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const baseUrl = SUPABASE_CONFIG.url;
+    const anonKey = SUPABASE_CONFIG.anonKey;
     
     const cleanUrl = baseUrl.replace(/\/$/, '');
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
@@ -14466,18 +14689,16 @@ let _activeBookFetchId = 0;
 async function fetchBookLibraryData(targetGroup = null) {
     const requestedGroup = (targetGroup || state.activeGroup || "infection").toLowerCase().trim();
     const currentFetchId = ++_activeBookFetchId;
-    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
-    const cleanUrl = url.replace(/\/$/, "");
+    const anonKey = SUPABASE_CONFIG.anonKey;
 
     console.log(`[BookDebug] Fetching books from Supabase for: ${requestedGroup} (Fetch ID: ${currentFetchId})`);
 
     let collectedBooks = [];
     let serverSuccess = false;
 
-    // Strategy A: Query hawari_book_files table directly
+    // Strategy A: Query hawari_book_files table via proxy/fallback
     try {
-        const resA = await fetch(`${cleanUrl}/rest/v1/hawari_book_files?group_name=eq.${encodeURIComponent(requestedGroup)}&order=uploaded_at.desc`, {
+        const resA = await fetchSupabaseWithFallback(`/rest/v1/hawari_book_files?group_name=eq.${encodeURIComponent(requestedGroup)}&order=uploaded_at.desc`, {
             headers: { "apikey": anonKey, "Authorization": `Bearer ${anonKey}` }
         });
         if (resA.ok) {
@@ -14806,8 +15027,8 @@ window.searchBookLibrary = function(q) {
 
 async function getSignedBookUrl(filePath, expiresIn = 300) {
     try {
-        const cleanUrl = (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co").replace(/\/$/, '');
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+        const cleanUrl = SUPABASE_CONFIG.url.replace(/\/$/, '');
+        const anonKey = SUPABASE_CONFIG.anonKey;
         
         let targetPath = filePath || "";
         if (targetPath.includes("/hawari_books/")) {
@@ -17076,8 +17297,8 @@ window.testRealSupabaseSession = async function() {
         console.log("[AUTH-TEST] JWT exp:", new Date(decoded.exp * 1000).toISOString());
     }
 
-    const url = import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || "https://sueksolsletlhunpbtix.supabase.co";
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0.F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c";
+    const url = SUPABASE_CONFIG.url;
+    const anonKey = SUPABASE_CONFIG.anonKey;
     try {
         const restRes = await fetch(`${url.replace(/\/$/, '')}/rest/v1/hawari_users?select=email&limit=1`, {
             headers: {

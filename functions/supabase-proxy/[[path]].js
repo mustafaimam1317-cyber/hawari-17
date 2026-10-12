@@ -84,14 +84,17 @@ export async function onRequest(context) {
         });
     }
 
-    // 2. Questions Bank (POST RPC -> Edge Cached for 7 days)
-    if (isSanitizedQuestionsRpc && isPost) {
-        const bodyText = await request.clone().text();
-        let group = "infection";
-        try {
-            const parsed = JSON.parse(bodyText);
-            if (parsed.p_group) group = String(parsed.p_group).toLowerCase().trim();
-        } catch (e) {}
+    // 2. Questions Bank (POST/GET RPC -> Edge Cached for 7 days)
+    if (isSanitizedQuestionsRpc && (isPost || isGet)) {
+        const cache = caches.default;
+        const bodyText = isPost ? await request.clone().text() : "";
+        let group = url.searchParams.get("p_group") || "infection";
+        if (isPost && bodyText) {
+            try {
+                const parsed = JSON.parse(bodyText);
+                if (parsed.p_group) group = String(parsed.p_group).toLowerCase().trim();
+            } catch (e) {}
+        }
 
         const cacheKeyUrl = new URL(`https://hawari-edge-cache.internal/questions/${group}`);
         const cacheKey = new Request(cacheKeyUrl.toString(), { method: "GET" });
@@ -110,9 +113,9 @@ export async function onRequest(context) {
         }
 
         const originResponse = await fetch(new Request(originUrl.toString(), {
-            method: "POST",
+            method: request.method,
             headers: forwardHeaders,
-            body: bodyText,
+            body: isPost ? bodyText : undefined,
             redirect: "follow"
         }));
 

@@ -169,7 +169,17 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Invalid Gmail address');
     END IF;
 
-    -- Upsert as pending student. If student was previously deleted or exists, reset to pending!
+    -- Prevent overwriting already-approved student or administrator accounts
+    IF EXISTS (
+        SELECT 1 FROM public.hawari_users u
+        WHERE lower(trim(u.email)) = v_clean_email
+          AND lower(trim(u.group_name)) = v_clean_group
+          AND (u.status = 'approved' OR u.role = 'admin')
+    ) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Account is already registered and approved');
+    END IF;
+
+    -- Upsert as pending student (only if new or currently pending)
     INSERT INTO public.hawari_users AS target_users (
         email,
         group_name,
@@ -205,7 +215,8 @@ BEGIN
         status = 'pending',
         role = 'student',
         date_registered = v_date,
-        last_updated = v_now_ms;
+        last_updated = v_now_ms
+    WHERE target_users.status <> 'approved' AND target_users.role <> 'admin';
 
     RETURN jsonb_build_object('success', true, 'status', 'pending', 'email', v_clean_email);
 END;
@@ -319,4 +330,4 @@ GRANT EXECUTE ON FUNCTION public.admin_get_students(text, text, text) TO anon, a
 GRANT EXECUTE ON FUNCTION public.admin_manage_user(text, text, text, text, text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.register_student_rpc(text, text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_progress_rpc(text, text) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.update_user_progress_rpc(text, text, jsonb, jsonb, bigint) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.update_user_progress_rpc(text, text, jsonb, jsonb, jsonb, bigint) TO anon, authenticated;

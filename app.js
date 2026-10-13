@@ -42,7 +42,7 @@ const _DEFAULT_SB_KEY_PARTS = [
 ];
 const SUPABASE_CONFIG = {
     url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || `https://${_DEFAULT_SB_PROJECT_REF}.supabase.co`).replace(/\/$/, ""),
-    proxyUrl: (import.meta.env.VITE_SUPABASE_PROXY_URL || window.ENV_SUPABASE_PROXY_URL || (typeof window !== "undefined" && window.location.hostname && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1") ? `${window.location.origin}/supabase-proxy` : "")).replace(/\/$/, ""),
+    proxyUrl: (import.meta.env.VITE_SUPABASE_PROXY_URL || window.ENV_SUPABASE_PROXY_URL || "").replace(/\/$/, ""),
     anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || _DEFAULT_SB_KEY_PARTS.join(".")
 };
 if (typeof window !== "undefined") {
@@ -58,25 +58,32 @@ function getSupabaseAuthHeaders(jwtToken = null, extraHeaders = {}) {
     };
 }
 
+function isValidPdfBuffer(buffer) {
+    if (!buffer || buffer.byteLength < 100) return false;
+    try {
+        const bytes = new Uint8Array(buffer, 0, 5);
+        // Check %PDF- magic header (0x25, 0x50, 0x44, 0x46, 0x2D)
+        return bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+    } catch (e) {
+        return false;
+    }
+}
+
 async function fetchSupabaseWithFallback(subPath, fetchOptions = {}) {
     const cleanSub = String(subPath || "").replace(/^\//, "");
     const directUrl = `${SUPABASE_CONFIG.url}/${cleanSub}`;
-    const proxyUrl = SUPABASE_CONFIG.proxyUrl ? `${SUPABASE_CONFIG.proxyUrl}/${cleanSub}` : null;
-    const candidateUrls = proxyUrl ? [proxyUrl, directUrl] : [directUrl, directUrl];
+    const candidateUrls = [directUrl, directUrl];
 
     let lastError = null;
     for (let i = 0; i < candidateUrls.length; i++) {
         const targetUrl = candidateUrls[i];
         try {
             const res = await fetch(targetUrl, fetchOptions);
-            if ((res.status === 404 || res.status === 502 || res.status === 503 || res.status === 504) && i === 0 && targetUrl !== directUrl) {
-                continue;
-            }
             return res;
         } catch (err) {
             lastError = err;
             if (i === 0) {
-                await new Promise(r => setTimeout(r, 250));
+                await new Promise(r => setTimeout(r, 300));
             }
         }
     }
@@ -427,14 +434,16 @@ const HawariPdfStorageEngine = {
         
         // Check L1 memory cache first (instantaneous)
         const memHit = _hawariMemoryPdfCache.get(bookId);
-        if (memHit && memHit.storageUrl === currentStorageUrl && memHit.data && memHit.data.byteLength > 0) {
+        if (memHit && memHit.storageUrl === currentStorageUrl && isValidPdfBuffer(memHit.data)) {
             return { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" };
+        } else if (memHit && !isValidPdfBuffer(memHit.data)) {
+            _hawariMemoryPdfCache.delete(bookId);
         }
 
         try {
             const db = await openPdfVaultDB();
             if (!db) {
-                return (memHit && memHit.storageUrl === currentStorageUrl) ? { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" } : null;
+                return (memHit && memHit.storageUrl === currentStorageUrl && isValidPdfBuffer(memHit.data)) ? { buffer: memHit.data, fromCache: true, fileSize: memHit.data.byteLength, source: "memory" } : null;
             }
 
             return new Promise((resolve) => {
@@ -477,6 +486,13 @@ const HawariPdfStorageEngine = {
                         }
                     }
 
+                    // Self-healing validation: Ensure decrypted buffer is a genuine %PDF binary (not cached HTML)
+                    if (!isValidPdfBuffer(rawPdfBuffer)) {
+                        console.warn(`[PDFVault] Corrupted non-PDF entry detected in IndexedDB for book ${bookId}. Purging automatically...`);
+                        HawariPdfStorageEngine.deleteCachedBookPdf(bookId).catch(() => {});
+                        return resolve(null);
+                    }
+
                     // Populate L1 cache for smooth intra-session page reading
                     _hawariMemoryPdfCache.set(bookId, {
                         storageUrl: record.storageUrl,
@@ -501,7 +517,7 @@ const HawariPdfStorageEngine = {
 
     // 2. Set/Save downloaded book binary to IndexedDB (with AES-GCM 256 encryption) & L1 memory
     async setCachedBookPdf(bookId, groupName, storageUrl, arrayBuffer, userEmail = null) {
-        if (!bookId || !arrayBuffer || arrayBuffer.byteLength === 0) return false;
+        if (!bookId || !isValidPdfBuffer(arrayBuffer)) return false;
 
         const effectiveEmail = userEmail || (state.currentUser?.email) || "";
 
@@ -663,7 +679,7 @@ async function loadRealBookPdfDocument(bookFile) {
         // LAYER 1 & 2: Local IndexedDB / Memory Cache Check (Zero-Egress + AES-GCM 256)
         const userEmail = state.currentUser?.email || "";
         const cachedDoc = await HawariPdfStorageEngine.getCachedBookPdf(bookFile.id, rawUrl, userEmail);
-        if (cachedDoc && cachedDoc.buffer && cachedDoc.buffer.byteLength > 0) {
+        if (cachedDoc && isValidPdfBuffer(cachedDoc.buffer)) {
             console.log(`[PDFViewer] ⚡ CACHE HIT (${cachedDoc.source}) for book "${bookFile.title}" (${(cachedDoc.fileSize / 1024 / 1024).toFixed(2)} MB). 0 bytes network egress!`);
             pdfArrayBuffer = cachedDoc.buffer;
         } else {
@@ -672,26 +688,32 @@ async function loadRealBookPdfDocument(bookFile) {
 
             // Resilient fetch with Exponential Backoff (up to 3 attempts)
             const maxDownloadAttempts = 3;
-            for (let attempt = 1; attempt <= maxDownloadAttempts && (!pdfArrayBuffer || pdfArrayBuffer.byteLength === 0); attempt++) {
+            for (let attempt = 1; attempt <= maxDownloadAttempts && !isValidPdfBuffer(pdfArrayBuffer); attempt++) {
                 if (attempt > 1) {
                     const delayMs = attempt === 2 ? 800 : 2000;
                     console.log(`[PDFViewer] Connection retry attempt ${attempt}/${maxDownloadAttempts} after ${delayMs}ms...`);
                     await new Promise(r => setTimeout(r, delayMs));
                 }
 
-                // Strategy A: Authenticated storage endpoint (via Proxy with Direct Fallback)
+                // Strategy A: Direct Authenticated storage endpoint
                 if (cleanPath) {
                     try {
-                        const resAuth = await fetchSupabaseWithFallback(`storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                        const authEndpoint = `${cleanUrl}/storage/v1/object/hawari_books/${encodeURIComponent(cleanPath)}`;
+                        const resAuth = await fetch(authEndpoint, {
                             headers: {
                                 "apikey": anonKey,
                                 "Authorization": `Bearer ${jwtToken || anonKey}`
                             }
                         });
                         if (resAuth.ok) {
-                            pdfArrayBuffer = await resAuth.arrayBuffer();
-                            console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-                            break;
+                            const candidateBuf = await resAuth.arrayBuffer();
+                            if (isValidPdfBuffer(candidateBuf)) {
+                                pdfArrayBuffer = candidateBuf;
+                                console.log("[PDFViewer] Strategy A (Auth endpoint) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                                break;
+                            } else {
+                                console.warn("[PDFViewer] Strategy A returned non-PDF content, trying next strategy...");
+                            }
                         } else {
                             console.warn(`[PDFViewer] Strategy A returned status ${resAuth.status} on attempt ${attempt}`);
                         }
@@ -701,15 +723,18 @@ async function loadRealBookPdfDocument(bookFile) {
                 }
 
                 // Strategy B: Public storage endpoint
-                if (!pdfArrayBuffer && rawUrl && rawUrl.startsWith("http")) {
+                if (!isValidPdfBuffer(pdfArrayBuffer) && rawUrl && rawUrl.startsWith("http")) {
                     try {
                         const resPub = await fetch(rawUrl, {
                             headers: { "apikey": anonKey }
                         });
                         if (resPub.ok) {
-                            pdfArrayBuffer = await resPub.arrayBuffer();
-                            console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-                            break;
+                            const candidateBuf = await resPub.arrayBuffer();
+                            if (isValidPdfBuffer(candidateBuf)) {
+                                pdfArrayBuffer = candidateBuf;
+                                console.log("[PDFViewer] Strategy B (Public URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                                break;
+                            }
                         } else {
                             console.warn(`[PDFViewer] Strategy B returned status ${resPub.status} on attempt ${attempt}`);
                         }
@@ -718,10 +743,10 @@ async function loadRealBookPdfDocument(bookFile) {
                     }
                 }
 
-                // Strategy C: Signed temporary URL from Supabase (via Proxy with Direct Fallback)
-                if (!pdfArrayBuffer && cleanPath) {
+                // Strategy C: Signed temporary URL from Supabase
+                if (!isValidPdfBuffer(pdfArrayBuffer) && cleanPath) {
                     try {
-                        const signRes = await fetchSupabaseWithFallback(`storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
+                        const signRes = await fetch(`${cleanUrl}/storage/v1/object/sign/hawari_books/${encodeURIComponent(cleanPath)}`, {
                             method: "POST",
                             headers: {
                                 "apikey": anonKey,
@@ -737,9 +762,12 @@ async function loadRealBookPdfDocument(bookFile) {
                                 const signedFullUrl = signedPath.startsWith("http") ? signedPath : `${cleanUrl}/storage/v1${signedPath}`;
                                 const resSigned = await fetch(signedFullUrl);
                                 if (resSigned.ok) {
-                                    pdfArrayBuffer = await resSigned.arrayBuffer();
-                                    console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
-                                    break;
+                                    const candidateBuf = await resSigned.arrayBuffer();
+                                    if (isValidPdfBuffer(candidateBuf)) {
+                                        pdfArrayBuffer = candidateBuf;
+                                        console.log("[PDFViewer] Strategy C (Signed URL) succeeded! Bytes:", pdfArrayBuffer.byteLength);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -750,7 +778,7 @@ async function loadRealBookPdfDocument(bookFile) {
             }
 
             // If downloaded successfully, persist into IndexedDB with AES-GCM 256 for future zero-egress opens
-            if (pdfArrayBuffer && pdfArrayBuffer.byteLength > 0) {
+            if (isValidPdfBuffer(pdfArrayBuffer)) {
                 await HawariPdfStorageEngine.setCachedBookPdf(bookFile.id, bookFile.group_name || state.activeGroup, rawUrl, pdfArrayBuffer, userEmail);
                 showToast("تم الحفظ محلياً", "تم حفظ وتشفير الكتاب على جهازك بنجاح. سيفتح فوراً من الآن بدون سحب ترافيك.", "success");
             }
@@ -2292,9 +2320,14 @@ async function supabaseRequest(path, options = {}) {
             }
         }
 
-        // If proxy returned 404/502/503/504, fallback seamlessly to direct origin
-        if (!response.ok && requestUrl !== directOriginUrl && (response.status === 404 || response.status === 502 || response.status === 503 || response.status === 504)) {
-            console.warn(`[SupabaseRequest] Proxy returned ${response.status}, fallback to direct origin: ${cleanPath}`);
+        // If proxy returned 404/405/5xx or an HTML SPA fallback page, fallback seamlessly to direct origin
+        const respContentType = (response.headers && response.headers.get("content-type")) || "";
+        if (
+            requestUrl !== directOriginUrl &&
+            (!response.ok && (response.status === 404 || response.status === 405 || response.status >= 500) ||
+             respContentType.includes("text/html"))
+        ) {
+            console.warn(`[SupabaseRequest] Proxy returned ${response.status} (${respContentType}), fallback to direct origin: ${cleanPath}`);
             response = await fetch(directOriginUrl, {
                 ...options,
                 headers
@@ -2316,6 +2349,12 @@ async function supabaseRequest(path, options = {}) {
         const text = await response.text();
         if (!text || text.trim() === "") {
             return { success: true, data: [] };
+        }
+
+        if (text.trim().startsWith("<!DOCTYPE") || text.trim().startsWith("<html")) {
+            window.HawariNetworkMetrics.failedRequests++;
+            console.error(`[SupabaseRequest] Unexpected HTML response for ${method} ${path}`);
+            return { success: false, status: 502, error: "Unexpected HTML response instead of JSON" };
         }
         
         window.HawariNetworkMetrics.estimatedBytes += text.length;
@@ -4099,10 +4138,10 @@ async function syncUsersWithCloud() {
                     if (cu.password) {
                         lu.password = cu.password;
                     }
-                    // Sync status (e.g. pending -> approved) - Anti-Revert Protection
-                    if (cu.status === "approved") {
-                        lu.status = "approved";
-                        lu.role = cu.role;
+                    // Sync status (approved or pending) from authoritative cloud record
+                    if (cu.status === "approved" || cu.status === "pending") {
+                        lu.status = cu.status;
+                        if (cu.role) lu.role = cu.role;
                     }
                     // Sync display name if cloud has it
                     if (cu.displayName) {
@@ -7294,6 +7333,11 @@ function renderAdminPanel() {
     renderAdminApprovalsTab();
     renderAdminQuizzesTab();
     renderAdminBookAccessManager();
+
+    // Refresh users list from cloud so any newly submitted registration requests appear immediately
+    syncUsersWithCloud().then(() => {
+        renderAdminApprovalsTab();
+    }).catch(() => {});
 }
 
 // ================= GEMINI AI QUIZ & QUESTION GENERATOR ENGINE =================
@@ -8390,13 +8434,16 @@ window.approveUserAdmin = async function(email, role = 'user') {
             };
             
             try {
-                await supabaseRequest("hawari_users", {
+                const directRes = await supabaseRequest("hawari_users", {
                     method: "POST",
                     headers: {
                         "Prefer": "resolution=merge-duplicates"
                     },
                     body: JSON.stringify(payload)
                 });
+                if (directRes && directRes.success === false) {
+                    throw new Error(directRes.error || `HTTP ${directRes.status}`);
+                }
                 showToast("User Approved", `Gmail account ${email} is now approved as ${assignedRole.toUpperCase()}.`, "success");
             } catch (e) {
                 console.error("Direct cloud approval sync failed, queuing offline:", e);

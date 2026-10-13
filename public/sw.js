@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hawari-cache-v3.4';
+const CACHE_NAME = 'hawari-cache-v3.5';
 const ASSETS = [
   '/',
   '/index.html',
@@ -41,9 +41,14 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Only manage own origin assets - let browser handle external CDNs/fonts natively
-  if (url.origin !== self.location.origin || event.request.method !== 'GET') {
-    return; // Let browser handle external requests directly
+  // Only manage own origin static assets - never intercept API/proxy or non-GET requests
+  if (
+    url.origin !== self.location.origin ||
+    event.request.method !== 'GET' ||
+    url.pathname.startsWith('/supabase-proxy') ||
+    url.pathname.startsWith('/api/')
+  ) {
+    return; // Let browser handle external/API requests directly
   }
 
   // Network-First with Cache Fallback for maximum reliability

@@ -1,0 +1,169 @@
+{
+  "id": "task_cat_scratch_disease",
+  "group_name": "infection",
+  "title": "Cat-Scratch Disease",
+  "time_limit": 15,
+  "date_created": "2026-10-15T02:50:00.000Z",
+  "question_ids": [
+    {
+      "id": "csd_q01",
+      "text": "A 12-year-old boy is brought to the clinic by his mother due to a painful swelling in his left axilla that appeared 10 days ago. Physical examination reveals a 4 cm tender, mobile axillary lymph node. On closer skin examination of his left forearm, a small, non-tender erythematous papule is noted, which the mother states started 3 weeks ago after playing with a stray kitten and is now healing without any scarring. Which of the following statements regarding the natural course and characteristics of this presentation is CORRECT?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "The primary skin lesion typically heals with prominent keloid scarring within 3 to 5 days.",
+        "B": "Regional lymphadenopathy appears proximal to the inoculation site 1 to 3 weeks after the primary skin lesion.",
+        "C": "Generalized, symmetrical lymphadenopathy is the primary hallmark of this infection.",
+        "D": "Inoculation through intact skin without a scratch or break is the predominant mode of transmission."
+      },
+      "explanation": "Pathogenesis & Timeline: Cat-Scratch Disease (Bartonella henselae) presents with an initial primary lesion (erythematous papule or pustule) at the site of skin break/scratch 3 to 10 days post-exposure. The hallmark of the disease—regional lymphadenopathy proximal to the inoculation site (most commonly axillary/epitrochlear or submandibular)—typically develops 1 to 3 weeks later.\n\nOption Elimination:\n- Option A: The primary skin lesion is non-tender and characteristically heals without scarring.\n- Option C: The lymphadenopathy is characteristically unilateral and regional, not generalized or symmetrical.\n- Option D: Transmission requires a break in the skin or mucous membrane via scratching, biting, or licking.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q02",
+      "text": "A 34-year-old woman with a history of painful right cervical lymphadenopathy following a cat scratch 4 weeks ago is brought to the emergency department due to acute confusion, disorientation, and a brief generalized tonic-clonic seizure. She has a high-grade fever. Emergency non-contrast CT scan of the brain shows normal brain parenchyma without mass effect or hemorrhage. Lumbar puncture reveals normal opening pressure, normal glucose, and mild mononuclear pleocytosis in the CSF. What is the expected clinical course and underlying diagnostic feature of her neurological presentation?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Direct bacterial invasion of brain parenchyma requiring emergency neurosurgical decompression.",
+        "B": "Encephalopathy with rapid complete recovery typically occurring within 1 week.",
+        "C": "Permanent cognitive deficits requiring long-term anti-epileptic monotherapy.",
+        "D": "Severe CSF neutrophilic pleocytosis with marked hypoglycorrhachia on lumbar puncture."
+      },
+      "explanation": "CNS Manifestations: Encephalopathy is the most common neurological complication of Cat-Scratch Disease (occurring in ~5% of patients, predominantly adults). It typically presents 1 to 6 weeks after lymphadenopathy.\n\nKey Diagnostic Features: CT brain is characteristically normal, and CSF analysis is either normal or shows mild mononuclear pleocytosis.\n\nPrognosis: Despite the dramatic initial presentation (seizures, coma, confusion), patients experience a rapid and complete recovery within 1 week without permanent deficits.\n\nOption Elimination:\n- Option A, C, D: Pathogenesis is thought to be immune-mediated rather than direct bacterial invasion of the CNS, and it does not produce neutrophilic/purulent CSF changes or permanent cognitive deficits.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q03",
+      "text": "A 29-year-old veterinary technician presents with a 5-day history of painless, subacute visual loss in her left eye. She reports difficulty distinguishing colors and blurred central vision. She recalls receiving a scratch on her left forearm from a young kitten 3 weeks prior, followed by mild epitrochlear swelling. Funduscopic examination reveals an edematous optic disc, macular exudates forming a star pattern, and a subretinal angiomatous nodule. What is the specific diagnosis for her ocular impairment?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Acute anterior uveitis with secondary cataracts",
+        "B": "Neuroretinitis",
+        "C": "Purulent bacterial endophthalmitis",
+        "D": "Retinal artery occlusion secondary to septic emboli"
+      },
+      "explanation": "Ocular Pathology: Neuroretinitis is a recognized focal complication of Bartonella henselae infection.\n\nClinical Features: Characterized by painless, unilateral visual loss with decreased visual acuity and impaired color vision.\n\nFunduscopic Findings: Demonstrates an edematous optic disc, macular exudates (often described as a macular star), and subretinal angiomatous nodules.\n\nOption Elimination:\n- Option A: Anterior uveitis involves painful anterior segment inflammation.\n- Option C: Bacterial endophthalmitis presents with severe eye pain, hypopyon, and vitreous clouding.\n- Option D: Retinal artery occlusion presents with acute, sudden 'cherry-red spot' pale retina without macular exudates.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q04",
+      "text": "A 22-year-old medical student presents with a 5 cm suppurative right axillary lymph node. Because malignancy was initially suspected, an excisional lymph node biopsy was performed. Histopathological evaluation reveals intact overall capsule architecture with active capsular fibrosis, stellate microabscesses, and necrotizing granulomatous lymphadenitis. Which specific staining technique performed on this tissue biopsy is used to identify the causative organism?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Ziehl-Neelsen acid-fast stain",
+        "B": "Warthin-Starry silver stain",
+        "C": "Periodic acid-Schiff (PAS) stain",
+        "D": "Mucicarmine stain"
+      },
+      "explanation": "Histopathology: Biopsy of lymph nodes in Cat-Scratch Disease reveals necrotizing granulomatous lymphadenitis with central necrosis and suppuration.\n\nMicroscopic Staining: Bartonella henselae is a small, pleomorphic Gram-negative bacillus that is poorly visualized on routine H&E stains. The Warthin-Starry silver stain is specifically used on tissue biopsy sections to demonstrate the pleomorphic bacilli within the microabscesses.\n\nOption Elimination:\n- Option A: Ziehl-Neelsen stain is used for Acid-Fast Bacilli (Mycobacterium tuberculosis).\n- Option C: PAS stain is used for fungi (Histoplasma, Tropheryma whipplei).\n- Option D: Mucicarmine stain is used for Cryptococcus neoformans.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q05",
+      "text": "A 15-year-old girl is evaluated for a 3-week history of tender right epitrochlear lymphadenopathy following a cat scratch. She has low-grade fever and malaise. Her primary care physician started her on a course of oral Amoxicillin-Clavulanate 5 days ago, but her lymph node has continued to enlarge. Serology confirms a Bartonella henselae IgG titer of 1:256. What is the most appropriate management adjustment?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Increase the dose of Amoxicillin-Clavulanate and add oral Dexamethasone.",
+        "B": "Switch to a 5-day course of oral Azithromycin (or provide conservative care).",
+        "C": "Immediately initiate intravenous Vancomycin and Ceftriaxone in an ICU setting.",
+        "D": "Perform urgent total lymph node dissection to prevent systemic bacterial spread."
+      },
+      "explanation": "Treatment Principles: Most cases of mild-to-moderate Cat-Scratch Disease in immunocompetent patients are self-limiting and require only conservative/supportive management.\n\nAntibiotic Efficacy: Amoxicillin is typically ineffective against Bartonella henselae. When pharmacological treatment is indicated for mild-to-moderate disease (to accelerate lymph node resolution), a 5-day course of Azithromycin is the regimen of choice.\n\nOption Elimination:\n- Option A & C: Corticosteroids and empiric broad-spectrum coverage (Vancomycin/Ceftriaxone) are not indicated for uncomplicated localized lymphadenopathy.\n- Option D: Surgical excision is avoided due to sinus tract formation risks.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q06",
+      "text": "A 42-year-old HIV-positive male with a CD4 count of 45 cells/mm3 presents with fever, night sweats, weight loss, and multiple reddish-violet, protuberant vascular skin papules and nodules across his trunk. CT abdomen reveals multiple hypodense lesions in the liver and spleen (peliosis hepatis). Biopsy of a skin lesion confirms Bacillary Angiomatosis caused by Bartonella henselae. Which of the following antimicrobial options is appropriate for this severe, disseminated presentation?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Conservative observation without antibiotics for 12 months.",
+        "B": "A 5-day course of low-dose oral Amoxicillin monotherapy.",
+        "C": "Systemic combination therapy using Rifampicin, Ciprofloxacin, Co-Trimoxazole, or IV Gentamicin.",
+        "D": "Topical Antifungal cream applied to skin lesions twice daily."
+      },
+      "explanation": "Disseminated CSD / Bacillary Angiomatosis: In immunocompromised individuals (e.g., advanced HIV/AIDS), Bartonella henselae causes Bacillary Angiomatosis (vascular proliferative lesions of skin, liver, spleen, and bone).\n\nManagement: Unlike self-limiting disease in immunocompetent hosts, severe/disseminated disease requires aggressive systemic antimicrobial therapy using agents such as Rifampicin, Ciprofloxacin, Co-Trimoxazole, or IM/IV Gentamicin.\n\nOption Elimination:\n- Option A & D: Observation or topical antifungals are ineffective and dangerous in advanced immunosuppression.\n- Option B: Amoxicillin lacks efficacy against Bartonella.",
+      "correctOption": "C",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q07",
+      "text": "A 20-year-old male presents with tender submandibular lymphadenopathy 2 weeks after acquiring a new kitten. To evaluate for suspected Cat-Scratch Disease, indirect immunofluorescence assay (IFA) for Bartonella henselae antibodies is ordered. His baseline IgG titer is 1:64. A repeat convalescent serum sample drawn 2 weeks later demonstrates an IgG titer of 1:256. How should these serological findings be interpreted based on diagnostic criteria?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "The baseline titer of 1:64 definitively rules out Bartonella infection.",
+        "B": "The four-fold rise in IgG titer (to 1:256) confirms active/recent Bartonella henselae infection.",
+        "C": "Serological testing is non-specific and a CSD intradermal skin test must be performed to confirm diagnosis.",
+        "D": "A single IgM titer is the only accepted diagnostic criterion; IgG titers have no clinical utility."
+      },
+      "explanation": "Serology Criteria: Serology (ELISA or IFA) is the best initial test for Cat-Scratch Disease.\n\nInterpretation: An initial titer >1:64 suggests recent exposure/infection, while a four-fold increase in antibody titer (e.g., reaching 1:256) between paired acute and convalescent serum samples is confirmatory for active or recent infection.\n\nOption Elimination:\n- Option A: A baseline titer of 1:64 is suggestive of recent exposure, not ruling out.\n- Option C: CSD skin testing (Hanger-Rose test) is no longer recommended or used due to safety concerns.\n- Option D: IgG titers are widely validated and clinically utilized.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q08",
+      "text": "A surgical pathologist examines an excised lymph node from a patient presenting with early-stage regional lymphadenopathy following a cat scratch. Microscopic examination shows that the overall nodal architecture is preserved, accompanied by active capsular fibrosis, active arteriolar proliferation, and reticular cell hyperplasia, without evidence of central necrotizing microabscesses. Which stage of Cat-Scratch Disease histopathology does this specimen demonstrate?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Late-stage suppurative necrotizing granuloma",
+        "B": "Early-stage lymphoid and reticular cell hyperplasia",
+        "C": "End-stage fibrous acellular scarring",
+        "D": "Caseous tuberculous necrosis with Langhans giant cells"
+      },
+      "explanation": "Histopathological Evolution in CSD:\n- Early Stage: Characterized by intact nodal architecture, capsular fibrosis/inflammation, lymphoid hyperplasia, arteriolar proliferation, and reticular cell hyperplasia.\n- Late Stage: Progresses to a granulomatous reaction with central necrosis and suppuration (necrotizing granulomatous lymphadenitis with stellate abscesses).\n\nOption Elimination:\n- Option A: The absence of central necrosis or suppuration rules out the late-stage necrotizing granuloma.\n- Option D: Caseous necrosis with Langhans giant cells is pathognomonic for Tuberculosis.",
+      "correctOption": "B",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q09",
+      "text": "Cat-scratch disease is characterized by all of the following EXCEPT:",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Positive Hanger-Rose intradermal test",
+        "B": "Erythema nodosum",
+        "C": "Regional lymphadenopathy",
+        "D": "Treated by antibiotic and corticosteroids"
+      },
+      "explanation": "Why Option D is the EXCEPTION (Correct Answer): In immunocompetent individuals, Cat-Scratch Disease is typically a self-limiting condition that resolves spontaneously over a few weeks to months. Routine dual therapy with antibiotics and corticosteroids is NOT indicated or part of standard management. Supportive care is usually sufficient.\n\nWhy the other options are true features of CSD:\n- Option A (Positive Hanger-Rose test): An intradermal skin test historically used to diagnose CSD prior to modern serological assays.\n- Option B (Erythema nodosum): A recognized secondary immunological skin reaction that can occasionally accompany CSD.\n- Option C (Regional lymphadenopathy): Subacute, tender regional lymphadenopathy (closest to the inoculation/scratch site) is the hallmark clinical feature of the disease.",
+      "correctOption": "D",
+      "highlightedHtml": ""
+    },
+    {
+      "id": "csd_q10",
+      "text": "A young boy was playing with a kitten/cat and now has cat-scratch disease. Which bacterial species is the most likely cause?",
+      "notes": "",
+      "marked": false,
+      "status": "unused",
+      "options": {
+        "A": "Brucella",
+        "B": "Campylobacter",
+        "C": "Borrelia",
+        "D": "Bartonella"
+      },
+      "explanation": "Why Option D is CORRECT: The primary causative organism of Cat-Scratch Disease is Bartonella henselae, a small, fastidious, facultative intracellular Gram-negative bacillus. It is transmitted directly through cat scratches or bites (especially from young kittens) or via the cat flea vector (Ctenocephalides felis).\n\nWhy the other options are INCORRECT:\n- Option A (Brucella): Causes Brucellosis (undulant fever); transmitted by consuming unpasteurized dairy or through contact with infected livestock.\n- Option B (Campylobacter): Causes acute gastroenteritis; transmitted via contaminated food or water.\n- Option C (Borrelia): Causes Lyme disease (Borrelia burgdorferi) or relapsing fever; transmitted by tick or louse vectors.",
+      "correctOption": "D",
+      "highlightedHtml": ""
+    }
+  ]
+}

@@ -51,6 +51,8 @@ export async function onRequest(context) {
     const isPost = method === "POST";
 
     const isSanitizedQuestionsRpc = targetPath.includes("/rpc/get_sanitized_questions");
+    const isReportTasks = targetPath.includes("/hawari_report_tasks");
+    const isCourseQuizzes = targetPath.includes("/hawari_course_quizzes");
     const isQuizResults = targetPath.includes("/hawari_quiz_results");
     const isBookFiles = targetPath.includes("/hawari_book_files");
     const isAnnouncements = targetPath.includes("/hawari_announcements");
@@ -123,7 +125,7 @@ export async function onRequest(context) {
             const responseData = await originResponse.text();
             const cacheHeaders = new Headers(originResponse.headers);
             cacheHeaders.set("Access-Control-Allow-Origin", "*");
-            cacheHeaders.set("Cache-Control", "public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400");
+            cacheHeaders.set("Cache-Control", "public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400");
             cacheHeaders.set("CF-Cache-Status", isPurgeRequested ? "PURGED" : "MISS");
             cacheHeaders.set("X-Hawari-Edge", "PAGES-CACHE-WRITE");
 
@@ -141,7 +143,105 @@ export async function onRequest(context) {
         return originResponse;
     }
 
-    // 3. Quiz Results (GET -> Edge Cached for 3 minutes)
+    // 2b. Report Tasks (GET -> 30 days Edge Cache for full download, 60s for metadata checks)
+    if (isReportTasks && isGet) {
+        const isMetadataQuery = url.searchParams.has("select");
+        const cache = caches.default;
+        const cacheKey = new Request(originUrl.toString(), { method: "GET" });
+
+        if (!isPurgeRequested) {
+            const cachedResponse = await cache.match(cacheKey);
+            if (cachedResponse) {
+                const hitHeaders = new Headers(cachedResponse.headers);
+                hitHeaders.set("CF-Cache-Status", "HIT");
+                hitHeaders.set("X-Hawari-Edge", "PAGES-CACHE-HIT");
+                hitHeaders.set("Access-Control-Allow-Origin", "*");
+                return new Response(cachedResponse.body, {
+                    status: cachedResponse.status,
+                    headers: hitHeaders
+                });
+            }
+        }
+
+        const originResponse = await fetch(new Request(originUrl.toString(), {
+            method: "GET",
+            headers: forwardHeaders
+        }));
+
+        if (originResponse.ok) {
+            const responseData = await originResponse.text();
+            const cacheHeaders = new Headers(originResponse.headers);
+            cacheHeaders.set("Access-Control-Allow-Origin", "*");
+            const maxAge = isMetadataQuery ? 60 : 2592000;
+            const swr = isMetadataQuery ? 30 : 86400;
+            cacheHeaders.set("Cache-Control", `public, max-age=${maxAge}, s-maxage=${maxAge}, stale-while-revalidate=${swr}`);
+            cacheHeaders.set("CF-Cache-Status", isPurgeRequested ? "PURGED" : "MISS");
+            cacheHeaders.set("X-Hawari-Edge", "PAGES-CACHE-WRITE");
+
+            const responseToCache = new Response(responseData, {
+                status: originResponse.status,
+                headers: cacheHeaders
+            });
+
+            if (waitUntil) {
+                waitUntil(cache.put(cacheKey, responseToCache.clone()));
+            }
+            return responseToCache;
+        }
+
+        return originResponse;
+    }
+
+    // 2c. Course Quizzes (GET -> 30 days Edge Cache for full download, 60s for metadata checks)
+    if (isCourseQuizzes && isGet) {
+        const isMetadataQuery = url.searchParams.has("select");
+        const cache = caches.default;
+        const cacheKey = new Request(originUrl.toString(), { method: "GET" });
+
+        if (!isPurgeRequested) {
+            const cachedResponse = await cache.match(cacheKey);
+            if (cachedResponse) {
+                const hitHeaders = new Headers(cachedResponse.headers);
+                hitHeaders.set("CF-Cache-Status", "HIT");
+                hitHeaders.set("X-Hawari-Edge", "PAGES-CACHE-HIT");
+                hitHeaders.set("Access-Control-Allow-Origin", "*");
+                return new Response(cachedResponse.body, {
+                    status: cachedResponse.status,
+                    headers: hitHeaders
+                });
+            }
+        }
+
+        const originResponse = await fetch(new Request(originUrl.toString(), {
+            method: "GET",
+            headers: forwardHeaders
+        }));
+
+        if (originResponse.ok) {
+            const responseData = await originResponse.text();
+            const cacheHeaders = new Headers(originResponse.headers);
+            cacheHeaders.set("Access-Control-Allow-Origin", "*");
+            const maxAge = isMetadataQuery ? 60 : 2592000;
+            const swr = isMetadataQuery ? 30 : 86400;
+            cacheHeaders.set("Cache-Control", `public, max-age=${maxAge}, s-maxage=${maxAge}, stale-while-revalidate=${swr}`);
+            cacheHeaders.set("CF-Cache-Status", isPurgeRequested ? "PURGED" : "MISS");
+            cacheHeaders.set("X-Hawari-Edge", "PAGES-CACHE-WRITE");
+
+            const responseToCache = new Response(responseData, {
+                status: originResponse.status,
+                headers: cacheHeaders
+            });
+
+            if (waitUntil) {
+                waitUntil(cache.put(cacheKey, responseToCache.clone()));
+            }
+            return responseToCache;
+        }
+
+        return originResponse;
+    }
+
+    // 3. Quiz Results (GET -> Edge Cached for 15 minutes)
     if (isQuizResults && isGet) {
         const cache = caches.default;
         const cacheKey = new Request(originUrl.toString(), { method: "GET" });
@@ -169,7 +269,7 @@ export async function onRequest(context) {
             const responseData = await originResponse.text();
             const cacheHeaders = new Headers(originResponse.headers);
             cacheHeaders.set("Access-Control-Allow-Origin", "*");
-            cacheHeaders.set("Cache-Control", "public, max-age=180, s-maxage=180, stale-while-revalidate=60");
+            cacheHeaders.set("Cache-Control", "public, max-age=900, s-maxage=900, stale-while-revalidate=120");
             cacheHeaders.set("CF-Cache-Status", "MISS");
             cacheHeaders.set("X-Hawari-Edge", "PAGES-CACHE-WRITE");
 

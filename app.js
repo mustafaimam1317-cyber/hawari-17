@@ -2437,7 +2437,7 @@ function mergeQuestionsWithGlobal(userQuestions, globalQuestions, group = state.
 
 const QUESTION_CACHE_DB_NAME = "hawari_question_cache";
 const QUESTION_CACHE_STORE_NAME = "question_banks";
-const QUESTION_BANK_VERSION_CHECK_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+const QUESTION_BANK_VERSION_CHECK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours TTL (prevents periodic background bandwidth drain)
 const PUBLISHED_EXAMS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes TTL for published exams & reports (prevents silent bandwidth egress) // 90 seconds short TTL for published exams
 
 // Global in-memory caches
@@ -3612,7 +3612,9 @@ async function deleteCourseQuizFromCloud(id) {
 
 async function fetchAnnouncement(groupName, forceBypassCache = false) {
     const cleanGroup = (groupName || state.activeGroup || "infection").toLowerCase().trim();
-    
+    const timeKey = `hawari_announcement_time_${cleanGroup}`;
+    const now = Date.now();
+
     // 1. Instant local fallback to prevent layout flash or race conditions
     if (!state.announcement) {
         try {
@@ -3622,6 +3624,13 @@ async function fetchAnnouncement(groupName, forceBypassCache = false) {
                 renderAnnouncementWidget();
             }
         } catch (storageErr) {}
+    }
+
+    if (!forceBypassCache && state.announcement) {
+        const lastFetch = Number(localStorage.getItem(timeKey)) || 0;
+        if (now - lastFetch < 4 * 60 * 60 * 1000) {
+            return; // 4 hours TTL - don't hit Supabase unnecessarily
+        }
     }
 
     try {
@@ -3649,6 +3658,7 @@ async function fetchAnnouncement(groupName, forceBypassCache = false) {
             state.announcement = serverContent;
             try {
                 localStorage.setItem(`hawari_announcement_${cleanGroup}`, serverContent);
+            localStorage.setItem(`hawari_announcement_time_${cleanGroup}`, String(Date.now()));
             } catch (e) {}
         } else if (isConfirmedEmpty && forceBypassCache) {
             // Only erase on explicit bypass verification (e.g. after deliberate deletion)
@@ -14562,7 +14572,27 @@ function isUserBookAuthorized(user) {
 }
 
 // Fetch Granted Users List from Supabase Table hawari_book_access (Scoped per course)
-async function fetchGrantedUsersList() {
+async function fetchGrantedUsersList(forceRefresh = false) {
+    const cacheKey = getGroupKey("hawari_granted_book_users");
+    const timeKey = getGroupKey("hawari_granted_book_users_time");
+    const now = Date.now();
+
+    if (!forceRefresh) {
+        const lastFetch = Number(localStorage.getItem(timeKey)) || 0;
+        if (now - lastFetch < 24 * 60 * 60 * 1000) {
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+                try {
+                    const parsed = JSON.parse(cached);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        state.grantedBookUsers = parsed;
+                        return state.grantedBookUsers;
+                    }
+                } catch (e) {}
+            }
+        }
+    }
+
     try {
         const rows = await supabaseRequest("hawari_book_access?select=email,status");
         const activeTag = `::${state.activeGroup}`;
@@ -14581,6 +14611,7 @@ async function fetchGrantedUsersList() {
             });
             state.grantedBookUsers = filtered;
             localStorage.setItem(getGroupKey("hawari_granted_book_users"), JSON.stringify(state.grantedBookUsers));
+            localStorage.setItem(getGroupKey("hawari_granted_book_users_time"), String(Date.now()));
         } else {
             // Anti-flicker: Never wipe existing authorized users if network returns non-array
             const cached = localStorage.getItem(getGroupKey("hawari_granted_book_users"));
@@ -14886,10 +14917,29 @@ function updateAdminActiveBookUI() {
 // Fetch list of books from Supabase / localStorage with course-awareness & race condition protection
 let _activeBookFetchId = 0;
 
-async function fetchBookLibraryData(targetGroup = null) {
+async function fetchBookLibraryData(targetGroup = null, forceRefresh = false) {
     const requestedGroup = (targetGroup || state.activeGroup || "infection").toLowerCase().trim();
     const currentFetchId = ++_activeBookFetchId;
     const anonKey = SUPABASE_CONFIG.anonKey;
+    const timeKey = "hawari_books_time_" + requestedGroup;
+    const now = Date.now();
+
+    if (!forceRefresh) {
+        const lastFetch = Number(localStorage.getItem(timeKey)) || 0;
+        if (now - lastFetch < 24 * 60 * 60 * 1000) {
+            const local = localStorage.getItem("hawari_books_" + requestedGroup);
+            if (local) {
+                try {
+                    const parsed = JSON.parse(local);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        state.books = parsed;
+                        updateAdminActiveBookUI();
+                        return state.books;
+                    }
+                } catch(e){}
+            }
+        }
+    }
 
     console.log(`[BookDebug] Fetching books from Supabase for: ${requestedGroup} (Fetch ID: ${currentFetchId})`);
 
@@ -14946,6 +14996,7 @@ async function fetchBookLibraryData(targetGroup = null) {
         state.books = finalBooks;
         try {
             localStorage.setItem("hawari_books_" + requestedGroup, JSON.stringify(state.books));
+            localStorage.setItem("hawari_books_time_" + requestedGroup, String(Date.now()));
         } catch(err){}
     } else {
         // Fallback to local cache only if server could not be reached

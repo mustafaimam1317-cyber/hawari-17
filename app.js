@@ -34,16 +34,12 @@ import { renderBattleRoomView } from './battleRoom.js';
 })();
 
 // ================= CENTRALIZED SUPABASE CONFIGURATION =================
-const _DEFAULT_SB_PROJECT_REF = ["sueksols", "letlhunpbtix"].join("");
-const _DEFAULT_SB_KEY_PARTS = [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1ZWtzb2xzbGV0bGh1bnBidGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwNzUxMDYsImV4cCI6MjA5OTY1MTEwNn0",
-    "F3_Hk-oth8B60lrSbU02mwRjncz2mKS43d66LquJZ7c"
-];
+const _DEFAULT_SB_PROJECT_REF = "vjbweuzwpzjkskylgvez";
+const _DEFAULT_SB_KEY = "sb_publishable_VhT61uio_JD5f1zXm02U2w_WdAXnnnk";
 const SUPABASE_CONFIG = {
     url: (import.meta.env.VITE_SUPABASE_URL || window.ENV_SUPABASE_URL || `https://${_DEFAULT_SB_PROJECT_REF}.supabase.co`).replace(/\/$/, ""),
     proxyUrl: (import.meta.env.VITE_SUPABASE_PROXY_URL || window.ENV_SUPABASE_PROXY_URL || "").replace(/\/$/, ""),
-    anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || _DEFAULT_SB_KEY_PARTS.join(".")
+    anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || window.ENV_SUPABASE_ANON_KEY || _DEFAULT_SB_KEY
 };
 if (typeof window !== "undefined") {
     window.SUPABASE_CONFIG = SUPABASE_CONFIG;

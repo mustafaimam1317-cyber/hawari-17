@@ -4,7 +4,7 @@
  * Automatically deployed by Cloudflare Pages on git push.
  */
 
-const SUPABASE_ORIGIN = "https://sueksolsletlhunpbtix.supabase.co";
+const SUPABASE_ORIGIN = "https://vjbweuzwpzjkskylgvez.supabase.co";
 
 export async function onRequestOptions() {
     return new Response(null, {

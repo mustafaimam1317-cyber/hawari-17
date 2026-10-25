@@ -6239,7 +6239,7 @@ function loadTestQuestion(index) {
     const savedAns = state.activeTest.selectedAnswers[qId];
     
     // Review mode authoritative data resolution (Self-Contained & Decoupled from volatile global bank)
-    const reviewInfo = (state.activeTest.isCompletedReview && state.activeTest.reviewData) 
+    const reviewInfo = ((state.activeTest.isCompletedReview || state.activeTest.mode === "tutor") && state.activeTest.reviewData) 
         ? state.activeTest.reviewData[qId] 
         : null;
 
@@ -6413,11 +6413,12 @@ async function selectQuestionAnswer(qId, option) {
         try {
             const group = (state.activeGroup || "infection").toLowerCase();
             const userEmail = (state.currentUser && state.currentUser.email) ? state.currentUser.email : "";
+            const examId = state.activeTest.isReportTask ? (state.activeTest.rtId || state.activeTest.testId) : (state.activeTest.testId || "tutor_step");
             const gradeRes = await supabaseRequest("rpc/submit_and_grade_exam", {
                 method: "POST",
                 body: JSON.stringify({
                     p_group: group,
-                    p_exam_id: state.activeTest.testId || "tutor_step",
+                    p_exam_id: examId,
                     p_answers: { [qId]: option },
                     p_email: userEmail,
                     p_question_ids: [qId]
@@ -6429,6 +6430,15 @@ async function selectQuestionAnswer(qId, option) {
                     qObj.correctOption = res.correctOption;
                     qObj.explanation = res.explanation;
                     qObj.status = res.isCorrect ? "correct" : "incorrect";
+
+                    if (!state.activeTest.reviewData) state.activeTest.reviewData = {};
+                    state.activeTest.reviewData[qId] = {
+                        correctOption: res.correctOption,
+                        explanation: res.explanation,
+                        userAns: option,
+                        isCorrect: res.isCorrect
+                    };
+
                     saveStateToStorage();
                     updateDashboardStats();
                 }
@@ -6438,6 +6448,13 @@ async function selectQuestionAnswer(qId, option) {
         }
     } else if (state.activeTest.mode === "tutor" && qObj && qObj.correctOption) {
         qObj.status = (String(option).trim().toUpperCase() === String(qObj.correctOption).trim().toUpperCase()) ? "correct" : "incorrect";
+        if (!state.activeTest.reviewData) state.activeTest.reviewData = {};
+        state.activeTest.reviewData[qId] = {
+            correctOption: qObj.correctOption,
+            explanation: qObj.explanation,
+            userAns: option,
+            isCorrect: qObj.status === "correct"
+        };
         saveStateToStorage();
         updateDashboardStats();
     }
@@ -10852,6 +10869,24 @@ function renderReportTaskStudentView() {
             }
         }
 
+        const savedMode = (progress && progress.mode) || localStorage.getItem(`hawari_rt_mode_${rt.id}`) || "timed";
+        const isTimed = savedMode !== "tutor";
+        const modeSwitchHtml = `
+            <div class="clay-mode-switch-wrapper">
+                <div class="clay-mode-info">
+                    <span class="clay-mode-icon" id="rt-mode-icon-${rt.id}">${isTimed ? '⏱️' : '💡'}</span>
+                    <div class="clay-mode-text">
+                        <span class="clay-mode-title" id="rt-mode-label-${rt.id}">${isTimed ? 'Timed Mode' : 'Tutor Mode'}</span>
+                        <span class="clay-mode-desc" id="rt-mode-desc-${rt.id}">${isTimed ? 'الامتحان بتايمر ووقت محدد' : 'حل تدريبي مع إجابة وشرح فوري'}</span>
+                    </div>
+                </div>
+                <label class="clay-3d-switch" title="تبديل الوضع (تايمر / تيوتر)">
+                    <input type="checkbox" id="rt-mode-toggle-${rt.id}" ${isTimed ? 'checked' : ''} onchange="window.toggleReportTaskMode('${rt.id}')">
+                    <span class="clay-3d-slider"></span>
+                </label>
+            </div>
+        `;
+
         const card = document.createElement("div");
         card.className = "report-task-card";
         card.innerHTML = `
@@ -10865,6 +10900,7 @@ function renderReportTaskStudentView() {
                 ${scoreHtml}
             </div>
             <div style="margin-top: 15px;">
+                ${(progress && progress.completed) ? '' : modeSwitchHtml}
                 ${buttonHtml}
             </div>
         `;
@@ -11076,6 +11112,87 @@ function renderCourseQuizzesStudentView() {
     });
 }
 
+window.toggleReportTaskMode = function(rtId) {
+    const toggleEl = document.getElementById(`rt-mode-toggle-${rtId}`);
+    if (!toggleEl) return;
+    const isTimed = toggleEl.checked;
+    const mode = isTimed ? "timed" : "tutor";
+    try {
+        localStorage.setItem(`hawari_rt_mode_${rtId}`, mode);
+    } catch(e) {}
+
+    const iconEl = document.getElementById(`rt-mode-icon-${rtId}`);
+    const labelEl = document.getElementById(`rt-mode-label-${rtId}`);
+    const descEl = document.getElementById(`rt-mode-desc-${rtId}`);
+
+    if (iconEl) iconEl.innerText = isTimed ? "⏱️" : "💡";
+    if (labelEl) labelEl.innerText = isTimed ? "Timed Mode" : "Tutor Mode";
+    if (descEl) descEl.innerText = isTimed ? "الامتحان بتايمر ووقت محدد" : "حل تدريبي مع إجابة وشرح فوري";
+
+    const userRecord = state.users.find(u => u.email === (state.currentUser && state.currentUser.email));
+    if (userRecord && userRecord.reportTaskProgress && userRecord.reportTaskProgress[rtId]) {
+        userRecord.reportTaskProgress[rtId].mode = mode;
+        saveStateToStorage();
+    }
+};
+
+window.toggleActiveTestExamMode = function() {
+    if (!state.activeTest) return;
+    const currentMode = state.activeTest.mode;
+    const newMode = currentMode === "timed" ? "tutor" : "timed";
+    state.activeTest.mode = newMode;
+
+    if (state.activeTest.isReportTask) {
+        const rtId = state.activeTest.rtId || state.activeTest.testId;
+        const userRecord = state.users.find(u => u.email === (state.currentUser && state.currentUser.email));
+        if (userRecord && userRecord.reportTaskProgress && userRecord.reportTaskProgress[rtId]) {
+            userRecord.reportTaskProgress[rtId].mode = newMode;
+            saveStateToStorage();
+        }
+        try {
+            localStorage.setItem(`hawari_rt_mode_${rtId}`, newMode);
+        } catch(e) {}
+    }
+
+    const modeBadge = document.getElementById("active-test-mode-lbl");
+    const timerWrapper = document.getElementById("test-timer-wrapper");
+
+    if (newMode === "tutor") {
+        if (testTimerInterval) {
+            clearInterval(testTimerInterval);
+            testTimerInterval = null;
+        }
+        if (timerWrapper) timerWrapper.classList.add("hidden");
+        if (modeBadge) {
+            modeBadge.innerHTML = `<i class="fa-solid fa-lightbulb"></i> Tutor Mode`;
+            modeBadge.style.backgroundColor = "var(--color-success-soft)";
+            modeBadge.style.color = "var(--color-success)";
+        }
+        showToast("Tutor Mode Active", "تم تفعيل وضع التدريب: تظهر الإجابة والتفسير فور اختيارك.", "success");
+    } else {
+        if (timerWrapper) timerWrapper.classList.remove("hidden");
+        if (modeBadge) {
+            modeBadge.innerHTML = `<i class="fa-solid fa-stopwatch"></i> Timed Mode`;
+            modeBadge.style.backgroundColor = "var(--color-warning-soft)";
+            modeBadge.style.color = "var(--color-warning)";
+        }
+        updateTimerText(state.activeTest.timeRemaining);
+        if (testTimerInterval) clearInterval(testTimerInterval);
+        testTimerInterval = setInterval(() => {
+            state.activeTest.timeRemaining--;
+            updateTimerText(state.activeTest.timeRemaining);
+            if (state.activeTest.timeRemaining <= 0) {
+                clearInterval(testTimerInterval);
+                testTimerInterval = null;
+                submitActiveTest();
+            }
+        }, 1000);
+        showToast("Timed Mode Active", "تم استئناف التايمر التنازلي.", "warning");
+    }
+
+    loadTestQuestion(state.activeTest.currentQuestionIdx);
+};
+
 window.startReportTaskStudent = function(rtId) {
     const rt = state.reportTasks.find(t => t.id === rtId);
     if (!rt) return;
@@ -11086,10 +11203,23 @@ window.startReportTaskStudent = function(rtId) {
     if (!userRecord.reportTaskProgress) userRecord.reportTaskProgress = {};
     const progress = userRecord.reportTaskProgress[rt.id];
 
+    // Determine initial mode from UI toggle, saved progress, or preference
+    const toggleEl = document.getElementById(`rt-mode-toggle-${rt.id}`);
+    let chosenMode = "timed";
+    if (toggleEl) {
+        chosenMode = toggleEl.checked ? "timed" : "tutor";
+    } else {
+        const saved = localStorage.getItem(`hawari_rt_mode_${rt.id}`);
+        if (saved === "tutor") chosenMode = "tutor";
+    }
+    if (progress && progress.mode) {
+        chosenMode = progress.mode;
+    }
+
     let testObj = {
         id: rt.id,
         name: rt.title,
-        mode: "timed",
+        mode: chosenMode,
         timeRemaining: rt.duration * 60,
         questionIds: rt.questions.map(q => q.id),
         answers: {},
@@ -11106,7 +11236,8 @@ window.startReportTaskStudent = function(rtId) {
             answers: {},
             flaggedQuestions: [],
             timeRemaining: rt.duration * 60,
-            completed: false
+            completed: false,
+            mode: chosenMode
         };
         saveStateToStorage();
     }
@@ -11118,12 +11249,13 @@ window.startReportTaskStudent = function(rtId) {
         selectedAnswers: { ...testObj.answers },
         flaggedQuestions: new Set(testObj.flaggedQuestions),
         questionIds: [...testObj.questionIds],
-        mode: "timed",
+        mode: testObj.mode,
         timeRemaining: testObj.timeRemaining,
         isReportTask: true,
         rtId: rt.id,
         rtQuestions: JSON.parse(JSON.stringify(rt.questions || [])),
-        rtDuration: rt.duration
+        rtDuration: rt.duration,
+        reviewData: {}
     };
 
     // Show Fullscreen modal
@@ -11132,9 +11264,54 @@ window.startReportTaskStudent = function(rtId) {
 
     // UI headers
     document.getElementById("active-test-title-lbl").innerText = rt.title;
-    document.getElementById("active-test-mode-lbl").innerText = "Timed Mode";
-    document.getElementById("active-test-mode-lbl").style.backgroundColor = "var(--color-warning-soft)";
-    document.getElementById("active-test-mode-lbl").style.color = "var(--color-warning)";
+    const modeBadge = document.getElementById("active-test-mode-lbl");
+    const timerWrapper = document.getElementById("test-timer-wrapper");
+
+    modeBadge.classList.add("clickable-mode-badge");
+    modeBadge.title = "اضغط للتبديل بين وضع التايمر ووضع التيوتر";
+    modeBadge.onclick = () => {
+        window.toggleActiveTestExamMode();
+    };
+
+    if (state.activeTest.mode === "tutor") {
+        modeBadge.innerHTML = `<i class="fa-solid fa-lightbulb"></i> Tutor Mode`;
+        modeBadge.style.backgroundColor = "var(--color-success-soft)";
+        modeBadge.style.color = "var(--color-success)";
+        timerWrapper.classList.add("hidden");
+        if (testTimerInterval) {
+            clearInterval(testTimerInterval);
+            testTimerInterval = null;
+        }
+    } else {
+        modeBadge.innerHTML = `<i class="fa-solid fa-stopwatch"></i> Timed Mode`;
+        modeBadge.style.backgroundColor = "var(--color-warning-soft)";
+        modeBadge.style.color = "var(--color-warning)";
+        timerWrapper.classList.remove("hidden");
+        updateTimerText(state.activeTest.timeRemaining);
+        
+        if (testTimerInterval) clearInterval(testTimerInterval);
+        testTimerInterval = setInterval(() => {
+            state.activeTest.timeRemaining--;
+            updateTimerText(state.activeTest.timeRemaining);
+            
+            // Save time progress periodically (every 5 seconds) to avoid losing timer state on page reloads
+            if (state.activeTest.timeRemaining % 5 === 0) {
+                const currentRecord = state.users.find(u => u.email === state.currentUser.email);
+                if (currentRecord && currentRecord.reportTaskProgress && currentRecord.reportTaskProgress[rt.id]) {
+                    currentRecord.reportTaskProgress[rt.id].timeRemaining = state.activeTest.timeRemaining;
+                    currentRecord.reportTaskProgress[rt.id].mode = state.activeTest.mode;
+                    saveStateToStorage();
+                }
+            }
+            
+            if (state.activeTest.timeRemaining <= 0) {
+                clearInterval(testTimerInterval);
+                testTimerInterval = null;
+                showToast("Time's Up!", "Your mock exam timer has expired. Submitting automatically.", "warning");
+                submitActiveTest();
+            }
+        }, 1000);
+    }
 
     initTestControls();
     
@@ -11148,33 +11325,6 @@ window.startReportTaskStudent = function(rtId) {
 
     // Load first question
     loadTestQuestion(0);
-
-    // Setup timer countdown
-    const timerText = document.getElementById("test-timer-text");
-    const timerWrapper = document.getElementById("test-timer-wrapper");
-    timerWrapper.classList.remove("hidden");
-    updateTimerText(state.activeTest.timeRemaining);
-    
-    if (testTimerInterval) clearInterval(testTimerInterval);
-    testTimerInterval = setInterval(() => {
-        state.activeTest.timeRemaining--;
-        updateTimerText(state.activeTest.timeRemaining);
-        
-        // Save time progress periodically (every 5 seconds) to avoid losing timer state on page reloads
-        if (state.activeTest.timeRemaining % 5 === 0) {
-            const currentRecord = state.users.find(u => u.email === state.currentUser.email);
-            if (currentRecord && currentRecord.reportTaskProgress && currentRecord.reportTaskProgress[rt.id]) {
-                currentRecord.reportTaskProgress[rt.id].timeRemaining = state.activeTest.timeRemaining;
-                saveStateToStorage();
-            }
-        }
-        
-        if (state.activeTest.timeRemaining <= 0) {
-            clearInterval(testTimerInterval);
-            showToast("Time's Up!", "Your mock exam timer has expired. Submitting automatically.", "warning");
-            submitActiveTest();
-        }
-    }, 1000);
 };
 
 window.reviewReportTaskStudent = function(rtId) {

@@ -3480,7 +3480,7 @@ async function downloadFullCourseQuizzes(group, targetFingerprint = null) {
             const isAdmin = state.currentUser && (state.currentUser.role === "admin" || state.currentUser.role === "instructor" || state.currentUser.is_admin === true);
             const mapped = records.map(row => {
                 let quizQuestions = row.questions || [];
-                if (!isAdmin) {
+                if (!isAdmin && row.status !== 'moved_to_reports') {
                     quizQuestions = quizQuestions.map(q => ({
                         id: q.id,
                         text: q.text,
@@ -12164,10 +12164,31 @@ window.moveQuizToReports = async function(quizId) {
     if (!qz) return;
     if (!confirm(`Are you sure you want to move "${qz.title}" to reports immediately? This will end the active strict window.`)) return;
 
-    qz.status = "moved_to_reports";
-    await saveCourseQuizToCloud(qz);
-    showToast("Quiz Moved", "Quiz has been successfully transferred to practice report tasks.", "success");
-    renderAdminQuizzesTab();
+    try {
+        await supabaseRequest(`hawari_course_quizzes?id=eq.${encodeURIComponent(quizId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "moved_to_reports" })
+        });
+        qz.status = "moved_to_reports";
+        const group = (state.activeGroup || "infection").toLowerCase();
+        if (window.HawariExamCacheMemory[group]) {
+            delete window.HawariExamCacheMemory[group];
+        }
+        try {
+            localStorage.removeItem(`hawari_cached_quizzes_${group}`);
+            localStorage.removeItem(`hawari_cached_quizzes_meta_${group}`);
+            localStorage.removeItem(`hawari_cached_quizzes_checked_${group}`);
+            localStorage.removeItem(`hawari_quiz_grading_templates_${group}`);
+        } catch (e) {}
+
+        supabaseRequest(`hawari_course_quizzes?group_name=eq.${group}&purge=1`, { headers: { 'x-hawari-purge': '1' } }).catch(() => {});
+
+        showToast("Quiz Moved", "Quiz has been successfully transferred to practice report tasks.", "success");
+        renderAdminQuizzesTab();
+    } catch (e) {
+        console.error("Failed to move quiz to reports:", e);
+        showToast("Error", "فشل نقل الاختبار. حاول مرة أخرى.", "danger");
+    }
 };
 
 window.deleteCourseQuiz = async function(quizId) {

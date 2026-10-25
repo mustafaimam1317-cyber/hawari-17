@@ -4110,11 +4110,23 @@ function compactUserFlashcards(cards) {
     });
 }
 
-async function syncUsersWithCloud() {
+let _isSyncInProgress = false;
+let _lastSyncTimestamp = 0;
+
+async function syncUsersWithCloud(force = false) {
     const group = state.activeGroup;
     if (!group) return;
 
-    const isAdmin = isUserAdmin(state.currentUser);
+    if (_isSyncInProgress) return;
+    const now = Date.now();
+    // Enforce 10s minimum cooldown between automated sync calls unless forced
+    if (!force && (now - _lastSyncTimestamp < 10000)) return;
+
+    _isSyncInProgress = true;
+    _lastSyncTimestamp = now;
+
+    try {
+        const isAdmin = isUserAdmin(state.currentUser);
     
     // Determine target email to fetch/sync
     let targetEmail = null;
@@ -4453,7 +4465,9 @@ async function syncUsersWithCloud() {
                             state.questions = mergeQuestionsWithGlobal(lu.questions, templateQuestions);
                         }
                         state.currentUser.lastUpdated = lu.lastUpdated;
-                        triggerViewRefresh();
+                        if (state.activeView !== "admin-panel") {
+                            triggerViewRefresh();
+                        }
                     }
                 } else {
                     state.users.push(cu);
@@ -4466,7 +4480,9 @@ async function syncUsersWithCloud() {
                             state.questions = mergeQuestionsWithGlobal(cu.questions, templateQuestions);
                         }
                         state.currentUser.lastUpdated = cu.lastUpdated;
-                        triggerViewRefresh();
+                        if (state.activeView !== "admin-panel") {
+                            triggerViewRefresh();
+                        }
                     }
                 }
             });
@@ -4608,6 +4624,9 @@ async function syncUsersWithCloud() {
 
     // 4. Save to local storage using encrypted local helper
     encryptLocal(getGroupKey(STORAGE_KEYS.USERS), state.users);
+    } finally {
+        _isSyncInProgress = false;
+    }
 }
 
 // ================= AUTHENTICATION FLOW =================
@@ -7515,10 +7534,8 @@ function renderAdminPanel() {
     renderAdminQuizzesTab();
     renderAdminBookAccessManager();
 
-    // Refresh users list from cloud so any newly submitted registration requests appear immediately
-    syncUsersWithCloud().then(() => {
-        renderAdminApprovalsTab();
-    }).catch(() => {});
+    // Users list is already updated when clicking Approvals tab or on boot.
+    // Do NOT trigger syncUsersWithCloud here to prevent infinite re-render loops!
 }
 
 // ================= GEMINI AI QUIZ & QUESTION GENERATOR ENGINE =================

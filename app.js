@@ -1257,7 +1257,7 @@ function debouncedSync() {
         flushPendingCloudSync().catch(err => {
             console.warn("[DebouncedSync] Background progress sync deferred:", err);
         });
-    }, 5000);
+    }, 15000);
 }
 
 function saveStateToStorage(skipCloudSync = false) {
@@ -4083,6 +4083,33 @@ async function saveQuizResultToCloud(result, isQueueFlush = false) {
     }
 }
 
+
+function compactUserFlashcards(cards) {
+    if (!Array.isArray(cards)) return [];
+    return cards.filter(c => {
+        if (!c || !c.id) return false;
+        if (c.isOfficial === false) return true; // Keep personal custom cards
+        // For official cards: only persist if student has actively reviewed or changed state
+        return (Number(c.repetitions) > 0) || 
+               (c.lastReviewDate !== null && c.lastReviewDate !== undefined && c.lastReviewDate !== 0) ||
+               (c.status && c.status !== "review") ||
+               (c.state && c.state !== "new");
+    }).map(c => {
+        if (c.isOfficial === false) return c;
+        return {
+            id: c.id,
+            repetitions: Number(c.repetitions) || 0,
+            interval: Number(c.interval) || 0,
+            easeFactor: Number(c.easeFactor) || 2.5,
+            nextReviewDate: Number(c.nextReviewDate) || 0,
+            lastReviewDate: c.lastReviewDate || null,
+            status: c.status || "review",
+            state: c.state || "new",
+            isOfficial: true
+        };
+    });
+}
+
 async function syncUsersWithCloud() {
     const group = state.activeGroup;
     if (!group) return;
@@ -4500,7 +4527,7 @@ async function syncUsersWithCloud() {
             questions: nonDefaultQuestions,
             tests: user.tests || [],
             notebook_notes: user.notebookNotes || [],
-            flashcards: user.flashcards || [],
+            flashcards: compactUserFlashcards(user.flashcards || []),
             report_task_progress: user.reportTaskProgress || {},
             display_name: user.displayName || "",
             last_updated: user.lastUpdated || Date.now()
@@ -4516,7 +4543,7 @@ async function syncUsersWithCloud() {
                     p_group: group,
                     p_tests: user.tests || [],
                     p_notebook_notes: user.notebookNotes || [],
-                    p_flashcards: user.flashcards || [],
+                    p_flashcards: compactUserFlashcards(user.flashcards || []),
                     p_last_updated: user.lastUpdated || Date.now()
                 })
             });
@@ -6373,7 +6400,8 @@ async function selectQuestionAnswer(qId, option) {
                     p_group: group,
                     p_exam_id: state.activeTest.testId || "tutor_step",
                     p_answers: { [qId]: option },
-                    p_email: userEmail
+                    p_email: userEmail,
+                    p_question_ids: [qId]
                 })
             });
             if (gradeRes && Array.isArray(gradeRes.results) && gradeRes.results.length > 0) {
@@ -6425,14 +6453,16 @@ async function hydrateReviewDataOnDemand(activeTestObj) {
                 p_group: group,
                 p_exam_id: examId || "review_step",
                 p_answers: submissionAnswers,
-                p_email: userEmail
+                p_email: userEmail,
+                p_question_ids: qIds
             })
         });
 
         if (gradeRes && Array.isArray(gradeRes.results) && gradeRes.results.length > 0) {
             if (!activeTestObj.reviewData) activeTestObj.reviewData = {};
+            const allowedSet = new Set((qIds || []).map(String));
             gradeRes.results.forEach(res => {
-                if (res && res.questionId) {
+                if (res && res.questionId && (allowedSet.size === 0 || allowedSet.has(String(res.questionId)))) {
                     activeTestObj.reviewData[res.questionId] = {
                         correctOption: res.correctOption,
                         explanation: res.explanation,
@@ -6505,7 +6535,8 @@ async function submitActiveTest() {
                 p_group: group,
                 p_exam_id: activeTest.isReportTask ? activeTest.rtId : activeTest.testId,
                 p_answers: submissionAnswers,
-                p_email: userEmail
+                p_email: userEmail,
+                p_question_ids: examQuestionIds
             })
         });
         if (gradeRes && (gradeRes.success || gradeRes.score !== undefined)) {
@@ -6517,9 +6548,10 @@ async function submitActiveTest() {
 
     // Build authoritative reviewData mapping from grading results (Self-Contained Review Payload)
     const reviewData = {};
+    const allowedExamQIds = new Set((examQuestionIds || []).map(String));
     if (gradeData && Array.isArray(gradeData.results)) {
         gradeData.results.forEach(res => {
-            if (res && res.questionId) {
+            if (res && res.questionId && (allowedExamQIds.size === 0 || allowedExamQIds.has(String(res.questionId)))) {
                 reviewData[res.questionId] = {
                     correctOption: res.correctOption,
                     explanation: res.explanation,
@@ -11621,7 +11653,8 @@ async function submitActiveQuiz() {
                 p_group: (state.activeGroup || "infection").toLowerCase(),
                 p_exam_id: qzId,
                 p_answers: answersPayload,
-                p_email: state.currentUser ? state.currentUser.email : ""
+                p_email: state.currentUser ? state.currentUser.email : "",
+                p_question_ids: sourceQuestions.map((q, idx) => q.id || `q_${idx}`)
             })
         });
         if (rpcRes && rpcRes.success && typeof rpcRes.correctCount === "number" && rpcRes.totalQuestions === sourceQuestions.length) {
@@ -11910,7 +11943,8 @@ async function hydrateQuizReviewDataOnDemand(activeQuizObj) {
                 p_group: group,
                 p_exam_id: quizId,
                 p_answers: submissionAnswers,
-                p_email: userEmail
+                p_email: userEmail,
+                p_question_ids: questions.map((q, idx) => q.id || `q_${idx}`)
             })
         });
 

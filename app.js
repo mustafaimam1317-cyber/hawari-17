@@ -10800,6 +10800,7 @@ function renderReportTaskStudentView() {
         let statusHtml = "";
         let scoreHtml = "";
         let buttonHtml = "";
+        let progress = null;
 
         if (rt.isQuizArchive) {
             // Find quiz results
@@ -10832,8 +10833,8 @@ function renderReportTaskStudentView() {
             }
         } else {
             // Look up current user progress for Mock Exams
-            const userRecord = state.users.find(u => u.email === state.currentUser.email);
-            const progress = (userRecord && userRecord.reportTaskProgress) ? userRecord.reportTaskProgress[rt.id] : null;
+            const userRecord = state.users.find(u => u.email === (state.currentUser && state.currentUser.email));
+            progress = (userRecord && userRecord.reportTaskProgress) ? userRecord.reportTaskProgress[rt.id] : null;
 
             if (progress) {
                 if (progress.completed) {
@@ -10869,23 +10870,29 @@ function renderReportTaskStudentView() {
             }
         }
 
+        const qCount = (rt.questions && Array.isArray(rt.questions)) ? rt.questions.length : (rt.question_ids && Array.isArray(rt.question_ids) ? rt.question_ids.length : 0);
+        const isMockExam = !rt.isQuizArchive;
         const savedMode = (progress && progress.mode) || localStorage.getItem(`hawari_rt_mode_${rt.id}`) || "timed";
         const isTimed = savedMode !== "tutor";
-        const modeSwitchHtml = `
-            <div class="clay-mode-switch-wrapper">
-                <div class="clay-mode-info">
-                    <span class="clay-mode-icon" id="rt-mode-icon-${rt.id}">${isTimed ? '⏱️' : '💡'}</span>
-                    <div class="clay-mode-text">
-                        <span class="clay-mode-title" id="rt-mode-label-${rt.id}">${isTimed ? 'Timed Mode' : 'Tutor Mode'}</span>
-                        <span class="clay-mode-desc" id="rt-mode-desc-${rt.id}">${isTimed ? 'الامتحان بتايمر ووقت محدد' : 'حل تدريبي مع إجابة وشرح فوري'}</span>
+        
+        let modeSwitchHtml = "";
+        if (isMockExam && (!progress || !progress.completed)) {
+            modeSwitchHtml = `
+                <div class="clay-mode-switch-wrapper">
+                    <div class="clay-mode-info">
+                        <span class="clay-mode-icon" id="rt-mode-icon-${rt.id}">${isTimed ? '⏱️' : '💡'}</span>
+                        <div class="clay-mode-text">
+                            <span class="clay-mode-title" id="rt-mode-label-${rt.id}">${isTimed ? 'Timed Mode' : 'Tutor Mode'}</span>
+                            <span class="clay-mode-desc" id="rt-mode-desc-${rt.id}">${isTimed ? 'الامتحان بتايمر ووقت محدد' : 'حل تدريبي مع إجابة وشرح فوري'}</span>
+                        </div>
                     </div>
+                    <label class="clay-3d-switch" title="تبديل الوضع (تايمر / تيوتر)">
+                        <input type="checkbox" id="rt-mode-toggle-${rt.id}" ${isTimed ? 'checked' : ''} onchange="window.toggleReportTaskMode('${rt.id}')">
+                        <span class="clay-3d-slider"></span>
+                    </label>
                 </div>
-                <label class="clay-3d-switch" title="تبديل الوضع (تايمر / تيوتر)">
-                    <input type="checkbox" id="rt-mode-toggle-${rt.id}" ${isTimed ? 'checked' : ''} onchange="window.toggleReportTaskMode('${rt.id}')">
-                    <span class="clay-3d-slider"></span>
-                </label>
-            </div>
-        `;
+            `;
+        }
 
         const card = document.createElement("div");
         card.className = "report-task-card";
@@ -10895,12 +10902,12 @@ function renderReportTaskStudentView() {
                 <h3 style="color:var(--text-primary); font-weight:700; font-size:1.2rem; margin-top:8px;">${rt.title}</h3>
                 <div class="rt-card-meta">
                     <span class="rt-meta-badge"><i class="fa-regular fa-clock"></i> ${rt.duration} Min</span>
-                    <span class="rt-meta-badge"><i class="fa-solid fa-list-check"></i> ${rt.questions.length} Questions</span>
+                    <span class="rt-meta-badge"><i class="fa-solid fa-list-check"></i> ${qCount} Questions</span>
                 </div>
                 ${scoreHtml}
             </div>
             <div style="margin-top: 15px;">
-                ${(progress && progress.completed) ? '' : modeSwitchHtml}
+                ${modeSwitchHtml}
                 ${buttonHtml}
             </div>
         `;

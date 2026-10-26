@@ -3190,9 +3190,9 @@ async function revalidateReportTasks(group) {
     const cleanGroup = group.toLowerCase().trim();
     try {
         // Ultra-lightweight metadata query (< 1.5 KB metadata instead of 495 KB full payload)
-        const meta = await supabaseRequest(`hawari_report_tasks?group_name=eq.${encodeURIComponent(cleanGroup)}&select=id,date_created,title,time_limit&order=id.asc`);
+        const meta = await supabaseRequest(`hawari_report_tasks?group_name=eq.${encodeURIComponent(cleanGroup)}&select=id,date_created,title,time_limit,updated_at&order=id.asc`);
         if (meta && Array.isArray(meta)) {
-            const fingerprint = meta.map(r => `${r.id}:${r.date_created}:${r.title}:${r.time_limit}`).join('|');
+            const fingerprint = meta.map(r => `${r.id}:${r.updated_at || r.date_created}:${r.title}:${r.time_limit}`).join('|');
             const cachedFingerprint = localStorage.getItem(`hawari_cached_reports_meta_${cleanGroup}`);
 
             if (cachedFingerprint && cachedFingerprint === fingerprint && state.reportTasks && state.reportTasks.length > 0) {
@@ -3219,7 +3219,7 @@ async function downloadFullReportTasks(group, targetFingerprint = null) {
     if (!group) return;
     const cleanGroup = group.toLowerCase().trim();
     try {
-        const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${encodeURIComponent(cleanGroup)}`);
+        const records = await supabaseRequest(`hawari_report_tasks?group_name=eq.${encodeURIComponent(cleanGroup)}`, { headers: { 'x-hawari-purge': '1' } });
         if (records && Array.isArray(records)) {
             const isAdmin = isUserAdmin(state.currentUser);
             const mapped = records.map(row => {
@@ -3233,7 +3233,8 @@ async function downloadFullReportTasks(group, targetFingerprint = null) {
                     title: row.title,
                     duration: row.time_limit,
                     questions: safeQuestions,
-                    dateCreated: row.date_created
+                    dateCreated: row.date_created,
+                    updatedAt: row.updated_at
                 };
             });
 
@@ -3243,7 +3244,7 @@ async function downloadFullReportTasks(group, targetFingerprint = null) {
             window.HawariExamCacheMemory[cleanGroup].reportTasks = mapped;
             window.HawariExamCacheMemory[cleanGroup].lastCheckedReportTasksAt = now;
 
-            const fingerprint = targetFingerprint || records.map(r => `${r.id}:${r.date_created}:${r.title}:${r.time_limit}`).join('|');
+            const fingerprint = targetFingerprint || records.map(r => `${r.id}:${r.updated_at || r.date_created}:${r.title}:${r.time_limit}`).join('|');
 
             try {
                 localStorage.setItem(`hawari_cached_reports_${cleanGroup}`, JSON.stringify(mapped));
@@ -3271,7 +3272,8 @@ async function saveReportTaskToCloud(rt) {
         title: rt.title,
         question_ids: rt.questions,
         time_limit: rt.duration,
-        date_created: rt.dateCreated
+        date_created: rt.dateCreated,
+        updated_at: new Date().toISOString()
     };
     try {
         await supabaseRequest("hawari_report_tasks", {
@@ -3342,7 +3344,8 @@ async function updateReportTaskInCloud(rt) {
     const payload = {
         title: rt.title,
         time_limit: rt.duration,
-        question_ids: rt.questions
+        question_ids: rt.questions,
+        updated_at: new Date().toISOString()
     };
     try {
         await supabaseRequest(`hawari_report_tasks?id=eq.${encodeURIComponent(rt.id)}`, {
@@ -3438,9 +3441,9 @@ async function revalidateCourseQuizzes(group) {
     const cleanGroup = group.toLowerCase().trim();
     try {
         // Ultra-lightweight metadata check (< 400 bytes metadata instead of 122 KB full payload)
-        const meta = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${encodeURIComponent(cleanGroup)}&select=id,status,start_time,end_time,time_limit,title&order=id.asc`);
+        const meta = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${encodeURIComponent(cleanGroup)}&select=id,status,start_time,end_time,time_limit,title,updated_at&order=id.asc`);
         if (meta && Array.isArray(meta)) {
-            const fingerprint = meta.map(q => `${q.id}:${q.status}:${q.start_time}:${q.end_time}:${q.time_limit}:${q.title}`).join('|');
+            const fingerprint = meta.map(q => `${q.id}:${q.status}:${q.start_time}:${q.end_time}:${q.time_limit}:${q.title}:${q.updated_at || ''}`).join('|');
             const cachedFingerprint = localStorage.getItem(`hawari_cached_quizzes_meta_${cleanGroup}`);
 
             if (cachedFingerprint && cachedFingerprint === fingerprint && state.courseQuizzes && state.courseQuizzes.length > 0) {
@@ -3467,7 +3470,7 @@ async function downloadFullCourseQuizzes(group, targetFingerprint = null) {
     if (!group) return;
     const cleanGroup = group.toLowerCase().trim();
     try {
-        const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${encodeURIComponent(cleanGroup)}`);
+        const records = await supabaseRequest(`hawari_course_quizzes?group_name=eq.${encodeURIComponent(cleanGroup)}`, { headers: { 'x-hawari-purge': '1' } });
         if (records && Array.isArray(records)) {
             const gradingToPersist = {};
             records.forEach(row => {
@@ -3496,7 +3499,8 @@ async function downloadFullCourseQuizzes(group, targetFingerprint = null) {
                     duration: row.time_limit,
                     startTime: row.start_time,
                     endTime: row.end_time,
-                    status: row.status
+                    status: row.status,
+                    updatedAt: row.updated_at
                 };
             });
 
@@ -3506,7 +3510,7 @@ async function downloadFullCourseQuizzes(group, targetFingerprint = null) {
             window.HawariExamCacheMemory[cleanGroup].quizzes = mapped;
             window.HawariExamCacheMemory[cleanGroup].lastCheckedQuizzesAt = now;
 
-            const fingerprint = targetFingerprint || records.map(q => `${q.id}:${q.status}:${q.start_time}:${q.end_time}:${q.time_limit}:${q.title}`).join('|');
+            const fingerprint = targetFingerprint || records.map(q => `${q.id}:${q.status}:${q.start_time}:${q.end_time}:${q.time_limit}:${q.title}:${q.updated_at || ''}`).join('|');
 
             try {
                 localStorage.setItem(`hawari_cached_quizzes_${cleanGroup}`, JSON.stringify(mapped));
@@ -3539,7 +3543,8 @@ async function saveCourseQuizToCloud(quiz) {
         time_limit: quiz.duration,
         start_time: quiz.startTime,
         end_time: quiz.endTime,
-        status: quiz.status || 'active'
+        status: quiz.status || 'active',
+        updated_at: new Date().toISOString()
     };
     try {
         await supabaseRequest("hawari_course_quizzes", {

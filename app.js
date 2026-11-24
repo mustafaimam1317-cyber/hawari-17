@@ -1286,8 +1286,8 @@ function saveStateToStorage(skipCloudSync = false) {
         // Only update progress fields if user progress has been initialized/loaded
         // This prevents uninitialized empty arrays from overwriting loaded student progress
         if (state.isUserProgressLoaded) {
-            userRecord.tests = state.tests || [];
-            userRecord.reportTaskProgress = userRecord.reportTaskProgress || {};
+            userRecord.tests = typeof compactUserTests === "function" ? compactUserTests(state.tests || []) : (state.tests || []);
+            userRecord.reportTaskProgress = typeof compactUserReportTaskProgress === "function" ? compactUserReportTaskProgress(userRecord.reportTaskProgress || {}) : (userRecord.reportTaskProgress || {});
             userRecord.notebookNotes = state.notebookNotes || [];
             userRecord.flashcards = state.flashcards || [];
             if (state.questions && state.questions.length > 0) {
@@ -4089,6 +4089,49 @@ async function saveQuizResultToCloud(result, isQueueFlush = false) {
 }
 
 
+function compactReviewData(reviewData) {
+    if (!reviewData || typeof reviewData !== 'object') return reviewData;
+    const compact = {};
+    for (const [key, val] of Object.entries(reviewData)) {
+        if (val && typeof val === 'object') {
+            compact[key] = {
+                correctOption: val.correctOption,
+                isCorrect: Boolean(val.isCorrect),
+                userAns: val.userAns !== undefined ? val.userAns : ""
+            };
+        } else {
+            compact[key] = val;
+        }
+    }
+    return compact;
+}
+
+function compactUserTests(tests) {
+    if (!Array.isArray(tests)) return [];
+    return tests.map(t => {
+        if (!t) return t;
+        const copy = { ...t };
+        if (copy.reviewData) {
+            copy.reviewData = compactReviewData(copy.reviewData);
+        }
+        return copy;
+    });
+}
+
+function compactUserReportTaskProgress(rtProgress) {
+    if (!rtProgress || typeof rtProgress !== 'object') return {};
+    const compact = {};
+    for (const [k, v] of Object.entries(rtProgress)) {
+        if (!v) continue;
+        const copy = { ...v };
+        if (copy.reviewData) {
+            copy.reviewData = compactReviewData(copy.reviewData);
+        }
+        compact[k] = copy;
+    }
+    return compact;
+}
+
 function compactUserFlashcards(cards) {
     if (!Array.isArray(cards)) return [];
     return cards.filter(c => {
@@ -4538,6 +4581,9 @@ async function syncUsersWithCloud(force = false) {
             userAnswer: q.userAnswer !== undefined ? q.userAnswer : null
         }));
 
+        const compactedTests = compactUserTests(user.tests || []);
+        const compactedRtProgress = compactUserReportTaskProgress(user.reportTaskProgress || {});
+
         const payload = {
             email: user.email.trim().toLowerCase(),
             group_name: group,
@@ -4546,10 +4592,10 @@ async function syncUsersWithCloud(force = false) {
             status: user.status || "approved",
             date_registered: user.dateRegistered,
             questions: nonDefaultQuestions,
-            tests: user.tests || [],
+            tests: compactedTests,
             notebook_notes: user.notebookNotes || [],
             flashcards: compactUserFlashcards(user.flashcards || []),
-            report_task_progress: user.reportTaskProgress || {},
+            report_task_progress: compactedRtProgress,
             display_name: user.displayName || "",
             last_updated: user.lastUpdated || Date.now()
         };
@@ -4562,7 +4608,7 @@ async function syncUsersWithCloud(force = false) {
                 body: JSON.stringify({
                     p_user_email: user.email.trim().toLowerCase(),
                     p_group: group,
-                    p_tests: user.tests || [],
+                    p_tests: compactedTests,
                     p_notebook_notes: user.notebookNotes || [],
                     p_flashcards: compactUserFlashcards(user.flashcards || []),
                     p_last_updated: user.lastUpdated || Date.now()
@@ -4577,7 +4623,7 @@ async function syncUsersWithCloud(force = false) {
                     body: JSON.stringify({
                         p_user_email: user.email.trim().toLowerCase(),
                         p_group: group,
-                        p_tests: user.tests || [],
+                        p_tests: compactedTests,
                         p_notebook_notes: user.notebookNotes || [],
                         p_last_updated: user.lastUpdated || Date.now()
                     })
@@ -4602,10 +4648,10 @@ async function syncUsersWithCloud(force = false) {
                     },
                     body: JSON.stringify({
                         questions: nonDefaultQuestions,
-                        tests: user.tests || [],
+                        tests: compactedTests,
                         notebook_notes: user.notebookNotes || [],
-                        flashcards: user.flashcards || [],
-                        report_task_progress: user.reportTaskProgress || {},
+                        flashcards: compactUserFlashcards(user.flashcards || []),
+                        report_task_progress: compactedRtProgress,
                         display_name: user.displayName || "",
                         last_updated: payload.last_updated
                     })

@@ -2277,11 +2277,15 @@ body.group-dermatology.dark-theme {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start; /* was center: clipped the top when content overflowed */
     z-index: 2000;
     padding: 40px 20px;
     overflow-y: auto;
 }
+
+/* Centers content when it fits, lets it scroll from the top when it overflows */
+.course-selector-page > :first-child { margin-top: auto; }
+.course-selector-page > :last-child { margin-bottom: auto; }
 
 .selector-header {
     text-align: center;

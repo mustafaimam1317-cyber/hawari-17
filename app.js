@@ -2433,7 +2433,7 @@ function mergeQuestionsWithGlobal(userQuestions, globalQuestions, group = state.
 
 const QUESTION_CACHE_DB_NAME = "hawari_question_cache";
 const QUESTION_CACHE_STORE_NAME = "question_banks";
-const QUESTION_BANK_VERSION_CHECK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours TTL (prevents periodic background bandwidth drain)
+const QUESTION_BANK_VERSION_CHECK_TTL_MS = 60 * 1000; // 60 seconds TTL (lightweight background version check ensures instant question bank updates)
 const PUBLISHED_EXAMS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes TTL for published exams & reports (prevents silent bandwidth egress) // 90 seconds short TTL for published exams
 
 // Global in-memory caches
@@ -2589,7 +2589,7 @@ async function revalidateQuestionBankVersion(group, cachedVersion) {
             } catch (rpcErr) {}
         }
 
-        if (serverVersion && serverVersion !== cachedVersion) {
+        if (serverVersion && String(serverVersion) !== String(cachedVersion)) {
             console.log(`[QuestionCache] VERSION CHANGED for ${group}: cached ${cachedVersion} != server ${serverVersion}. Downloading updated question bank in background...`);
             await downloadFullQuestionBankFromCloud(group, serverVersion);
         } else if (serverVersion) {
@@ -2756,7 +2756,7 @@ async function fetchGlobalQuestions(group, forceRefresh = false) {
         console.log(`[QuestionCache] Memory HIT for course "${group}" (${mem.questions.length} questions)`);
 
         // Non-blocking background revalidation after TTL
-        if (Date.now() - (mem.lastCheckedAt || 0) > QUESTION_BANK_VERSION_CHECK_TTL_MS) {
+        if (forceRefresh || (Date.now() - (mem.lastCheckedAt || 0) > QUESTION_BANK_VERSION_CHECK_TTL_MS)) {
             revalidateQuestionBankVersion(group, mem.version);
         }
         return mem.questions;
@@ -2782,7 +2782,8 @@ async function fetchGlobalQuestions(group, forceRefresh = false) {
                 window.HawariNetworkMetrics.cacheHits++;
                 console.log(`[QuestionCache] IndexedDB HIT for course "${group}" (${idbRecord.questions.length} questions, v${idbRecord.version})`);
 
-                if (Date.now() - (idbRecord.lastCheckedAt || 0) > QUESTION_BANK_VERSION_CHECK_TTL_MS) {
+                // Cold start: serve cached questions immediately (0ms UX), and trigger non-blocking background revalidation
+                if (forceRefresh || !idbRecord.lastCheckedAt || (Date.now() - idbRecord.lastCheckedAt > QUESTION_BANK_VERSION_CHECK_TTL_MS)) {
                     revalidateQuestionBankVersion(group, idbRecord.version);
                 }
                 return idbRecord.questions;
@@ -3050,6 +3051,35 @@ window.debugNetworkMetrics = function() {
     console.table(window.HawariNetworkMetrics);
     console.groupEnd();
     return window.HawariNetworkMetrics;
+};
+
+// Global helper to forcibly purge question bank cache & re-fetch latest questions from Supabase
+window.refreshQuestionCache = async function(group = state.activeGroup || "infection") {
+    console.log(`[QuestionCache] Manual refresh triggered for course "${group}"...`);
+    if (window.HawariQuestionCacheMemory) {
+        delete window.HawariQuestionCacheMemory[group];
+    }
+    try {
+        const db = await openQuestionCacheDB();
+        if (db) {
+            const tx = db.transaction(QUESTION_CACHE_STORE_NAME, "readwrite");
+            tx.objectStore(QUESTION_CACHE_STORE_NAME).delete(group);
+            await new Promise((res) => { tx.oncomplete = res; tx.onerror = res; });
+        }
+    } catch (e) {
+        console.warn("[QuestionCache] Manual cache purge error:", e);
+    }
+    const freshQuestions = await fetchGlobalQuestions(group, true);
+    if (state && state.currentUser) {
+        loadUserSpecificProgress(state.currentUser.email);
+        if (state.activeView === "generate-test") renderGenerateTest();
+        else if (state.activeView === "dashboard" || !state.activeView) renderDashboard();
+        else if (state.activeView === "my-tests") renderMyTests();
+    }
+    if (typeof showToast === "function") {
+        showToast("تم تحديث الكاش", `تم تحديث بنك الأسئلة بالكامل (${freshQuestions.length} سؤال متاح الآن).`, "success");
+    }
+    return freshQuestions.length;
 };
 
 async function saveGlobalQuestionsToCloud() {

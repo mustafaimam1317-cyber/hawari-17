@@ -2304,6 +2304,14 @@ body.group-dermatology.dark-theme {
     letter-spacing: -1px;
 }
 
+.selector-header p {
+    color: #cbd5e1;
+}
+
+body.light-theme.theme-clay .selector-header p {
+    color: #334155;
+}
+
 .selector-about-card {
     background: rgba(30, 41, 59, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.08);
